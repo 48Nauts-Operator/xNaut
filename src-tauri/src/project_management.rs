@@ -126,6 +126,13 @@ pub struct ProjectRecord {
     pub fleet: bool,
     #[serde(default)]
     pub client: Option<crate::pm::ExternalProject>,
+    /// Whether this project takes issues in from its forge or Linear, and on
+    /// what trigger (XNAUT-382). Skipped when it is the default so switching
+    /// nothing on writes nothing: every project record is a file in git, and
+    /// thirty `"issue_intake": {"enabled": false, …}` blocks are thirty diffs
+    /// that say nothing.
+    #[serde(default, skip_serializing_if = "crate::issue_intake::IssueIntake::is_default")]
+    pub issue_intake: crate::issue_intake::IssueIntake,
     pub created_at: String,
 }
 
@@ -252,6 +259,12 @@ pub struct TicketCreateRequest {
     pub release: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// What this ticket was made FROM, when something made it: a legacy todo
+    /// id, or an issue on somebody else's tracker (XNAUT-382). Empty for
+    /// everything a person typed. It is the guard that stops the same issue
+    /// becoming two tickets, so it is set at creation or never.
+    #[serde(default)]
+    pub source_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -381,10 +394,23 @@ fn default_revision() -> u64 {
     1
 }
 
+/// Git flags every call into the control repo carries. The app decides when
+/// maintenance runs; git never does on its own (XNAUT-432). Left to itself,
+/// git weighs `gc --auto` after every commit and rebase, and at seven to
+/// fifteen commits a minute it said yes over and over: André measured 116
+/// git processes at 786% CPU, all repacking the same repository, and the
+/// aborted packs they left behind are the likeliest source of the week's
+/// missing objects (XNAUT-430).
+const NO_AUTO_MAINTENANCE: [&str; 4] = ["-c", "gc.auto=0", "-c", "maintenance.auto=false"];
+
+fn git_command(repo: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(NO_AUTO_MAINTENANCE);
+    cmd
+}
+
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let output = git_command(repo)
         .args(args)
         .output()
         .map_err(|error| format!("failed to invoke git: {error}"))?;
@@ -403,9 +429,7 @@ fn run_git_authenticated(
     args: &[&str],
     authorization_header: &str,
 ) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let output = git_command(repo)
         .args(args)
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "http.extraHeader")
@@ -420,6 +444,115 @@ fn run_git_authenticated(
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+// ---- control repo maintenance (XNAUT-432) ---------------------------------
+//
+// One bounded task, one core, every twenty minutes, under the same lock the
+// ticket writes take. Sequence by construction: the sweep is the only caller,
+// the interval is checked before a task starts, and the lock means a task can
+// never overlap a write or another task. "Smaller bits over a longer time"
+// (André, 2026-09-21) instead of eight cores at once.
+
+/// The rotation. Each task is bounded by git's own design: loose-objects packs
+/// at most fifty thousand loose objects, commit-graph is incremental,
+/// incremental-repack merges only the small packs, pack-refs is cheap.
+pub(crate) const MAINTENANCE_TASKS: [&str; 4] =
+    ["loose-objects", "commit-graph", "incremental-repack", "pack-refs"];
+pub(crate) const MAINTENANCE_EVERY: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+/// A `tmp_pack_*` older than this is a pack-objects that died; git never
+/// reclaims those by itself.
+const STALE_TMP_PACK_SECS: u64 = 3600;
+
+struct MaintenanceState {
+    last: Option<std::time::Instant>,
+    next_task: usize,
+}
+
+fn maintenance_state() -> &'static Mutex<MaintenanceState> {
+    static STATE: OnceLock<Mutex<MaintenanceState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(MaintenanceState { last: None, next_task: 0 }))
+}
+
+/// Pure, so the spacing is testable without a clock.
+pub(crate) fn maintenance_due(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    every: std::time::Duration,
+) -> bool {
+    match last {
+        None => true,
+        Some(then) => now.duration_since(then) >= every,
+    }
+}
+
+/// Called every sweep tick. Returns the task it ran, or `None` when nothing
+/// was due. The interval is claimed BEFORE the task runs, so a slow task and
+/// the next tick cannot start a second one.
+pub fn maintain_control_repo(repo: &Path) -> Result<Option<&'static str>, String> {
+    let task = {
+        let mut state = maintenance_state()
+            .lock()
+            .map_err(|_| "control repo maintenance state is unavailable")?;
+        let now = std::time::Instant::now();
+        if !maintenance_due(state.last, now, MAINTENANCE_EVERY) {
+            return Ok(None);
+        }
+        state.last = Some(now);
+        let task = MAINTENANCE_TASKS[state.next_task % MAINTENANCE_TASKS.len()];
+        state.next_task = (state.next_task + 1) % MAINTENANCE_TASKS.len();
+        task
+    };
+    run_maintenance_task(repo, task)?;
+    Ok(Some(task))
+}
+
+/// One task, now, under the mutation lock. Pins the repo's own config first
+/// so git run by hand in that repo cannot restart the storm either, and
+/// clears the debris of the last one.
+pub(crate) fn run_maintenance_task(repo: &Path, task: &str) -> Result<(), String> {
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let started = std::time::Instant::now();
+    run_git(repo, &["config", "gc.auto", "0"])?;
+    run_git(repo, &["config", "maintenance.auto", "false"])?;
+    let cleared = sweep_stale_tmp_packs(repo);
+    let task_arg = format!("--task={task}");
+    run_git(
+        repo,
+        &["-c", "pack.threads=1", "-c", "core.multiPackIndex=true", "maintenance", "run", "--quiet", &task_arg],
+    )?;
+    let _ = crate::debug_log::debug_log_append(vec![format!(
+        "[pm] control repo maintenance: {task} in {} ms, {cleared} stale temp pack(s) removed",
+        started.elapsed().as_millis()
+    )]);
+    Ok(())
+}
+
+fn sweep_stale_tmp_packs(repo: &Path) -> usize {
+    let Ok(rel) = run_git(repo, &["rev-parse", "--git-path", "objects/pack"]) else { return 0 };
+    let dir = if Path::new(&rel).is_absolute() { PathBuf::from(&rel) } else { repo.join(&rel) };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("tmp_pack_") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .map(|age| age.as_secs() >= STALE_TMP_PACK_SECS)
+            .unwrap_or(false);
+        if old && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 fn validate_name(raw: &str) -> Result<String, String> {
@@ -853,6 +986,33 @@ const ABANDONED_TMP_SECS: u64 = 30;
 /// `write_json_atomic` can leave when a write fails halfway. Only untracked
 /// paths named `<something>.tmp-<uuid>` and older than `ABANDONED_TMP_SECS`
 /// are touched; everything else is reported exactly as git reports it.
+/// Does the working tree hold dirt that would ride along with a write to
+/// `ticket`? Only that ticket's own file counts. Every mutation commits with
+/// `--only <its own paths>`, so another ticket's half-written edit or the
+/// event files of a write whose commit lost a race cannot be swept in.
+///
+/// Refusing on any dirt at all stopped the entire board instead. On
+/// 2026-09-15 one uncommitted XNAUT-274.json and a handful of stray events
+/// made every ticket write fail; a green sandbox verify could not move
+/// CHESSTRAINER-5 to `complete`, no sign-off started, and the reason went to
+/// stderr where nobody reads it (XNAUT-412).
+fn dirt_blocks(repo: &Path, ticket: &str) -> Result<bool, String> {
+    let Ok(path) = find_ticket_path(repo, ticket) else {
+        return Ok(false);
+    };
+    let Ok(rel) = path.strip_prefix(repo) else {
+        return Ok(false);
+    };
+    let rel = rel.to_string_lossy().into_owned();
+    // `run_git` trims its output, so the first porcelain line has lost its
+    // leading space and a fixed 3-character offset reads one char short.
+    // The path is the last field on the line either way.
+    Ok(dirty_paths(repo)?
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .any(|p| p.trim_matches('"') == rel))
+}
+
 fn dirty_paths(repo: &Path) -> Result<String, String> {
     let status = run_git(repo, &["status", "--porcelain", "--untracked-files=all"])?;
     let mut pruned = false;
@@ -1131,6 +1291,7 @@ key,
             task_id: task.id.clone(),
             fleet: false,
             client: None,
+            issue_intake: Default::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         let manifest = project_dir.join("project.json");
@@ -1240,6 +1401,7 @@ key,
                 task_id: client.task_id.clone(),
                 fleet: false,
                 client: None,
+                issue_intake: Default::default(),
                 created_at: client.created.clone(),
             });
             projects.len() - 1
@@ -1311,6 +1473,7 @@ key,
                 task_id: String::new(),
                 fleet: false,
                 client: None,
+                issue_intake: Default::default(),
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
             let manifest = project_dir.join("project.json");
@@ -1644,6 +1807,7 @@ key: key.clone(),
         task_id: String::new(),
         fleet: false,
         client: None,
+        issue_intake: Default::default(),
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let manifest = project_dir.join("project.json");
@@ -1736,6 +1900,56 @@ pub async fn pm_project_update(
         &format!("chore(pm): update project {key}"),
     )?;
     Ok(record)
+}
+
+/// Set a project's issue-intake settings and nothing else (XNAUT-382).
+///
+/// Deliberately NOT part of `project_update_in`. That one takes an
+/// `expected_revision` and rewrites eleven fields from a form; this is one
+/// toggle on a settings pane, and routing it through the form would make a
+/// checkbox capable of blanking a project's contact details. It still bumps
+/// the revision and still commits, so a toggle is as visible in the board's
+/// history as any other write.
+pub fn set_issue_intake_in(
+    repo: &Path,
+    project: &str,
+    intake: crate::issue_intake::IssueIntake,
+) -> Result<crate::issue_intake::IssueIntake, String> {
+    let key = validate_project_key(project)?;
+    if intake.label.trim().is_empty() && intake.trigger == crate::issue_intake::Trigger::Labelled {
+        return Err("a label trigger needs a label".into());
+    }
+    let _guard = mutation_lock()
+        .lock()
+        .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let manifest = repo.join("projects").join(&key).join("project.json");
+    if !manifest.is_file() {
+        return Err(format!("project does not exist: {key}"));
+    }
+    let mut record: ProjectRecord = read_json(&manifest)?;
+    let intake = crate::issue_intake::IssueIntake {
+        label: intake.label.trim().to_string(),
+        linear_team: intake.linear_team.trim().to_string(),
+        ..intake
+    };
+    if record.issue_intake == intake {
+        return Ok(intake);
+    }
+    record.issue_intake = intake.clone();
+    record.revision += 1;
+    write_json_atomic(&manifest, &record)?;
+    record_mutation(
+        &repo,
+        "project.updated",
+        &key,
+        json!({
+            "issue_intake": &record.issue_intake,
+            "revision": record.revision,
+        }),
+        &[manifest],
+        &format!("chore(pm): issue intake for {key}"),
+    )?;
+    Ok(intake)
 }
 
 /// The control repo without a Tauri `State` handle.
@@ -1936,7 +2150,7 @@ id: id.clone(),
         release: request.release,
         body: request.body,
         model_requirement: request.model_requirement.trim().to_string(),
-        source_id: String::new(),
+        source_id: request.source_id.trim().to_string(),
         handback: None,
         parent: request.parent,
         revision: 1,
@@ -2004,6 +2218,11 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     ticket_update_with_registry_in(repo, &crate::agents::registry_dir()?, request)
 }
 
+/// XNAUT-414: a fetch that cannot reach the remote does not fail the write.
+/// A Finder-launched app has no ssh agent, so `git fetch` over the Tailscale
+/// remote failed and its error was returned as the WRITE's error: every
+/// ticket update from the app failed while the same write from a terminal
+/// worked, and CHESSTRAINER-5 verified green five times without moving.
 fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketUpdateRequest) -> Result<TicketRecord, String> {
     let _guard = mutation_lock()
         .lock()
@@ -2016,15 +2235,35 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
         if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
             return Err("control repository already has a rebase in progress; resolve it before updating a ticket".into());
         }
-        if !dirty_paths(repo)?.is_empty() {
-            return Err("control repository has uncommitted changes; resolve them before updating a ticket".into());
+        // Only dirt that would ride along blocks the write (XNAUT-412): every
+        // mutation commits with `--only` its own paths, so another ticket's
+        // leftover edit cannot be swept in. See `dirt_blocks`.
+        if dirt_blocks(repo, &request.id)? {
+            return Err(format!("{} has uncommitted changes in the control repository; resolve them before updating it", request.id));
         }
         let branch = run_git(repo, &["symbolic-ref", "--short", "HEAD"])?;
         let remote_ref = format!("refs/remotes/origin/{branch}");
         for attempt in 0..2 {
-            run_git(repo, &["fetch", "origin"])?;
+            // Unreachable remote, local write anyway (XNAUT-414).
+            if let Err(error) = run_git(repo, &["fetch", "origin"]) {
+                let _ = crate::debug_log::debug_log_append(vec![format!(
+                    "[pm] fetch of origin failed, writing locally: {}",
+                    error.lines().last().unwrap_or(&error)
+                )]);
+                break;
+            }
             // An empty remote has no branch until the first sync.
             if run_git(repo, &["show-ref", "--verify", "--quiet", &remote_ref]).is_err() {
+                break;
+            }
+            // Nothing to rebase onto: HEAD already holds the remote. Asking
+            // git anyway made it refuse on ANY unstaged file ("cannot rebase:
+            // You have unstaged changes"), so one ticket's stranded write
+            // blocked every other ticket's update, the very thing XNAUT-412
+            // stopped one layer down. Tron, 2026-09-20: XNAUT-394's file was
+            // left modified by an interrupted write and XNAUT-379's green
+            // verify could not settle behind it.
+            if run_git(repo, &["merge-base", "--is-ancestor", &remote_ref, "HEAD"]).is_ok() {
                 break;
             }
             match run_git(repo, &["rebase", &remote_ref]) {
@@ -2578,6 +2817,78 @@ mod abandoned_tmp_tests {
         assert!(dirty_paths(&dir).unwrap().contains("X-1.json"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
+    /// XNAUT-412: another ticket's leftover edit, or the app's own event
+    /// exhaust, must not block a write to THIS ticket. Its own dirt still does.
+    #[test]
+    fn only_the_ticket_being_written_blocks_the_write() {
+        let dir = repo("dirt-scope");
+        let tickets = dir.join("projects/XT/tickets");
+        std::fs::create_dir_all(&tickets).unwrap();
+        for id in ["XT-1", "XT-2"] {
+            std::fs::write(tickets.join(format!("{id}.json")), r#"{"id":"PLACEHOLDER"}"#.replace("PLACEHOLDER", id)).unwrap();
+        }
+        let git = |args: &[&str]| {
+            std::process::Command::new("git").current_dir(&dir)
+                .args(["-c","user.email=t@t","-c","user.name=t","-c","commit.gpgsign=false"]).args(args).output().unwrap();
+        };
+        git(&["add","-A"]); git(&["commit","-q","-m","tickets"]);
+
+        // Another ticket edited and not committed, plus a stray event.
+        std::fs::write(tickets.join("XT-2.json"), r#"{"id":"XT-2","note":"edited"}"#).unwrap();
+        std::fs::create_dir_all(dir.join("events")).unwrap();
+        std::fs::write(dir.join("events/stray.json"), "{}").unwrap();
+        assert!(!dirt_blocks(&dir, "XT-1").unwrap(), "another ticket's dirt is not XT-1's business");
+
+        // Its own file, half written: that is a conflict.
+        std::fs::write(tickets.join("XT-1.json"), r#"{"id":"XT-1","note":"half"}"#).unwrap();
+        assert!(dirt_blocks(&dir, "XT-1").unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn maintenance_is_spaced_and_rotates_through_four_bounded_tasks() {
+        use std::time::{Duration, Instant};
+        let every = Duration::from_secs(1200);
+        let t0 = Instant::now();
+        assert!(maintenance_due(None, t0, every), "the first tick is due");
+        assert!(!maintenance_due(Some(t0), t0 + Duration::from_secs(1199), every));
+        assert!(maintenance_due(Some(t0), t0 + every, every));
+        assert_eq!(MAINTENANCE_TASKS, ["loose-objects", "commit-graph", "incremental-repack", "pack-refs"]);
+        assert_eq!(MAINTENANCE_EVERY, every);
+    }
+
+    /// André, 2026-09-21: 116 git processes at 786% CPU repacking the control
+    /// repo, spawned by git's own auto-gc after the app's commits. Every call
+    /// the app makes now forbids that, the repo's config is pinned the same
+    /// way, a dead pack-objects' temp file is cleared, and every task in the
+    /// rotation runs to completion on a real repository.
+    #[test]
+    fn a_maintenance_task_pins_auto_gc_off_clears_stale_temp_packs_and_runs_every_task() {
+        let dir = repo("maintenance");
+        let args: Vec<String> = git_command(&dir).get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.contains(&"gc.auto=0".to_string()) && args.contains(&"maintenance.auto=false".to_string()), "{args:?}");
+
+        let packs = dir.join(".git/objects/pack");
+        std::fs::create_dir_all(&packs).unwrap();
+        let stale = packs.join("tmp_pack_stale");
+        let fresh = packs.join("tmp_pack_fresh");
+        std::fs::write(&stale, "x").unwrap();
+        std::fs::write(&fresh, "x").unwrap();
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::File::options().write(true).open(&stale).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(two_hours_ago)).unwrap();
+
+        run_maintenance_task(&dir, "loose-objects").unwrap();
+        assert!(!stale.exists(), "a pack-objects that died an hour ago left this behind");
+        assert!(fresh.exists(), "a temp pack may still be in use");
+        assert_eq!(run_git(&dir, &["config", "gc.auto"]).unwrap(), "0");
+        assert_eq!(run_git(&dir, &["config", "maintenance.auto"]).unwrap(), "false");
+        for task in MAINTENANCE_TASKS {
+            run_maintenance_task(&dir, task).unwrap_or_else(|e| panic!("{task}: {e}"));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn a_failed_atomic_write_leaves_no_temp_file_behind() {
         let dir = repo("failed-write");
@@ -2680,6 +2991,33 @@ mod tests {
             ticket_type: None, status: None, priority: None, owner: None,
             clear_owner: false, documentation: None, body: Some(body.into()), caller: None,
         })
+    }
+
+    /// Tron, 2026-09-20: XNAUT-394's file sat modified after an interrupted
+    /// write; the repo was level with origin; XNAUT-379's green verify could
+    /// not settle because `git rebase origin/main` refuses on any unstaged
+    /// file even with nothing to rebase. Another ticket's dirt must not
+    /// block a write when there is nothing to pull.
+    #[test]
+    fn another_tickets_stranded_write_does_not_block_an_update_when_level_with_origin() {
+        let (first, _second, _remote) = fleet_writers("dirt-level");
+        let stranded = first.join("projects/XNAUT/tickets/XNAUT-901.json");
+        let mut other: TicketRecord = read_json(&stranded).unwrap();
+        other.body = "half written, never committed".into();
+        write_json_atomic(&stranded, &other).unwrap();
+        std::fs::write(first.join("events/stray.json"), "{}").unwrap();
+        let before = read_json::<TicketRecord>(&find_ticket_path(&first, "XNAUT-900").unwrap()).unwrap();
+
+        let moved = fleet_update(&first, "XNAUT-900", before.revision, "written past the dirt").unwrap();
+        assert_eq!(moved.body, "written past the dirt");
+
+        // The other ticket's dirt is still there, untouched and uncommitted.
+        let still: TicketRecord = read_json(&stranded).unwrap();
+        assert_eq!(still.body, "half written, never committed");
+        let status = run_git(&first, &["status", "--porcelain"]).unwrap();
+        assert!(status.contains("XNAUT-901.json"), "{status}");
+        assert!(!status.contains("XNAUT-900.json"), "the write itself was committed: {status}");
+        std::fs::remove_dir_all(&first).unwrap();
     }
 
     #[test]
@@ -3155,7 +3493,9 @@ mod tests {
             .split("pub fn ticket_update_in")
             .nth(1)
             .expect("ticket_update_in exists");
-        let head = &body[..body.len().min(4000)];
+        // The window only has to cover the shared write's guard block; it
+        // grew when the reconcile gained its XNAUT-412 and -414 comments.
+        let head = &body[..body.len().min(6000)];
         assert!(
             head.contains("RESERVED_NAUTBOT_HANDLE"),
             "the rails left the shared write"
@@ -3522,6 +3862,7 @@ key: "AYUS".into(),
                 task_id: String::new(),
                 fleet: false,
                 client: None,
+                issue_intake: Default::default(),
                 created_at: "2026-01-01T00:00:00Z".into(),
             },
         )

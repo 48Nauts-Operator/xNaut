@@ -65,6 +65,39 @@ test('type and release are shown in the list', async ({ page }) => {
   await expect(pane.locator('table.pmw-list thead')).toContainText('Release');
 });
 
+// XNAUT-393: a Copy id button on every row. The row itself opens the ticket,
+// so the interesting half of this is that the copy does NOT.
+test('every row has a copy button that copies the id without opening the ticket', async ({ page }) => {
+  const pane = await openWorkList(page);
+  // Stub the clipboard: the real one needs a secure origin and a focused
+  // document, and we want to assert the written text anyway.
+  await page.evaluate(() => {
+    window.__copied = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (text) => { window.__copied.push(text); return Promise.resolve(); } },
+    });
+  });
+  await expect(pane.locator('table.pmw-list tbody tr .pmw-copy-id')).toHaveCount(3);
+  const button = pane.locator('table.pmw-list tbody tr[data-id="SMOKE-2"] .pmw-copy-id');
+  await expect(button).toHaveAttribute('title', 'Copy SMOKE-2');
+  await button.click();
+  // The toast is asserted first: it removes itself after a second.
+  await expect(pane.locator('.pmw-toast')).toHaveText('Copied SMOKE-2');
+  expect(await page.evaluate(() => window.__copied)).toEqual(['SMOKE-2']);
+  // The detail pane stays shut: the click never reached the row.
+  await expect(pane.locator('.pmw-detail-head')).toHaveCount(0);
+  // The toast clears itself after about a second.
+  await expect(pane.locator('.pmw-toast')).toHaveCount(0, { timeout: 4000 });
+  // Keyboard: focus the button and press Enter.
+  const first = pane.locator('table.pmw-list tbody tr[data-id="SMOKE-1"] .pmw-copy-id');
+  await first.focus();
+  await page.keyboard.press('Enter');
+  expect(await page.evaluate(() => window.__copied)).toEqual(['SMOKE-2', 'SMOKE-1']);
+  await expect(pane.locator('.pmw-detail-head')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
 // Andre, 2026-09-14: "can you make the header of that table sortable".
 test('headers sort by rank, flip on a second click, and the choice survives a re-render', async ({ page }) => {
   const pane = await openWorkList(page);
@@ -81,4 +114,53 @@ test('headers sort by rank, flip on a second click, and the choice survives a re
   await pane.locator('.pmw-filter').fill('smoke');
   expect(await ids(pane)).toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
   expect(await page.evaluate(() => localStorage.getItem('xnaut-pm-list-sort'))).toBe('{"key":"status","dir":"asc"}');
+});
+
+// XNAUT-395. A filter you have to select-all-and-delete to drop is a filter
+// people leave on by accident and then read the short list as the whole list.
+// Both clears go through the same path as typing, so the only thing these
+// assert beyond "the rows came back" is that the box is usable immediately
+// afterwards: still focused, x gone.
+test('the x clears the filter, and is there only while the box has text', async ({ page }) => {
+  const pane = await openWorkList(page);
+  const input = pane.locator('.pmw-filter');
+  const clear = pane.locator('.pmw-filter-clear');
+
+  await expect(clear, 'an empty box has nothing to clear').toBeHidden();
+
+  await input.fill('sitting');
+  expect(await ids(pane)).toEqual(['SMOKE-2']);
+  await expect(clear).toBeVisible();
+
+  await clear.click();
+  await expect(input).toHaveValue('');
+  expect(await ids(pane), 'every ticket is back').toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  await expect(clear).toBeHidden();
+  await expect(input, 'the next thing typed goes in the box').toBeFocused();
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
+});
+
+test('Escape in the filter box clears it the same way', async ({ page }) => {
+  const pane = await openWorkList(page);
+  const input = pane.locator('.pmw-filter');
+  const clear = pane.locator('.pmw-filter-clear');
+
+  await input.fill('status:review');
+  expect(await ids(pane)).toEqual(['SMOKE-2']);
+  await expect(clear).toBeVisible();
+
+  await input.press('Escape');
+  await expect(input).toHaveValue('');
+  expect(await ids(pane), 'every ticket is back').toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+  await expect(clear).toBeHidden();
+  await expect(input).toBeFocused();
+
+  // Escape on an empty box is not ours to swallow: it belongs to whatever is
+  // above us that closes on Escape.
+  await input.press('Escape');
+  await expect(input).toHaveValue('');
+  expect(await ids(pane)).toEqual(['SMOKE-3', 'SMOKE-1', 'SMOKE-2']);
+
+  expect(await page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });

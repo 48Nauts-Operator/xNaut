@@ -100,6 +100,7 @@ pub fn child_request(
         parent: Some(parent_id.to_string()),
         release: parent.release.clone(),
         tags: parent.tags.clone(),
+        source_id: String::new(),
     })
 }
 
@@ -184,7 +185,7 @@ mod tests {
                 model_requirement: String::new(), project: "XNAUT".into(), title: title.into(),
                 ticket_type: "feature".into(), status: status.into(), priority: "high".into(),
                 owner: Some("claude".into()), documentation: vec![], body: String::new(),
-                parent: None, release: String::new(), tags: vec![],
+                parent: None, release: String::new(), tags: vec![], source_id: String::new(),
             }).unwrap()
         };
         let parent = make("Big thing", "in_progress");

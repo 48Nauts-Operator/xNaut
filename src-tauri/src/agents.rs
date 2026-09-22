@@ -806,7 +806,7 @@ fn runtime_search_dirs() -> Vec<PathBuf> {
     search_dirs
 }
 
-fn resolve_binary_in(bin: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+pub(crate) fn resolve_binary_in(bin: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     let direct = PathBuf::from(bin);
     if direct.components().count() > 1 {
         return direct.is_file().then_some(direct);

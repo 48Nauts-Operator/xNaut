@@ -110,20 +110,8 @@ pub fn lane_ticket_for(worktree: &Path, session: Option<&str>) -> Option<String>
 /// same way the plan gate matches its own run: by canonical worktree, and by
 /// session when the caller supplied one.
 pub fn run_ticket_for(registry: &Path, worktree: &Path, session: Option<&str>) -> Option<String> {
-    let tree = worktree.canonicalize().ok()?;
-    crate::run_control::list_ids_in(registry)
-        .ok()?
-        .iter()
-        .filter_map(|id| crate::run_control::load_manifest_in(registry, id).ok())
-        .filter(|r| {
-            r.kind == crate::run_control::RunKind::Agent
-                && !r.state.terminal()
-                && Path::new(&r.worktree_path).canonicalize().ok().as_ref() == Some(&tree)
-                && session.is_none_or(|s| {
-                    r.pty_session.as_deref() == Some(s) || r.zellij_session.as_deref() == Some(s)
-                })
-        })
-        .max_by_key(|r| r.started_at)?
+    crate::run_control::live_run_for_worktree_in(registry, worktree, session, None)
+        .ok()??
         .ticket
 }
 
@@ -165,11 +153,14 @@ pub fn route(tickets: &[TicketRecord], record: &VerifyRecord) -> Route {
         // somehow carries an old jury review still never gets a new one.
         return Route::Swarm;
     }
+    // A superseded review is a retired job (Re-review, XNAUT-399): it must
+    // not block the fresh one it made room for. A parked (owner_required)
+    // review still blocks, or every tick would open another escalation.
     if t.approval.signoff.is_some()
         || t.approval
             .jury_reviews
             .iter()
-            .any(|j| j.gate == Gate::Signoff && j.source_sha == record.commit_sha)
+            .any(|j| j.gate == Gate::Signoff && j.source_sha == record.commit_sha && j.state != "superseded")
     {
         return Route::Nothing;
     }

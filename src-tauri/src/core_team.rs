@@ -1244,6 +1244,7 @@ pub async fn core_team_scan(
                 parent: None,
                 release: String::new(),
                 tags: Vec::new(),
+                source_id: String::new(),
             },
         )?;
         filed.push(created.id);

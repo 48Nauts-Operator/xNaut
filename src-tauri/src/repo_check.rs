@@ -343,6 +343,12 @@ mod tests {
 /// Facts a project page can show without inventing anything: when the code was
 /// last touched, how much is uncommitted, and how many worktrees are attached.
 /// Every field is optional — absent beats a fabricated default.
+///
+/// XNAUT-341: an absent field also carries WHY it is absent. A dash on its own
+/// is indistinguishable from a number still loading, and the header is read to
+/// answer "is this project moving?". "not a git repository" answers that; a
+/// dash does not. `unavailable` is the reason the three git fields below are
+/// missing; it is `None` exactly when they were read.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ProjectFacts {
     pub is_repo: bool,
@@ -353,6 +359,12 @@ pub struct ProjectFacts {
     pub worktrees: Option<usize>,
     /// Author time of the most recent commit, epoch ms.
     pub last_commit_ms: Option<i64>,
+    /// Why the git fields are absent, phrased for a reader, e.g. "not a git
+    /// repository". `None` when they were read.
+    pub unavailable: Option<String>,
+    /// A real repository that has never been committed to. Distinguishes "there
+    /// has been no commit" from "the last commit could not be read".
+    pub no_commits: bool,
 }
 
 #[tauri::command]
@@ -360,13 +372,34 @@ pub fn project_facts(path: String) -> Result<ProjectFacts, String> {
     let dir = std::path::Path::new(&path);
     let mut f = ProjectFacts::default();
     if !dir.is_dir() {
-        return Ok(f);
-    }
-    f.is_repo = dir.join(".git").exists();
-    if !f.is_repo {
+        f.unavailable = Some(if dir.exists() {
+            "not a folder".into()
+        } else {
+            "the folder is not on this machine".into()
+        });
         return Ok(f);
     }
     let short = Duration::from_secs(5);
+    // `git rev-parse` rather than a `.git` probe: a linked worktree's `.git` is
+    // a file and a project rooted at a SUBDIRECTORY of a checkout has no `.git`
+    // at all, yet both are inside a repository. Probing the entry answered "not
+    // a git repository" for both, which was a tolerable dash and is an actively
+    // wrong sentence now that the reason is on screen.
+    let (ok, out) = git(&["rev-parse", "--is-inside-work-tree"], Some(&path), short);
+    f.is_repo = ok && out.trim() == "true";
+    if !f.is_repo {
+        // Tell the two apart: git missing from the machine is not the same
+        // problem as a folder that is not tracked, and they need different
+        // fixes. The stderr text is deliberately NOT quoted into the reason;
+        // `git()` reports a failure to spawn as "timed out", so interpolating
+        // it would print a confident wrong sentence on a machine without git.
+        f.unavailable = Some(if ok || out.contains("not a git repository") {
+            "not a git repository".into()
+        } else {
+            "git could not be read here".into()
+        });
+        return Ok(f);
+    }
     let (ok, out) = git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(&path), short);
     if ok && !out.is_empty() {
         f.branch = Some(out);
@@ -386,6 +419,11 @@ pub fn project_facts(path: String) -> Result<ProjectFacts, String> {
         if let Ok(secs) = out.trim().parse::<i64>() {
             f.last_commit_ms = Some(secs * 1000);
         }
+    } else if out.contains("does not have any commits") {
+        // A freshly-initialised checkout. A dash under "Last commit" reads as
+        // a number that failed to load; the repository is real, and the answer
+        // is that there has not been one yet.
+        f.no_commits = true;
     }
     Ok(f)
 }
@@ -537,5 +575,123 @@ mod activity_tests {
         let ms = out[0].expect("a committed repo must report a time");
         let now = chrono::Utc::now().timestamp_millis();
         assert!((now - ms).abs() < 120_000, "commit time should be ~now");
+    }
+}
+
+/// XNAUT-341. The header shows these four numbers, so every absence it can
+/// produce has to carry a sentence a reader can act on. A dash with no reason
+/// is the failure being fixed, and the assertions below are all about which
+/// sentence comes back rather than about the numbers.
+#[cfg(test)]
+mod facts_tests {
+    use super::*;
+
+    /// `git init` plus an identity, in a directory of our own.
+    fn scratch_repo(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("xnaut-facts-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@example.com"][..],
+            &["config", "user.name", "t"][..],
+        ] {
+            let _ = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_repo_says_so() {
+        let dir = std::env::temp_dir().join(format!("xnaut-facts-plain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let f = project_facts(dir.to_string_lossy().into()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(!f.is_repo);
+        assert_eq!(f.unavailable.as_deref(), Some("not a git repository"));
+        // The reason replaces the numbers; it does not invent them.
+        assert_eq!(f.changes, None);
+        assert_eq!(f.worktrees, None);
+        assert_eq!(f.last_commit_ms, None);
+    }
+
+    #[test]
+    fn a_path_that_is_not_on_this_machine_says_that_instead() {
+        let f = project_facts("/nonexistent/xnaut-341-facts".into()).unwrap();
+        assert!(!f.is_repo);
+        assert_eq!(
+            f.unavailable.as_deref(),
+            Some("the folder is not on this machine")
+        );
+    }
+
+    /// The reason a `.git` probe was not good enough: this directory has no
+    /// `.git` entry of its own and is still inside a repository.
+    #[test]
+    fn a_subdirectory_of_a_checkout_is_a_repo() {
+        let dir = scratch_repo("subdir");
+        let nested = dir.join("src").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        for args in [&["add", "-A"][..], &["commit", "-qm", "one"][..]] {
+            let _ = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output();
+        }
+
+        assert!(!nested.join(".git").exists(), "fixture must have no .git");
+        let f = project_facts(nested.to_string_lossy().into()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(f.is_repo, "a subdirectory of a checkout is inside the repo");
+        assert_eq!(f.unavailable, None);
+        assert!(f.last_commit_ms.is_some());
+    }
+
+    /// A repository with no commits: the numbers are readable, the commit is
+    /// not, and the two absences have different causes.
+    #[test]
+    fn a_repo_with_no_commits_is_not_a_repo_that_could_not_be_read() {
+        let dir = scratch_repo("empty");
+
+        let f = project_facts(dir.to_string_lossy().into()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(f.is_repo);
+        assert_eq!(f.unavailable, None, "the repo itself was readable");
+        assert!(f.no_commits, "an empty repo has never been committed to");
+        assert_eq!(f.last_commit_ms, None);
+        assert_eq!(f.changes, Some(0));
+    }
+
+    #[test]
+    fn a_committed_repo_reports_every_number_and_no_reason() {
+        let dir = scratch_repo("full");
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        for args in [&["add", "-A"][..], &["commit", "-qm", "one"][..]] {
+            let _ = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output();
+        }
+        // One uncommitted file, so `changes` is provably counted rather than zero.
+        std::fs::write(dir.join("b.txt"), "y").unwrap();
+
+        let f = project_facts(dir.to_string_lossy().into()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(f.is_repo);
+        assert_eq!(f.unavailable, None);
+        assert!(!f.no_commits);
+        assert_eq!(f.changes, Some(1));
+        assert_eq!(f.worktrees, Some(0), "the main checkout is not a worktree");
+        assert!(f.last_commit_ms.is_some());
     }
 }

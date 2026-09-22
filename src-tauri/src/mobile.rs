@@ -1886,6 +1886,7 @@ mod tests {
             created_ms: None,
             last_active_ms: last,
             exited,
+            busy: false,
         }
     }
 

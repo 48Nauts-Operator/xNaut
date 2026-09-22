@@ -416,8 +416,13 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
       if (!s) return;
       let home = '/tmp'; try { home = await invoke('get_home_directory'); } catch (_) {}
-      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach "' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
-      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: home } });
+      // `-c` creates the session when the sidebar's + asked for a new one; a
+      // plain attach on a missing name says so instead of creating it.
+      const create = options && options.create ? '-c ' : '';
+      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach ' + create + '"' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
+      // Spawn at the pane's real size so zellij never reflows on attach.
+      const size = options && options.cols && options.rows ? { cols: options.cols, rows: options.rows } : (window.xnautLastTermSize || {});
+      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: (options && options.cwd) || home, ...(size.cols ? { cols: size.cols, rows: size.rows } : {}) } });
       const sid = res.session_id || res.sessionId || res.id;
       console.log('[zellij-attach]', s, '→ pty', sid);
       if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s, s, options);
@@ -468,7 +473,20 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-project-select,.pmw-filter,.pmw-input,.pmw-select,.pmw-textarea { background:var(--input-bg,rgba(255,255,255,.05)); border:1px solid var(--border-color,#3a3d45); border-radius:6px; color:inherit; font:inherit; outline:none; }
 .pmw-project-select,.pmw-filter,.pmw-input,.pmw-select { min-height:30px; padding:4px 8px; }
 .pmw-project-select { width:190px; }
-.pmw-filter { flex:1 1 180px; max-width:360px; }
+/* The filter and its clear button are one control: the wrapper carries the
+   flex sizing the input used to, so the toolbar lays out exactly as before,
+   and the button is absolutely placed inside the input's right padding
+   (XNAUT-395). */
+.pmw-filter-wrap { position:relative; display:flex; flex:1 1 180px; max-width:360px; }
+.pmw-filter-wrap[hidden] { display:none; }
+.pmw-filter { flex:1 1 auto; min-width:0; padding-right:26px; }
+/* WebKit draws its own cancel button on type=search. Ours is the one with
+   behaviour attached, so the native one is hidden rather than left to sit
+   next to it. */
+.pmw-filter::-webkit-search-cancel-button { -webkit-appearance:none; appearance:none; }
+.pmw-filter-clear { position:absolute; right:3px; top:50%; transform:translateY(-50%); display:flex; align-items:center; justify-content:center; width:20px; height:20px; padding:0; border:0; border-radius:4px; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:14px; line-height:1; cursor:pointer; }
+.pmw-filter-clear:hover { color:var(--text-primary,#fff); background:var(--hover-bg,rgba(255,255,255,.06)); }
+.pmw-filter-clear[hidden] { display:none; }
 .pmw-input:focus,.pmw-select:focus,.pmw-textarea:focus,.pmw-filter:focus { border-color:var(--accent,#4f8cff); }
 .pmw-spacer { flex:1 1 auto; }
 .pmw-icon { display:flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--text-secondary,#9a9faa); cursor:pointer; }
@@ -668,6 +686,11 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-status-pill[data-status="blocked"] { color:#f87171; border-color:rgba(248,113,113,.4); }
 .pmw-status-pill[data-status="in_progress"] { color:#fbbf24; border-color:rgba(251,191,36,.4); }
 .pmw-list td.pmw-c-id,.pmw-list th.pmw-c-id { white-space:nowrap; width:1%; font-family:ui-monospace,Menlo,monospace; }
+/* Muted rather than hidden: the acceptance is that every row shows the button,
+   and a hover-only control is one a keyboard user never finds. */
+.pmw-copy-id { margin-left:6px; padding:1px 4px; border:1px solid transparent; border-radius:4px; background:transparent; color:var(--text-muted,#7f8590); font:inherit; font-size:10px; line-height:1; cursor:copy; }
+.pmw-copy-id:hover { border-color:var(--border-color,#34363d); color:var(--xnaut-yellow,#f5b840); }
+.pmw-copy-id:focus-visible { outline:1px solid var(--xnaut-yellow,#f5b840); outline-offset:1px; }
 .pmw-list td.pmw-c-title { max-width:340px; overflow-wrap:anywhere; white-space:normal; line-height:1.35; }
 .pmw-list td.pmw-c-owner,.pmw-list td.pmw-c-status,.pmw-list td.pmw-c-prio { white-space:nowrap; width:1%; }
 .pmw-history { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:11px; line-height:1.9; }
@@ -716,7 +739,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       <header class="pmw-head"${embedded && section0 !== 'work' ? ' hidden' : ''}>
         ${embedded ? '' : `<span class="pmw-title">Projects</span>
         <select class="pmw-project-select" aria-label="Project filter"></select>`}
-        <input class="pmw-filter" type="search" placeholder="Filter: text, or status:review owner:claude release:1.28" spellcheck="false">
+        <span class="pmw-filter-wrap">
+          <input class="pmw-filter" type="search" placeholder="Filter: text, or status:review owner:claude release:1.28" spellcheck="false">
+          <button type="button" class="pmw-filter-clear" title="Clear filter" aria-label="Clear filter" hidden>&times;</button>
+        </span>
         <div class="pmw-segment pmw-view-switch"><button data-view="board">Board</button><button data-view="list">List</button></div>
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
@@ -745,12 +771,36 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     try { savedView = localStorage.getItem(VIEW_KEY); } catch (_) { savedView = null; }
     const state = { sort: savedSort && savedSort.key ? savedSort : { key: 'updated', dir: 'desc' }, projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: savedView === 'board' ? 'board' : 'list', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
 
-    function toast(message, error) {
+    function toast(message, error, ms) {
       const node = document.createElement('div');
       node.className = `pmw-toast${error ? ' error' : ''}`;
       node.textContent = String(message);
       pane.appendChild(node);
-      setTimeout(() => node.remove(), 3500);
+      setTimeout(() => node.remove(), ms || 3500);
+    }
+
+    // navigator.clipboard is absent on an insecure origin and can reject when
+    // the document is not focused, so the old execCommand path is a real
+    // fallback here rather than dead weight. Returns whether the text landed.
+    async function copyToClipboard(text) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (_) { /* fall through to the selection trick */ }
+      try {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.top = '-1000px';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        return ok;
+      } catch (_) { return false; }
     }
 
     function projectName(key) {
@@ -979,6 +1029,19 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       $('.pmw-content').querySelectorAll('th[data-sort]').forEach((th) => {
         th.onclick = () => setSort(th.dataset.sort);
       });
+      // Bound before the rows, and it stops the event: the button sits inside
+      // tr[data-id], so without stopPropagation a copy would also open the
+      // ticket. Enter on a focused button fires this same click, so the
+      // keyboard path needs nothing of its own.
+      $('.pmw-content').querySelectorAll('[data-copy-id]').forEach((button) => {
+        button.onclick = async (event) => {
+          event.stopPropagation();
+          const id = button.dataset.copyId;
+          const ok = await copyToClipboard(id);
+          if (ok) toast(`Copied ${id}`, false, 1000);
+          else toast(`Could not copy ${id}`, true);
+        };
+      });
       $('.pmw-content').querySelectorAll('[data-id]').forEach((node) => {
         node.onclick = () => openTicket(node.dataset.id);
         if (node.classList.contains('pmw-card')) {
@@ -1044,7 +1107,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
           const active = state.sort.key === key;
           return `<th class="pmw-sortable${cls ? ' ' + cls : ''}${active ? ' active' : ''}" data-sort="${key}" aria-sort="${active ? (state.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}" title="Sort by ${label}">${label}<span class="pmw-sort-mark">${active ? (state.sort.dir === 'asc' ? '\u25B4' : '\u25BE') : ''}</span></th>`;
         }).join('');
-        return `<table class="pmw-list"><thead><tr>${head}</tr></thead><tbody>${sortedTickets(tickets).map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}</td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td class="pmw-c-type">${esc(ticket.type || '')}</td><td class="pmw-c-release">${esc(ticket.release || '')}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+        return `<table class="pmw-list"><thead><tr>${head}</tr></thead><tbody>${sortedTickets(tickets).map((ticket) => `<tr data-id="${esc(ticket.id)}"><td class="pmw-c-id">${esc(ticket.id)}<button type="button" class="pmw-copy-id" data-copy-id="${esc(ticket.id)}" title="Copy ${esc(ticket.id)}" aria-label="Copy ${esc(ticket.id)}">⧉</button></td><td class="pmw-c-title">${esc(ticket.title)}</td><td>${esc(ticket.project)}</td><td class="pmw-c-type">${esc(ticket.type || '')}</td><td class="pmw-c-release">${esc(ticket.release || '')}</td><td class="pmw-c-prio"><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span></td><td class="pmw-c-owner"><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></td><td class="pmw-c-status"><span class="pmw-status-pill" data-status="${esc(ticket.status)}">${esc(LABELS[ticket.status] || ticket.status)}</span></td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`).join('')}</tbody></table>`;
       }
       return `<div class="pmw-board">${STATUSES.map((status) => { const items = tickets.filter((ticket) => ticket.status === status); return `<section class="pmw-column"><header class="pmw-column-head"><span class="pmw-status-dot" data-status="${status}"></span><span>${esc(LABELS[status])}</span><span class="pmw-count">${items.length}</span></header><div class="pmw-column-body" data-drop-status="${status}">${items.map(ticketCard).join('')}</div></section>`; }).join('')}</div>`;
     }
@@ -3975,7 +4038,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       const projectWork = Boolean(project && state.section === 'work');
       if (!project || state.section !== 'nautflow') window.xnautClearAgentWorkspaceContext?.(label);
       $('.pmw-view-switch').hidden = Boolean(project && !projectWork);
-      $('.pmw-filter').hidden = Boolean(project && !projectWork);
+      $('.pmw-filter-wrap').hidden = Boolean(project && !projectWork);
       // Embedded, the toolbar is only about the ticket board: on every other
       // section it is a bar of controls for something that is not on screen.
       if (embedded) $('.pmw-head').hidden = state.section !== 'work';
@@ -4446,7 +4509,30 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       $('.pmw-new-project').onclick = () => showDialog('project');
       $('.pmw-project-details').onclick = showProjectDetails;
     }
-    $('.pmw-filter').oninput = renderContent;
+    // Typing, the x and Escape all end in the same two lines, so the list
+    // re-renders identically however the box was emptied (XNAUT-395).
+    function applyFilter() {
+      $('.pmw-filter-clear').hidden = !$('.pmw-filter').value;
+      renderContent();
+    }
+    function clearFilter() {
+      $('.pmw-filter').value = '';
+      applyFilter();
+      $('.pmw-filter').focus();
+    }
+    $('.pmw-filter').oninput = applyFilter;
+    $('.pmw-filter').onkeydown = (event) => {
+      if (event.key !== 'Escape' || !event.currentTarget.value) return;
+      // WebKit clears a type=search on Escape by itself, and does it without
+      // firing `input`: the box would empty and the list would keep the old
+      // rows. Ours is the only clear that runs.
+      event.preventDefault();
+      // Nothing above this should read the same Escape as "close the panel"
+      // while the person is only dropping a filter.
+      event.stopPropagation();
+      clearFilter();
+    };
+    $('.pmw-filter-clear').onclick = clearFilter;
     $('.pmw-segment').querySelectorAll('[data-view]').forEach((button) => {
       button.classList.toggle('active', button.dataset.view === state.view);
       button.onclick = () => {

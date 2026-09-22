@@ -104,7 +104,7 @@ commands.allow = ["read_file"]
 [[permission]]
 identifier = "allow-write-file"
 description = "Allow writing file contents"
-commands.allow = ["write_file"]
+commands.allow = ["write_file", "code_edit_save"]
 
 # Worktree commands (Phase 2)
 [[permission]]
@@ -444,7 +444,7 @@ commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults"
   "resolve_marker",
   "shared_notes_link",
   "shared_notes_list",
-  "zellij_delete_session", "zellij_prune_exited",
+  "zellij_delete_session", "zellij_prune_exited", "zellij_scroll_to_bottom",
   "zellij_sessions_info", "zellij_open_command", "loom_report", "loom_ship", "loom_sandbox_stats"]
 
 [[permission]]
@@ -673,6 +673,9 @@ commands.allow = [
   "forge_add_issue_comment",
   "forge_create_pr",
   "forge_hosts",
+  "issue_intake_status",
+  "issue_intake_configure",
+  "issue_intake_run_now",
   "zellij_check",
   "zellij_sessions",
   "search_text",
@@ -793,7 +796,7 @@ commands.allow = ["agent_nudge"]
 [[permission]]
 identifier = "allow-kill-switches"
 description = "Read and flip the layer kill-switches (owner surface)."
-commands.allow = ["kill_switches_get", "kill_switches_set", "spend_ceiling_get", "spend_ceiling_set"]
+commands.allow = ["kill_switches_get", "kill_switches_set", "spend_ceiling_get", "spend_ceiling_set", "jury_rereview"]
 
 [[permission]]
 identifier = "allow-pm-owner-history"

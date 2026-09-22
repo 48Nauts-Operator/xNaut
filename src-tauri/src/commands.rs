@@ -8,7 +8,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::Serialize;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 #[derive(Serialize)]
@@ -581,16 +581,71 @@ pub async fn read_file(path: String) -> Result<String, String> {
 /// Writes content to a file
 #[tauri::command]
 pub async fn write_file(path: String, content: String) -> Result<(), String> {
+    write_file_to_disk(Path::new(&path), &content)
+}
+
+fn write_file_to_disk(path: &Path, content: &str) -> Result<(), String> {
     // Create the parent chain first — fs::write only opens the file, so writing
     // into a directory that does not exist yet fails with a bare "No such file
     // or directory" that says nothing about which part of the path is missing.
-    if let Some(parent) = std::path::Path::new(&path).parent() {
+    if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
         }
     }
-    fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
+    fs::write(path, content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+fn worktree_root_for(path: &Path) -> Result<PathBuf, String> {
+    let start = if path.is_dir() {
+        path
+    } else {
+        path.parent()
+            .ok_or_else(|| format!("{} has no parent directory", path.display()))?
+    };
+    let root = start
+        .ancestors()
+        .find(|candidate| candidate.join(".git").exists())
+        .ok_or_else(|| format!("{} is not inside a git worktree", path.display()))?;
+    root.canonicalize()
+        .map_err(|error| format!("could not resolve {}: {error}", root.display()))
+}
+
+fn live_writer_refusal(
+    holder: &crate::writer_lease::Holder,
+    run: &crate::run_control::RunManifest,
+) -> String {
+    let ticket = run
+        .ticket
+        .as_deref()
+        .map(|ticket| format!(" on {ticket}"))
+        .unwrap_or_default();
+    format!(
+        "Save refused: @{} holds this worktree's writer lease for live run {}{}. Use the existing takeover path before saving.",
+        holder.handle, run.run_id, ticket
+    )
+}
+
+/// The Code tab's reviewed write. The ordinary write mechanic stays shared
+/// with `write_file`; this command owns only the Code-tab policy that a live
+/// agent writer wins over a human edit made in the same worktree.
+#[tauri::command]
+pub async fn code_edit_save(path: String, content: String) -> Result<(), String> {
+    let file = Path::new(&path);
+    let worktree = worktree_root_for(file)?;
+    if let Some(holder) = crate::writer_lease::live_holder(&worktree) {
+        let registry = crate::agents::registry_dir()?;
+        if let Some(run) = crate::run_control::live_run_for_worktree_in(
+            &registry,
+            &worktree,
+            None,
+            Some(&holder.handle),
+        )? {
+            return Err(live_writer_refusal(&holder, &run));
+        }
+    }
+    write_file_to_disk(file, &content)
 }
 
 /// Gets the user's home directory path
@@ -807,6 +862,47 @@ pub async fn repo_web_url(path: Option<String>) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_code_save_refusal_names_the_writer_run_and_ticket() {
+        let holder = crate::writer_lease::Holder {
+            handle: "builder".into(),
+            pid: std::process::id(),
+            path: "/tmp/worktree".into(),
+            at: "2026-09-15T00:00:00Z".into(),
+        };
+        let mut run = crate::run_control::RunManifest::requested(
+            "builder",
+            "codex",
+            "/tmp/worktree",
+            Some("XNAUT-379".into()),
+            None,
+            &[],
+            crate::run_control::now_ms(),
+        );
+        run.run_id = "01K5A0MONACO379WRITER00000".into();
+        let refusal = live_writer_refusal(&holder, &run);
+        assert!(refusal.contains("@builder"), "{refusal}");
+        assert!(refusal.contains(&run.run_id), "{refusal}");
+        assert!(refusal.contains("XNAUT-379"), "{refusal}");
+        assert!(refusal.contains("takeover"), "{refusal}");
+    }
+
+    #[test]
+    fn the_code_save_finds_the_worktree_above_a_nested_file() {
+        let root = std::env::temp_dir().join(format!(
+            "xnaut-code-save-root-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let nested = root.join("src/deep");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("lib.rs");
+        std::fs::write(&file, "fn before() {}\n").unwrap();
+        assert_eq!(worktree_root_for(&file).unwrap(), root.canonicalize().unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn test_normalize_remote_to_web() {

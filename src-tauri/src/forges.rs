@@ -62,10 +62,23 @@ fn api_base(host: &ForgeHost) -> Result<String, String> {
     match host.kind.as_str() {
         "forgejo" => Ok(format!("{raw}/api/v1")),
         "github" => {
-            if raw.contains("api.github.com") {
-                Ok(raw.to_string())
-            } else {
-                Ok("https://api.github.com".to_string())
+            // github.com is the WEB host and its API lives elsewhere, so that
+            // one spelling is rewritten. Anything else written out in full is
+            // taken at its word, which is what makes a GitHub Enterprise
+            // install reachable, and what lets the intake tests point a
+            // "github" host at a recorded-payload server on localhost. The old
+            // rule ("unless it contains api.github.com, use api.github.com")
+            // silently sent every Enterprise request to github.com instead.
+            let authority = raw
+                .split_once("://")
+                .map(|(_, rest)| rest)
+                .unwrap_or(raw)
+                .split('/')
+                .next()
+                .unwrap_or_default();
+            match authority {
+                "" | "github.com" | "www.github.com" => Ok("https://api.github.com".to_string()),
+                _ => Ok(raw.to_string()),
             }
         }
         "gitlab" => {
@@ -228,16 +241,29 @@ fn normalize_repo(repo: &str) -> String {
     last.trim_end_matches(".git").to_string()
 }
 
-/// List open issues or PRs for owner/repo on the given host.
+/// List open issues or PRs for the host's default owner.
 pub async fn list_issues(
     host: &ForgeHost,
+    repo: &str,
+    kind: IssueKind,
+) -> Result<Vec<ForgeIssue>, String> {
+    list_issues_for(host, &host.owner, repo, kind).await
+}
+
+/// List open issues or PRs for an EXPLICIT owner/repo on the given host.
+///
+/// `host.owner` is the owner's default org for the Tasks panel, and issue
+/// intake (XNAUT-382) reads a different repo per project: the owner comes from
+/// that project's `forge_remote`, which may be any org the token can see.
+pub async fn list_issues_for(
+    host: &ForgeHost,
+    owner: &str,
     repo: &str,
     kind: IssueKind,
 ) -> Result<Vec<ForgeIssue>, String> {
     let client = http_client()?;
     let token = token_for(host)?;
     let base = api_base(host)?;
-    let owner = &host.owner;
     let repo = &normalize_repo(repo);
     match host.kind.as_str() {
         "forgejo" => {
@@ -304,10 +330,19 @@ pub async fn list_issues(
 
 /// Fetch one issue/PR with full body.
 pub async fn get_issue(host: &ForgeHost, repo: &str, number: u64) -> Result<ForgeIssue, String> {
+    get_issue_for(host, &host.owner, repo, number).await
+}
+
+/// Fetch one issue/PR under an EXPLICIT owner. See `list_issues_for`.
+pub async fn get_issue_for(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<ForgeIssue, String> {
     let client = http_client()?;
     let token = token_for(host)?;
     let base = api_base(host)?;
-    let owner = &host.owner;
     let repo = &normalize_repo(repo);
     match host.kind.as_str() {
         // The Gitea/GitHub issues endpoint serves PRs under the same numbers.
@@ -354,13 +389,23 @@ pub async fn add_issue_comment(
     number: u64,
     body: &str,
 ) -> Result<String, String> {
+    add_issue_comment_for(host, &host.owner, repo, number, body).await
+}
+
+/// Comment on an issue under an EXPLICIT owner. See `list_issues_for`.
+pub async fn add_issue_comment_for(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    body: &str,
+) -> Result<String, String> {
     if body.trim().is_empty() {
         return Err("issue comment body is required".into());
     }
     let client = http_client()?;
     let token = token_for(host)?;
     let base = api_base(host)?;
-    let owner = &host.owner;
     let repo = normalize_repo(repo);
     let (url, payload, response_url_field) = match host.kind.as_str() {
         "forgejo" | "github" => (
@@ -392,6 +437,192 @@ pub async fn add_issue_comment(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string())
+}
+
+/// Replace an issue's labels with exactly `labels`.
+///
+/// Issue intake (XNAUT-382) mirrors a ticket's status back onto the issue as an
+/// `xnaut:<status>` label, so the person who reported it can see where it got to
+/// without an xNAUT login. The caller computes the whole desired set. This is a
+/// replace, not an add, because the point is that the OLD `xnaut:` label goes.
+///
+/// The dialects disagree about what a label is, and that difference is the
+/// whole of this function:
+///
+///   - GitHub takes names and creates any it has not seen.
+///   - Forgejo/Gitea takes numeric ids and creates nothing. A name it does not
+///     know is silently dropped, so each one is resolved against the repo's
+///     label list and created when missing. Without this the mirror would
+///     succeed and set no label at all, which is the silent-no-op shape this
+///     codebase keeps being bitten by.
+///   - GitLab takes a comma-joined string on the issue itself, not a subresource.
+pub async fn set_issue_labels(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    labels: &[String],
+) -> Result<(), String> {
+    let client = http_client()?;
+    let token = token_for(host)?;
+    let base = api_base(host)?;
+    let repo = normalize_repo(repo);
+    match host.kind.as_str() {
+        "github" => {
+            let url = format!("{base}/repos/{owner}/{repo}/issues/{number}/labels");
+            let payload = json!({ "labels": labels });
+            request_json(
+                &client,
+                reqwest::Method::PUT,
+                &url,
+                host,
+                &token,
+                Some(&payload),
+            )
+            .await?;
+            Ok(())
+        }
+        "forgejo" => {
+            let mut ids = Vec::new();
+            for name in labels {
+                ids.push(ensure_label_id(&client, host, &token, &base, owner, &repo, name).await?);
+            }
+            let url = format!("{base}/repos/{owner}/{repo}/issues/{number}/labels");
+            let payload = json!({ "labels": ids });
+            request_json(
+                &client,
+                reqwest::Method::PUT,
+                &url,
+                host,
+                &token,
+                Some(&payload),
+            )
+            .await?;
+            Ok(())
+        }
+        "gitlab" => {
+            let project = gitlab_project_path(owner, &repo);
+            let url = format!("{base}/projects/{project}/issues/{number}");
+            let payload = json!({ "labels": labels.join(",") });
+            request_json(
+                &client,
+                reqwest::Method::PUT,
+                &url,
+                host,
+                &token,
+                Some(&payload),
+            )
+            .await?;
+            Ok(())
+        }
+        other => Err(format!("unknown forge kind: {other}")),
+    }
+}
+
+/// The Forgejo/Gitea id for a label name, creating the label if the repo has
+/// none by that name. Colour is the brand yellow so an `xnaut:` label is
+/// recognisable at a glance in a repo full of other people's labels.
+async fn ensure_label_id(
+    client: &reqwest::Client,
+    host: &ForgeHost,
+    token: &str,
+    base: &str,
+    owner: &str,
+    repo: &str,
+    name: &str,
+) -> Result<u64, String> {
+    let list_url = format!("{base}/repos/{owner}/{repo}/labels?limit=200");
+    let existing = request_json(client, reqwest::Method::GET, &list_url, host, token, None).await?;
+    if let Some(id) = expect_array(existing, &list_url)?.iter().find_map(|label| {
+        (label.get("name").and_then(Value::as_str) == Some(name))
+            .then(|| label.get("id").and_then(Value::as_u64))
+            .flatten()
+    }) {
+        return Ok(id);
+    }
+    let create_url = format!("{base}/repos/{owner}/{repo}/labels");
+    let payload = json!({ "name": name, "color": "#f5b840", "description": "Mirrored from xNAUT" });
+    let created = request_json(
+        client,
+        reqwest::Method::POST,
+        &create_url,
+        host,
+        token,
+        Some(&payload),
+    )
+    .await?;
+    created
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("POST {create_url}: the created label carried no id"))
+}
+
+/// A git remote split into the three things an API path needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedRemote {
+    /// Host and port as written, e.g. "github.com" or "cosmos.tail138398.ts.net:3000".
+    pub host: String,
+    pub owner: String,
+    pub repo: String,
+}
+
+/// Split a clone URL into host, owner and repo.
+///
+/// Accepts the three forms a project's `forge_remote` is ever written in: an
+/// http(s) URL, an `ssh://git@host/owner/repo` URL, and the scp-ish
+/// `git@host:owner/repo.git`. Anything else, such as a bare name, a path, or a
+/// URL with no owner segment, is None rather than a guess, because the guess
+/// would be an API call against the wrong repository.
+pub fn parse_remote(remote: &str) -> Option<ParsedRemote> {
+    let raw = remote.trim().trim_end_matches('/');
+    if raw.is_empty() {
+        return None;
+    }
+    let (host, path) = if let Some(rest) = raw.strip_prefix("git@") {
+        // git@host:owner/repo.git; the colon is a separator, not a port.
+        let (host, path) = rest.split_once(':')?;
+        (host.to_string(), path.to_string())
+    } else {
+        let after_scheme = raw.split_once("://").map(|(_, rest)| rest)?;
+        let (authority, path) = after_scheme.split_once('/')?;
+        // ssh://git@host/owner/repo; drop any userinfo.
+        let host = authority.rsplit('@').next().unwrap_or(authority);
+        (host.to_string(), path.to_string())
+    };
+    let mut segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let repo = segments.pop()?.trim_end_matches(".git");
+    let owner = segments.pop()?;
+    if host.is_empty() || owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(ParsedRemote {
+        host,
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
+}
+
+/// The configured host that serves `remote`, matched on hostname.
+///
+/// Matching on the HOST and not on `kind` is what makes a second Forgejo or a
+/// GitHub Enterprise work: two hosts can share a dialect, and only the one the
+/// remote actually points at holds a token that will authenticate.
+pub fn host_for_remote<'a>(hosts: &'a [ForgeHost], remote: &str) -> Option<(&'a ForgeHost, ParsedRemote)> {
+    let parsed = parse_remote(remote)?;
+    let bare = parsed.host.split(':').next().unwrap_or(&parsed.host);
+    let matched = hosts.iter().find(|host| {
+        let configured = host
+            .base_url
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(&host.base_url);
+        let configured = configured.split('/').next().unwrap_or(configured);
+        let configured_bare = configured.split(':').next().unwrap_or(configured);
+        configured_bare == bare
+            // api.github.com is configured for remotes written github.com.
+            || (host.kind == "github" && bare.ends_with("github.com"))
+    })?;
+    Some((matched, parsed))
 }
 
 /// Read small, same-origin issue attachments. Cross-origin URLs and oversized
@@ -764,6 +995,75 @@ mod tests {
     }
 
     #[test]
+    fn parse_remote_reads_the_three_forms_a_remote_is_written_in() {
+        let p = |url: &str| parse_remote(url).map(|r| (r.host, r.owner, r.repo));
+        assert_eq!(
+            p("https://github.com/48Nauts/xnaut.git"),
+            Some(("github.com".into(), "48Nauts".into(), "xnaut".into()))
+        );
+        assert_eq!(
+            p("http://cosmos.tail138398.ts.net:3000/48Nauts/xnaut"),
+            Some((
+                "cosmos.tail138398.ts.net:3000".into(),
+                "48Nauts".into(),
+                "xnaut".into()
+            ))
+        );
+        assert_eq!(
+            p("git@github.com:48Nauts/xnaut.git"),
+            Some(("github.com".into(), "48Nauts".into(), "xnaut".into()))
+        );
+        assert_eq!(
+            p("ssh://git@cosmos:22/48Nauts/xnaut.git"),
+            Some(("cosmos:22".into(), "48Nauts".into(), "xnaut".into())),
+            "userinfo is not part of the host"
+        );
+        assert_eq!(
+            p("https://gitlab.com/group/sub/xnaut.git"),
+            Some(("gitlab.com".into(), "sub".into(), "xnaut".into())),
+            "the owner is the segment before the repo, nested groups included"
+        );
+        assert_eq!(p("https://github.com/48Nauts/xnaut/"), p("https://github.com/48Nauts/xnaut"));
+        // A guess here would be an API call against the wrong repository.
+        assert_eq!(p(""), None);
+        assert_eq!(p("xnaut"), None);
+        assert_eq!(p("48Nauts/xnaut"), None);
+        assert_eq!(p("https://github.com/xnaut"), None, "no owner segment");
+    }
+
+    #[test]
+    fn a_remote_is_matched_to_a_host_by_hostname() {
+        let hosts = vec![
+            host("forgejo", "http://cosmos.tail138398.ts.net:3000"),
+            host("github", "https://api.github.com"),
+        ];
+        let (matched, parsed) =
+            host_for_remote(&hosts, "http://cosmos.tail138398.ts.net:3000/48Nauts/xnaut.git")
+                .unwrap();
+        assert_eq!(matched.kind, "forgejo");
+        assert_eq!(parsed.owner, "48Nauts");
+        assert_eq!(parsed.repo, "xnaut");
+
+        // github.com and api.github.com are the same host for this purpose.
+        let (matched, parsed) =
+            host_for_remote(&hosts, "git@github.com:48Nauts/xnaut.git").unwrap();
+        assert_eq!(matched.kind, "github");
+        assert_eq!(parsed.owner, "48Nauts");
+
+        // The owner comes from the REMOTE, not from the host's default org.
+        assert_eq!(
+            host_for_remote(&hosts, "https://github.com/someone-else/their-repo")
+                .unwrap()
+                .1
+                .owner,
+            "someone-else"
+        );
+        // A host nobody configured has no token, so it is None rather than a
+        // request that will 401.
+        assert!(host_for_remote(&hosts, "https://bitbucket.org/a/b").is_none());
+    }
+
+    #[test]
     fn gitlab_project_path_encodes_slash() {
         assert_eq!(gitlab_project_path("48Nauts", "xnaut"), "48Nauts%2Fxnaut");
         assert_eq!(gitlab_project_path("group", "sub.repo"), "group%2Fsub.repo");
@@ -783,6 +1083,10 @@ mod tests {
         let gl = host("gitlab", "");
         assert_eq!(api_base(&gl).unwrap(), "https://gitlab.com/api/v4");
         assert!(api_base(&host("svn", "x")).is_err());
+        // A GitHub Enterprise install is taken at its word. The old rule sent
+        // it to github.com, which is the wrong company's API.
+        let ghe = host("github", "https://git.acme.example/api/v3");
+        assert_eq!(api_base(&ghe).unwrap(), "https://git.acme.example/api/v3");
     }
 
     #[test]

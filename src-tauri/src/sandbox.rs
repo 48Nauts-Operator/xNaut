@@ -427,6 +427,7 @@ if not isinstance(e, dict): e = {}
 e["hasTrustDialogAccepted"] = True
 d["projects"][w] = e
 d["hasCompletedOnboarding"] = True
+d["bypassPermissionsModeAccepted"] = True
 "#,
                 ".claude.json",
             );
@@ -1429,6 +1430,22 @@ run `gitvm stop` there by hand if it is still up",
         /// AFTER the script has cd'd. Both remote environments must place it
         /// there — on exe.dev the workdir is under a `$HOME` this side cannot
         /// know, which is why the path is asked for rather than computed.
+        /// XNAUT-396: `remote_command` puts env assignments before the binary,
+        /// and bash's `exec` takes the first word as the program. Both scripts
+        /// must route the line through `env` or every remote launch with a
+        /// model or identity dies at its last line.
+        #[test]
+        fn both_remote_scripts_exec_through_env_so_prefixed_assignments_survive() {
+            let cmd = "ANTHROPIC_MODEL='claude-opus-5' claude --model x";
+            for script in [
+                super::super::exe::run_script("w", cmd, "s", ""),
+                super::super::cli::run_script(cmd, "s", ""),
+            ] {
+                let last = script.trim_end().lines().last().unwrap();
+                assert_eq!(last, format!("exec env {cmd}"), "{script}");
+            }
+        }
+
         #[test]
         fn both_remote_scripts_seed_after_the_cd_that_defines_pwd() {
             let seed = "SEEDMARK\n";
@@ -1436,12 +1453,12 @@ run `gitvm stop` there by hand if it is still up",
             let exe = super::super::exe::run_script("w", "claude", "s", seed);
             let (cd, mark) = (exe.find("cd ").unwrap(), exe.find("SEEDMARK").unwrap());
             assert!(cd < mark, "exe.dev seeds before its cd: {exe}");
-            assert!(mark < exe.find("exec claude").unwrap(), "{exe}");
+            assert!(mark < exe.find("exec env claude").unwrap(), "{exe}");
 
             let cli = super::super::cli::run_script("claude", "s", seed);
             let (cd, mark) = (cli.find("cd /workspace").unwrap(), cli.find("SEEDMARK").unwrap());
             assert!(cd < mark, "gitvm seeds before its cd: {cli}");
-            assert!(mark < cli.find("exec claude").unwrap(), "{cli}");
+            assert!(mark < cli.find("exec env claude").unwrap(), "{cli}");
         }
 
         /// THE no-behaviour-change test. Every profile in the store today is
@@ -2335,7 +2352,7 @@ could not be installed' >&2; exit 1; }",
              printf '\\033[36mxNAUT: running in the GitVM sandbox, tmux session %s\\033[0m\\n' {}\n\
              printf '\\033[36mxNAUT: this run survives the app; teardown destroys /workspace, so \
 pull before you stop it\\033[0m\\n'\n\
-             exec {}\n",
+             exec env {}\n",
             super::exe::shell_single_quote(session),
             command
         )
@@ -2457,7 +2474,7 @@ unknown: {}",
         #[test]
         fn the_run_script_execs_the_agent() {
             let body = run_script("claude --dangerously-skip-permissions", "xnaut-a-1", "");
-            assert!(body.contains("\nexec claude"), "{body}");
+            assert!(body.contains("\nexec env claude"), "{body}");
             assert!(body.contains("pull before you stop it"), "{body}");
         }
 
@@ -2869,6 +2886,11 @@ pub mod exe {
     /// `seed` answers the CLI's first-run wizard and MUST come after the `cd`:
     /// it names the trusted directory with `$PWD`. See
     /// `launch_env::onboarding_seed`.
+    ///
+    /// `exec env` rather than `exec`: the command line carries env
+    /// assignments in front of the binary (`remote_command`), and bash's
+    /// `exec` takes the first word as the program. Every exe.dev launch died
+    /// on `exec: ANTHROPIC_MODEL=...: not found` on 2026-09-14 (XNAUT-396).
     pub fn run_script(workdir: &str, command: &str, session: &str, seed: &str) -> String {
         format!(
             "#!/bin/bash -l\n\
@@ -2876,7 +2898,7 @@ pub mod exe {
              {}\
              printf '\\033[36mxNAUT: running on {VM}.exe.xyz in tmux session %s\\033[0m\\n' {}\n\
              printf '\\033[36mxNAUT: this run survives the app; reattach finds it by name\\033[0m\\n'\n\
-             exec {}\n",
+             exec env {}\n",
             remote_path(workdir),
             workdir,
             seed,
@@ -3111,7 +3133,7 @@ pub mod exe {
             let script = run_script("verify/it's", "claude --model x", "xnaut-a-1", "");
             assert!(script.starts_with("#!/bin/bash -l"), "{script}");
             assert!(script.contains(r"'verify/it'\''s'"), "{script}");
-            assert!(script.contains("exec claude --model x"), "{script}");
+            assert!(script.contains("exec env claude --model x"), "{script}");
             // `$HOME` must reach the shell unquoted or it is a literal.
             assert!(script.contains("\"$HOME\"/"), "{script}");
         }
