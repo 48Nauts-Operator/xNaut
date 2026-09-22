@@ -26,6 +26,18 @@
   // webview is positioned in unzoomed points. Without this the browser pane
   // drifts away from its placeholder as soon as the interface is zoomed.
   const uiZoom = () => (Number(window.xnautUiZoom) > 0 ? Number(window.xnautUiZoom) : 1);
+  // How many native points one unit of getBoundingClientRect is under the
+  // app's CSS zoom. Measured, not assumed: current WebKit and Chromium report
+  // rects already in viewport points (a 100px box under zoom 1.5 reads left
+  // 150 and hit-tests there; probed 2026-09-22), so the factor is 1 and
+  // multiplying by the zoom again put the webview a tenth too far right and a
+  // tenth too wide at 110% (XNAUT-437). An engine that still reports unzoomed
+  // layout units makes the root narrower than the window by the zoom, and the
+  // ratio below is that zoom. Either way the webview lands on the pane.
+  const rectScale = () => {
+    const root = document.documentElement.getBoundingClientRect().width;
+    return root > 0 ? window.innerWidth / root : uiZoom();
+  };
 
   function getChromeOffsetY() {
     const isMac = /Mac/i.test(navigator.userAgent);
@@ -136,7 +148,7 @@
     const placeholderRect = placeholder.getBoundingClientRect();
     const yOffset = getChromeOffsetY();
     const CREATE_INSET = 6; // keep in sync with syncBounds INSET
-    const z = uiZoom();
+    const z = rectScale();
     const finalX = (paneRect.left + CREATE_INSET) * z;
     const finalY = barRect.bottom * z + yOffset;
     const finalW = Math.max((paneRect.width - CREATE_INSET * 2) * z, 1);
@@ -168,7 +180,7 @@
       // CSS zoom scales what getBoundingClientRect reports; a native child
       // webview is placed in unzoomed points. One multiplication here rather
       // than at four call sites.
-      const z = uiZoom();
+      const z = rectScale();
       return {
         x: (pr.left + INSET) * z,
         y: br.bottom * z + off,
@@ -361,7 +373,7 @@
           const pr = entry.paneEl.getBoundingClientRect();
           const br = entry.barEl.getBoundingClientRect();
           const INSET = 6;
-          const z = uiZoom();
+          const z = rectScale();
           invoke('browser_pane_set_visible', { label: pg.label, visible: true }).catch(() => {});
           invoke('browser_pane_set_bounds', {
             req: {
@@ -394,7 +406,7 @@
         const pr = entry.paneEl.getBoundingClientRect();
         const br = entry.barEl.getBoundingClientRect();
         const INSET = 6;
-        const z = uiZoom();
+        const z = rectScale();
         inv()('browser_pane_set_bounds', {
           req: { label: pg.label, x: (pr.left + INSET) * z, y: br.bottom * z + off,
             width: Math.max((pr.width - INSET * 2) * z, 1), height: Math.max((pr.bottom - br.bottom - INSET) * z, 1) },

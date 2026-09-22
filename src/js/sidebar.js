@@ -40,6 +40,9 @@
   // "Hide all except pinned": the list shows the Pinned group alone.
   const ONLY_PINNED_KEY = 'xnaut-projects-only-pinned';
   const PINNED_COLLAPSE_KEY = 'xnaut-pinned-collapsed';
+  // Which list the sidebar body shows: 'projects' or 'sessions' (2026-09-15).
+  // The sessions list itself is read fresh from zellij on every refresh.
+  const SIDEBAR_VIEW_KEY = 'xnaut-sidebar-view';
   // How many worktrees a group shows before the rest go behind one row. Orca's
   // answer to a repo with fourteen of them.
   const WORKTREE_CAP = 5;
@@ -88,6 +91,7 @@
   // ---------- icons ----------
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
+    sessions: `<svg ${SVG_ATTRS}><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5l2 1.5-2 1.5M8 9.5h3"/></svg>`,
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     // Three nodes and the edges between them: the mesh, not a mailbox. The
     // envelope moved to Inbox, which is the thing that actually holds letters.
@@ -112,15 +116,21 @@
   // that are not about one project: search, the Mesh, automations, the
   // observatory, and what is waiting on you.
   const RAIL_ITEMS = [
-    { key: 'search', label: 'Search' },
-    { key: 'mesh', label: 'Mesh' },
-    { key: 'automations', label: 'Automations' },
+    // Order is André's (2026-09-15): what he checks first sits first.
     { key: 'observatory', label: 'Observatory' },
     // No dedicated Inbox SURFACE exists: open asks and approvals live in the
     // Mesh panel and, answerable in place, in the right pane's flow view
     // (right-pane-flowwatch.js). This opens the latter, so Inbox and Mesh are
     // two destinations rather than one destination behind two icons.
     { key: 'inbox', label: 'Inbox', open: openInbox },
+    // Every live zellij session in one place, its own list rather than a
+    // section among the projects ("less full"). The toggle lives on the
+    // instance (assigned below), so the item names the global the way the
+    // Memory entry does; typeof-guarded in openItem.
+    { key: 'sessions', label: 'Sessions', global: 'xnautSidebarToggleSessions' },
+    { key: 'search', label: 'Search' },
+    { key: 'mesh', label: 'Mesh' },
+    { key: 'automations', label: 'Automations' },
   ];
 
   // Everything the twelve rows used to reach that the rail does not. Each entry
@@ -143,6 +153,12 @@
   // are assigned (tasks-mode-glue.js, right-pane.js) and both are guarded,
   // because an unassigned window.* is a silent no-op and not a crash.
   function openInbox() {
+    // The Mesh surface is where the open asks and approvals are answered; the
+    // right pane's flow view is the same items in place. Both, so a click on
+    // the badge always shows something even when the right pane was already
+    // on that view (André, 2026-09-15: "the second icon with the 3 does not do
+    // anything on click").
+    navigate('mesh');
     if (typeof window.xnautEnsureRightPane === 'function') window.xnautEnsureRightPane();
     if (typeof window.xnautRightPaneShow !== 'function' || !window.xnautRightPaneShow('flowwatch')) {
       console.warn('[sidebar] right pane not mounted; cannot open the Inbox');
@@ -288,6 +304,20 @@
       .sbar-dot { flex: 0 0 auto; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%;
         background: var(--dot-off, #555); }
       .sbar-dot.sbar-on { background: var(--dot-on, #3fb950); }
+      .sbar-sessions { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 6px 4px; }
+      .sbar-section-head[hidden], .sbar-projects[hidden] { display: none; }
+      .sbar-sess-fold { margin-top: 6px; }
+      .sbar-sess-fold > summary { cursor: pointer; list-style: none; padding: 6px 8px 2px; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted, #7a808a); }
+      .sbar-sess-fold > summary::-webkit-details-marker { display: none; }
+      .sbar-sessions[hidden] { display: none; }
+      .sbar-sess-state { flex: 0 0 auto; margin-left: auto; font-size: 10px; color: var(--text-muted, #7a808a); text-transform: lowercase; }
+      .sbar-sess.sbar-exited .sbar-name { color: var(--text-muted, #7a808a); }
+      .sbar-sess .sbar-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sbar-sess .sbar-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+      .sbar-sess .sbar-sub { font-size: 11px; color: var(--text-muted, #777); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sbar-head-count { margin-left: 6px; font-size: 10px; color: var(--text-muted, #7a808a); }
+      .sbar-sess-auto .sbar-name { color: #6ea8fe; }
+      .sbar-sess-manual .sbar-name { color: #f5b840; }
       .sbar-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
       .sbar-row-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
       .sbar-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -298,7 +328,7 @@
       .sbar-ago { color: var(--text-muted, #666); }
       .sbar-branch-name:not(:empty) + .sbar-ago:not(:empty)::before { content: ' · '; }
       .sbar-empty { padding: 10px 8px; color: var(--text-muted, #666); font-size: 12px; }
-      .sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
+      .sbar-chip.sbar-sess { background: rgba(120,180,255,.12); color: #7fb2ff; border-color: transparent; }
       /* State as a hairline around the row. One pixel on purpose: it should be
          readable in peripheral vision without competing with the text. Only the
          states worth reacting to get one — idle projects stay unmarked, or the
@@ -323,6 +353,13 @@
       .sbar-row[data-state="done"]      { --sbar-state: rgba(63,185,80,.55); }
       .sbar-row[data-state="live"]      { --sbar-state: rgba(140,146,158,.28); }
       .sbar-row[data-state="exited"]    { --sbar-state: rgba(140,146,158,.22); }
+      /* Session rows: no fill, a hairline in the kind's colour (André,
+         2026-09-15): yellow around his own terminals, blue around the bots.
+         The active one gets the same line, two pixels. */
+      .sbar-sess.sbar-sess-auto { --sbar-state: #6ea8fe; }
+      .sbar-sess.sbar-sess-manual { --sbar-state: #f5b840; }
+      .sbar-sess.sbar-exited { --sbar-state: transparent; }
+      .sbar-sess.sbar-row-active { background: transparent; box-shadow: inset 0 0 0 2px var(--sbar-state, transparent); }
       /* A conic-gradient sweeps by ANGLE, so it rotates like a pie no matter what
          shape you mask it into — that is why the last version still read as a
          circle. This moves an actual block around the four edges instead: eight
@@ -335,6 +372,10 @@
         background: #4da3ff; animation: sbar-square 1.2s steps(1) infinite; }
       /* the tail: same path, one step behind, dimmer */
       .sbar-dot.sbar-run::after { background: rgba(77,163,255,.35); animation-delay: -0.15s; }
+      /* The same snake in the owner's colour on his own rows. */
+      .sbar-sess-manual .sbar-dot.sbar-run { box-shadow: inset 0 0 0 1px rgba(245,184,64,.22); }
+      .sbar-sess-manual .sbar-dot.sbar-run::before { background: #f5b840; }
+      .sbar-sess-manual .sbar-dot.sbar-run::after { background: rgba(245,184,64,.35); }
       @keyframes sbar-square {
         0%    { top: 0;     left: 0; }
         12.5% { top: 0;     left: 4.5px; }
@@ -569,6 +610,169 @@
       }
     };
 
+    // ─── Sessions (2026-09-15) ───────────────────────────────────────────────
+    // André: "I have x sessions open and work in parallel on stuff." Every live
+    // zellij session on this machine, in one place above the projects: the ones
+    // the app launched carry their agent's status word, the owner's own (cx-*,
+    // cl-*) carry only their age, because nothing reports on them (XNAUT-402).
+    // Click opens or focuses the tab; right-click closes. Never automatic.
+    const sessHead = document.createElement('div');
+    sessHead.className = 'sbar-section-head';
+    sessHead.innerHTML = `<span class="sbar-head-label"><span>Sessions</span><span class="sbar-head-count" data-sess-count></span></span>`
+      + `<span class="sbar-head-actions"><button class="sbar-icon-btn" data-sess-plus title="New terminal" aria-label="New terminal">${ICONS.plus}</button></span>`;
+    // The + opens a plain terminal tab. Not a zellij session: attaching one from
+    // inside another nests them, which nobody wants, and a shell is what a new
+    // tab should be. The list only tracks zellij sessions, so nothing to refresh.
+    sessHead.querySelector('[data-sess-plus]').addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (typeof window.createNewTab !== 'function') { console.warn('[sidebar] createNewTab is not assigned; cannot open a terminal'); return; }
+      window.createNewTab();
+    });
+    root.appendChild(sessHead);
+    const sessList = document.createElement('div');
+    sessList.className = 'sbar-sessions';
+    root.appendChild(sessList);
+    // The body shows one list at a time. `applyView` runs once the projects
+    // header and list exist (below), and again on every rail click.
+    state.busyUntil = new Map();
+    state.view = localStorage.getItem(SIDEBAR_VIEW_KEY) === 'sessions' ? 'sessions' : 'projects';
+    function applyView() {
+      const sessions = state.view === 'sessions';
+      sessHead.hidden = !sessions;
+      sessList.hidden = !sessions;
+      if (state.projectsHead) state.projectsHead.hidden = sessions;
+      if (state.projectsList) state.projectsList.hidden = sessions;
+      if (navEls.sessions) navEls.sessions.classList.toggle('sbar-active', sessions);
+    }
+    window.xnautSidebarToggleSessions = toggleSessionsView;
+    function toggleSessionsView() {
+      state.view = state.view === 'sessions' ? 'projects' : 'sessions';
+      localStorage.setItem(SIDEBAR_VIEW_KEY, state.view);
+      if (state.view === 'projects') {
+        state.activeNav = null;
+        for (const k of Object.keys(navEls)) navEls[k].classList.remove('sbar-active');
+      }
+      applyView();
+    }
+
+    // Open the session's tab: the one already attached if there is one, else
+    // a fresh `zellij attach`. Both globals live in app.js and are guarded, so
+    // in the stub page a missing one is a console warning, not a throw.
+    function openSession(name) {
+      state.activeSession = name;
+      sessList.querySelectorAll('.sbar-sess').forEach((r) => r.classList.toggle('sbar-row-active', r.dataset.session === name));
+      // The host tab is the one place a session shows; the list is the switcher.
+      if (typeof window.xnautShowSessionInHost === 'function') return window.xnautShowSessionInHost(name);
+      if (typeof window.xnautOpenZellijSession === 'function') return window.xnautOpenZellijSession(name, { focus: true });
+      console.warn('[sidebar] xnautShowSessionInHost is not assigned; cannot open', name);
+    }
+    function renderSessions() {
+      sessList.innerHTML = '';
+      const owned = new Map();
+      for (const a of state.agentSessions || []) {
+        if (a && a.zellij_session) owned.set(a.zellij_session, a);
+      }
+      // The app's launches carry the xnaut- prefix; everything else is the
+      // owner's, adopted or not, so his rename and his colour hold on it.
+      const isAuto = (s) => /^xnaut-/.test(s.name || '');
+      const rank = (s) => (s.exited ? 2 : (isAuto(s) ? 0 : 1));
+      // An exited xnaut-* session is a dead name: the app prunes it within a
+      // minute and nothing can bring the run back through it. The owner's own
+      // exited sessions stay, folded, because those are resurrected on purpose.
+      const sessions = (state.sessions || []).filter((s) => !(s.exited && /^xnaut-/.test(s.name || ''))).sort((a, b) => rank(a) - rank(b) || (b.last_active_ms || 0) - (a.last_active_ms || 0));
+      const liveCount = sessions.filter((s) => !s.exited).length;
+      sessHead.querySelector('[data-sess-count]').textContent = liveCount ? String(liveCount) : '';
+      const badge = navEls.sessions && navEls.sessions.querySelector('[data-badge]');
+      if (badge) { badge.textContent = liveCount > 99 ? '99+' : String(liveCount); badge.hidden = liveCount === 0; }
+      if (!sessions.length) {
+        const empty = document.createElement('div');
+        empty.className = 'sbar-empty';
+        empty.textContent = 'No sessions';
+        sessList.appendChild(empty);
+        return;
+      }
+      // Exited sessions can be resurrected, so they are one click away rather
+      // than gone, but they are not what this list is for: folded, and last.
+      const fold = document.createElement('details');
+      fold.className = 'sbar-sess-fold';
+      const exitedCount = sessions.length - liveCount;
+      fold.innerHTML = `<summary>Exited · ${exitedCount}</summary>`;
+      for (const s of sessions) {
+        const agent = owned.get(s.name);
+        const row = document.createElement('div');
+        row.className = 'sbar-row sbar-sess' + (s.exited ? ' sbar-exited' : (isAuto(s) ? ' sbar-sess-auto' : ' sbar-sess-manual'));
+        row.dataset.session = s.name;
+        if (state.activeSession === s.name) row.classList.add('sbar-row-active');
+        // The state word is the agent's own status when the app launched the
+        // session; a session it only sees says "live" or "exited", nothing more.
+        // His own sessions have no hooks; the server's CPU says whether the
+        // agent inside is working (zellij.rs busy_sessions).
+        // CPU is sampled every five seconds and a working agent idles between
+        // turns, so a plain read flapped live/working. Busy sticks for 15 s.
+        const now = Date.now();
+        if (s.busy) state.busyUntil.set(s.name, now + 15000);
+        const busy = s.busy || (state.busyUntil.get(s.name) || 0) > now;
+        const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : (busy ? 'working' : 'live'));
+        row.dataset.state = word;
+        let dot = ' sbar-live';
+        if (s.exited) dot = ' sbar-exited';
+        else if (word === 'permission' || word === 'blocked') dot = ' sbar-attention';
+        else if (word === 'working') dot = ' sbar-run';
+        const alias = typeof window.xnautSessionAlias === 'function' ? window.xnautSessionAlias(s.name) : '';
+        // The owner's name for a session wins over the agent's label: the app
+        // adopts his own sessions too, and a rename must show on the row.
+        const label = alias || (agent && agent.label) || s.name;
+        const sub = (agent || alias) ? s.name : (s.created ? `since ${s.created}` : '');
+        row.innerHTML = `<span class="sbar-dot${dot}"></span>`
+          + `<span class="sbar-text"><span class="sbar-name"></span><span class="sbar-sub"></span></span>`
+          + `<span class="sbar-sess-state">${word}</span>`;
+        row.querySelector('.sbar-name').textContent = label;
+        row.querySelector('.sbar-sub').textContent = sub;
+        row.title = s.exited ? `${s.name}: exited, attach to resurrect` : s.name;
+        row.addEventListener('click', () => openSession(s.name));
+        // Double-click renames, like the tab name at the top.
+        row.addEventListener('dblclick', async (event) => {
+          event.preventDefault();
+          if (typeof window.xnautPromptDialog !== 'function' || typeof window.xnautRenameSession !== 'function') return;
+          const answer = await window.xnautPromptDialog(`Name for ${s.name}`, alias || '', 'Rename');
+          if (answer === null || answer === undefined || answer === false) return;
+          window.xnautRenameSession(s.name, String(answer));
+        });
+        row.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          openMenu(event.clientX, event.clientY, [
+            { label: s.exited ? 'Resurrect' : 'Open', action: () => openSession(s.name) },
+            {
+              label: 'Rename',
+              action: async () => {
+                // window.prompt is a no-op in this webview; the app's own dialog answers.
+                if (typeof window.xnautPromptDialog !== 'function' || typeof window.xnautRenameSession !== 'function') return;
+                const answer = await window.xnautPromptDialog(`Name for ${s.name}`, alias || '', 'Rename');
+                if (answer === null || answer === undefined || answer === false) return;
+                window.xnautRenameSession(s.name, String(answer));
+              },
+            },
+            {
+              label: 'Close session', danger: true,
+              action: async () => {
+                // The app's own sessions have a reaper; a person's session is
+                // closed only by a person, and only after the question, which
+                // window.confirm cannot ask here (it is a no-op in this webview).
+                if (!s.exited) {
+                  if (typeof window.xnautConfirmDialog !== 'function') return;
+                  const yes = await window.xnautConfirmDialog(`Close zellij session ${s.name}?`, 'Close');
+                  if (!yes) return;
+                }
+                invoke('zellij_delete_session', { name: s.name }).then(() => refresh()).catch((e) => console.error('[sidebar] close session failed:', e));
+              },
+            },
+          ]);
+        });
+        (s.exited ? fold : sessList).appendChild(row);
+      }
+      if (exitedCount) sessList.appendChild(fold);
+    }
+
     // Projects header (collapsible), with a gear and a plus.
     const head = document.createElement('div');
     head.className = 'sbar-section-head sbar-collapsible';
@@ -604,6 +808,9 @@
     const list = document.createElement('div');
     list.className = 'sbar-projects';
     root.appendChild(list);
+    state.projectsHead = head;
+    state.projectsList = list;
+    applyView();
 
     // Collapse the Projects list (persisted, toggled by clicking the header).
     const PROJECTS_COLLAPSE_KEY = 'xnaut-projects-collapsed';
@@ -1505,6 +1712,7 @@
       for (const entry of buildEntries()) {
         if (state.openGroups.has(entry.key)) state.worktrees.delete(entry.repo);
       }
+      renderSessions();
       renderProjects();
     }
 
@@ -1555,7 +1763,17 @@
       }
     }
 
+    // The Sessions view repaints its rows every few seconds while it is open:
+    // busy comes from a ps scan, so nothing pushes it. Two reads, no tree walk.
+    const sessionTimer = setInterval(async () => {
+      if (state.destroyed || state.view !== 'sessions') return;
+      state.sessions = await listOr('zellij_sessions_info');
+      state.agentSessions = await listOr('agent_sessions_list');
+      if (!state.destroyed) renderSessions();
+    }, 5000);
+
     function destroy() {
+      clearInterval(sessionTimer);
       if (state.destroyed) return;
       state.destroyed = true;
       if (state.disposeMeshBadge) state.disposeMeshBadge();

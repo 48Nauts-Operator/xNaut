@@ -70,6 +70,23 @@ impl Role {
         matches!(self, Self::Fleet | Self::Sandbox)
     }
 
+    /// May this machine's SWEEP take issues in from a forge (XNAUT-382)? Only
+    /// the fleet.
+    ///
+    /// Not because intake is expensive, but because it writes NEW tickets to a
+    /// board that is shared between machines. Its "never twice" guard is a
+    /// `source_id` already on that board, and each machine only pushes after
+    /// it writes, so two sweeps ticking at the same moment both see no ticket
+    /// and both file one. One machine doing this unattended is the whole
+    /// point of the fleet role.
+    ///
+    /// This gates the TICK and not `issue_intake_run_now`: a person pressing
+    /// Run now on their own desk is attended, deliberate, and is how a
+    /// workstation is meant to pull an issue in.
+    pub fn files_issues(self) -> bool {
+        matches!(self, Self::Fleet)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Fleet => "fleet",
@@ -210,7 +227,7 @@ pub fn adopt() {
     }
 }
 
-/// This instance, for the Observatory's card.
+/// This instance, for the Observatory's header badge (XNAUT-391).
 #[tauri::command]
 pub fn instance_stamp() -> Stamp {
     stamp()
@@ -249,6 +266,18 @@ mod tests {
         assert!(!Role::Workstation.verifies(), "a verification is a run too");
         assert!(!Role::Sandbox.dispatches(), "a sandbox box has no board to dispatch from");
         assert!(Role::Sandbox.verifies());
+        // Issue intake (XNAUT-382) writes NEW tickets to a shared board, and
+        // its never-twice guard is a source_id already on that board. Two
+        // sweeps ticking at once would both see none and both file.
+        assert!(Role::Fleet.files_issues());
+        assert!(
+            !Role::Workstation.files_issues(),
+            "a second machine filing the same issue is a duplicate ticket"
+        );
+        assert!(
+            !Role::Sandbox.files_issues(),
+            "a sandbox box verifies; it does not put work on the board"
+        );
     }
 
     #[test]
