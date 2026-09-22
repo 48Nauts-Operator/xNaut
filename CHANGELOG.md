@@ -5,6 +5,8 @@ All notable changes to xNAUT are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- The browser pane lands on its pane under UI zoom. Since Cmd+/- zoom arrived, every coordinate from getBoundingClientRect was multiplied by the zoom, but WebKit reports those rects in viewport points already, so at 110% the page sat a tenth too far right with a gap on the left and its right edge cut off. The factor is now measured from the root rect, so it is right on either kind of engine. (XNAUT-437)
+- The Code tab's Open in editor button works. It sent an empty working directory, the backend refused, and the refusal was swallowed; the editor now opens in the file's own directory through a login shell and a failure shows as a toast. (XNAUT-434)
 - A keychain secret longer than 128 characters is stored whole. The store typed the value into `security`'s password prompt, which keeps 128 bytes; a 1155-character Securosys JWT came back cut twice and the HSM refused it. The value now goes to `security -i` as one command on stdin, off the process list, and the item is read back before the store reports success. (XNAUT-433)
 
 ## [1.27.1] - 2026-09-21
