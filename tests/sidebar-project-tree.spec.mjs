@@ -75,11 +75,11 @@ async function expand(page) {
 
 const errors = (page) => page.evaluate(() => window.__xnautErrors || []);
 
-test('the rail is six named icons with no labels, and drops no destination', async ({ page }) => {
+test('the rail is seven named icons with no labels, and drops no destination', async ({ page }) => {
   await openSidebar(page);
 
   const icons = page.locator('.sbar-rail-btn:not(.sbar-rail-more)');
-  await expect(icons, 'the rail is six icons').toHaveCount(6);
+  await expect(icons, 'the rail is seven icons').toHaveCount(7);
   // In André's order, with Projects first as the workspace's front door (XNAUT-435).
   expect(await icons.evaluateAll((els) => els.map((e) => e.dataset.rail))).toEqual(['projects', 'observatory', 'inbox', 'sessions', 'search', 'mesh', 'automations']);
 
