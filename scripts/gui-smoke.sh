@@ -517,7 +517,20 @@ if [ -n "$APP_PID" ]; then
   # rendered. Note that the AX tree does not have this problem -- a covered pane
   # is still in the tree and still answers -- which is why this had to be caught
   # by looking at a picture and would never have failed an assertion.
+  # "Projects" is the workspace's front door (XNAUT-435), and the reason it is
+  # in this list is that the app shipped 1.27.1 with no door at all: the only
+  # way into a project workspace was to click a file in the file system. That
+  # is not a bug a unit test can see -- every surface worked, none of them was
+  # reachable -- so the walk is where it has to be caught. The marker is the
+  # workspace's Code tab: pressing the icon must leave a workspace on screen,
+  # not merely light the icon.
+  #
+  # It goes FIRST because the icon lives in the sidebar and the entry below it
+  # toggles the sidebar away. The sidebar is up on launch unless it was hidden
+  # (tasks-mode-glue.js:692, `xnaut-sidebar-visible`), so this is the one point
+  # in the walk where the rail is reliably on screen.
   for triple in \
+    "Projects|Code|" \
     "Toggle projects sidebar|~Refresh plan usage|" \
     "Toggle project pane|~Workspace|" \
     "Command snippets|Command Snippets|" \
