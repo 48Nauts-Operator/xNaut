@@ -44,22 +44,10 @@ import { SMOKED } from '../scripts/smoked-controls.mjs';
 
 const PRESSABLE = 'button, a[href], [role=menuitem], [role=button], [role=tab], [role=checkbox], [role=radio]';
 
-// With the bridge stub, and not without it. Every name here used to be a top or
-// bottom bar button that is in index.html before a single script runs, so a bare
-// load was enough. XNAUT-435 added the first one that a module renders: the
-// sidebar rail's Projects icon, which is built by sidebar.js and therefore does
-// not exist on a page with no Tauri bridge to mount the sidebar against.
-//
-// This widens what the test sees rather than narrowing it: the stub adds
-// controls to the document and never removes any, so a name that was
-// unambiguous before is still unambiguous now, and one made ambiguous by the
-// sidebar is a collision the real app has and this test could not see.
 test.beforeEach(async ({ page }) => {
   page.on('dialog', (d) => d.dismiss().catch(() => {}));
-  await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
-  await page.goto('/index.html?stub=1');
+  await page.goto('/index.html');
   await page.waitForSelector('#btn-help');
-  await page.waitForSelector('.sbar-rail-btn');
 });
 
 test('every name the smoke test presses is unambiguous', async ({ page }) => {

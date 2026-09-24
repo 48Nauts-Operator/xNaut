@@ -501,28 +501,25 @@
     // dropdown at the top, and under it is that tab's list of things to pick.
     // A tab that showed a different project selector than its neighbour made
     // the reader check which one they were looking at every time they moved.
-    //
-    // The control moved out to project-select.js (XNAUT-435) so the workspace
-    // can mount the same one. Two consequences here:
-    //   * `hideProjectSelect` renders none at all. The workspace passes it
-    //     (workspace.js surfaceFactory) because it carries the switcher above
-    //     the tabs, and two selects for one project is two ways to switch and
-    //     one of them wrong.
-    //   * the class is `.xps-select`, not `.dlv-proj-select`. Standalone
-    //     Delivery — the More menu's entry — still draws it, in the same place
-    //     and looking the same.
     function projectSelect() {
-      if (opts.hideProjectSelect) return '';
-      return window.xnautProjectSelect.html(state.projects, state.project ? state.project.key : '');
+      const options = state.projects.map((p) => `<option value="${esc(p.key)}"${
+        state.project && p.key === state.project.key ? ' selected' : ''}>${esc(p.name || p.key)}</option>`).join('');
+      return `<div class="dlv-side-h">Project</div>
+        <div class="dlv-side-pad">
+          <select class="dlv-select dlv-proj-select" aria-label="Project">${
+            options || '<option value="">No projects</option>'}</select>
+        </div>`;
     }
 
     function bindProjectSelect() {
-      window.xnautProjectSelect.bind(sideEl, (key) => {
-        state.project = state.projects.find((p) => p.key === key) || null;
+      const select = sideEl.querySelector('.dlv-proj-select');
+      if (!select) return;
+      select.onchange = () => {
+        state.project = state.projects.find((p) => p.key === select.value) || null;
         state.run = ''; state.life = null; state.raw = false; state.focusTicket = '';
         state.releaseTag = ''; state.session = ''; state.openReleases = null; state.notes = null;
         load();
-      });
+      };
     }
 
     // The side list for whichever tab is showing. One selection each: a run,
