@@ -764,6 +764,12 @@ Regular text between code blocks is supported too!"></textarea>
   <script src="js/right-pane-git.js"></script>
   <!-- Flow Watch: no longer a tab; the view mounts inside the Agent pane -->
   <script src="js/right-pane-flowwatch.js"></script>
+  <!-- The Wiki tab (XNAUT-438): Mozilla Readability, bundled offline, then the
+       pane that uses it. Both BEFORE right-pane-workspace.js, which mounts the
+       tab, and an undefined window.xnautWiki there is a silent empty box, not an
+       error. -->
+  <script src="js/vendor/readability.bundle.js"></script>
+  <script src="js/wiki-pane.js"></script>
   <script src="js/right-pane-workspace.js"></script>
   <script src="js/observatory-panel.js"></script>
   <script src="js/build-sandbox.js"></script>
