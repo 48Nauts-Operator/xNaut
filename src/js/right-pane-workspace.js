@@ -50,9 +50,6 @@
     ['plan', 'Plan'],
     ['loops', 'Looms'],
     ['output', 'Output'],
-    // Wiki sits before History because that is where André asked for it
-    // (XNAUT-438): read the docs while the run you just started is working.
-    ['wiki', 'Wiki'],
     ['agentic', 'History'],
   ];
   // The fixed action-verb set a loom step may use (shown in the editor dropdown).
@@ -591,33 +588,6 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       </div>`;
     }
 
-    // Wiki: the docs, read beside the run (XNAUT-438). The whole tab lives in
-    // js/wiki-pane.js; this view owns only the slot it renders into and the
-    // one-time mount. The module is loaded by index.html, so a build that
-    // forgot the script tag shows the reason rather than an empty box.
-    function wikiPage() {
-      return '<div class="rpws-page" data-page="wiki" data-wiki-host></div>';
-    }
-    // Mounted the first time the tab is opened, and again only after a full
-    // re-render has emptied the host (a project change does exactly that).
-    // Switching Output ↔ Wiki must NOT remount: the DOM survives a sub-tab
-    // switch, and remounting would re-fetch the page on every visit. Nothing
-    // worth keeping lives in the instance, because the open URL is in
-    // localStorage and the pages are in the vault, so a fresh one after a
-    // re-render is right.
-    function loadWiki() {
-      const host = container && container.querySelector('[data-wiki-host]');
-      if (!host || host.querySelector('.rpwk')) return;
-      if (!window.xnautWiki || typeof window.xnautWiki.create !== 'function') {
-        host.innerHTML = '<div class="rpws-empty"><h3>The Wiki tab did not load</h3>'
-          + '<p>js/wiki-pane.js is missing from this build.</p></div>';
-        return;
-      }
-      const wiki = window.xnautWiki.create();
-      host.innerHTML = wiki.page();
-      wiki.attach(host, root);
-    }
-
     // Output — the live run log + (when done) the structured report.
     function outputPage() {
       return `<div class="rpws-page" data-page="output">
@@ -664,7 +634,6 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       else if (key === 'loops') loadLooms();
       else if (key === 'plan') loadPlan();
       else if (key === 'output') loadRunSessions();
-      else if (key === 'wiki') loadWiki();
     }
     function switchTab(key) {
       active = key;
@@ -1414,7 +1383,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       container.innerHTML = `<div class="rpws">
         <div class="rpws-head"><div class="rpws-scope">Workspace · <strong>${escapeText(basename(root))}</strong></div></div>
         <div class="rpws-nav">${SUBTABS.map(([k, label]) => `<button data-sub="${k}"${k === active ? ' class="active"' : ''}>${label}</button>`).join('')}</div>
-        <div class="rpws-body">${planPage()}${loopsPage()}${outputPage()}${wikiPage()}${agenticPage()}</div>
+        <div class="rpws-body">${planPage()}${loopsPage()}${outputPage()}${agenticPage()}</div>
       </div>`;
       applyActive();
       loadTab(active);
