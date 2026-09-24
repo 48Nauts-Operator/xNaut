@@ -115,6 +115,10 @@
 
     async function save() {
       if (!filePath) { filenameEl.textContent = 'untitled.md (open a file to set a path)'; return; }
+      // A build slice's worktree is the agent's to write while it runs
+      // (XNAUT-106). Reading it is the point; saving over it is a merge
+      // conflict nobody sees until the agent commits.
+      if (window.xnautSliceWriteBlocked && window.xnautSliceWriteBlocked(expandHome(filePath))) return;
       try {
         await invokeRust('write_file', { path: expandHome(filePath), content: ta.value });
         markDirty(false);
