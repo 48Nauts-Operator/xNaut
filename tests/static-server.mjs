@@ -134,27 +134,6 @@ const STUB_JS = `
       { name: 'README.md', path: '/tmp/smoke/README.md', is_directory: false },
       { name: 'src', path: '/tmp/smoke/src', is_directory: true },
     ],
-    // Shaped like slice_diff.rs's SliceChanges / FileDiff. The merge base, not
-    // the working tree, is what these answer — a stub that returned git status
-    // would hide the whole reason the module exists (XNAUT-106). No backticks:
-    // this whole block lives inside a template literal (see the NOTE below).
-    slice_changes: {
-      base: 'abc1234def', base_ref: 'feature/dashboard', branch: 'nautloom/engine', head: '9f81cc0',
-      files: [
-        { path: 'src/engine/chain.js', added: 84, removed: 12, status: 'modified' },
-        { path: 'src/engine/README.md', added: 21, removed: 0, status: 'new' },
-      ],
-      added: 105, removed: 12, commits: 3,
-    },
-    slice_file_diff: {
-      path: 'src/engine/chain.js', base: 'abc1234def', added: 2, removed: 1, truncated: false,
-      lines: [
-        { kind: 'hunk', n: 0, text: '@@ -14,3 +14,4 @@' },
-        { kind: 'ctx', n: 14, text: 'export function chain(steps) {' },
-        { kind: 'del', n: 0, text: '  return steps[0];' },
-        { kind: 'add', n: 15, text: '  return steps.reduce(run, null);' },
-      ],
-    },
     create_terminal_session: { session_id:'smoke-terminal' },
     agent_profile_launch: { session_id:'smoke-agent', agent_id:'builder', injection_mode:'argv', conversation_id:null },
     agent_project_prepare: '/tmp/new-honey',
