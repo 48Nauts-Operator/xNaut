@@ -124,7 +124,9 @@ test('the project dropdown filters the runs list', async ({ page }) => {
   await expect(page.locator('.dlv-run')).toHaveCount(4);
   await expect(page.locator('[data-run="v-bucky"]')).toHaveCount(0);
 
-  await page.locator('.dlv-proj-select').selectOption('BUCKY');
+  // `.xps-select` since XNAUT-435: the control moved to project-select.js so
+  // the workspace could mount the same one. Standalone Delivery still draws it.
+  await page.locator('.dlv-side .xps-select').selectOption('BUCKY');
 
   await expect(page.locator('[data-run="v-bucky"]')).toHaveCount(1);
   await expect(page.locator('[data-run="v-green"]')).toHaveCount(0);

@@ -39,6 +39,7 @@
     nfdesign: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2.5" y="3" width="11" height="8" rx="1.2"/><path d="M5 13.5h6M8 11v2.5"/><circle cx="5.5" cy="6" r="1"/><path d="M7.5 9l2-2.5 2.5 3"/></svg>',
     newproject: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><line x1="8" y1="6.5" x2="8" y2="10.5"/><line x1="6" y1="8.5" x2="10" y2="8.5"/></svg>',
     decisions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><path d="M8 2v4"/><path d="M8 6L4 9.5v4"/><path d="M8 6l4 3.5v4"/><circle cx="8" cy="2.2" r="1.2"/></svg>',
+    buildfiles: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><path d="M4 1.8h5l3 3v9.4H4z"/><path d="M6 8.2h4"/><path d="M8 6.2v4"/><path d="M6 12h4"/></svg>',
     agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="5" r="2.4"/><path d="M3.5 13.5c0-2.4 2-3.9 4.5-3.9s4.5 1.5 4.5 3.9"/></svg>',
   };
   // The Librarian is an agent now (@librarian in Agent Space), with the vault
@@ -52,6 +53,12 @@
     { key: 'files', title: 'Files' },
     { key: 'search', title: 'Search' },
     { key: 'git', title: 'Git' },
+    // The merge-base diff for the worktree the pane is rooted at. The view
+    // (right-pane-buildfiles.js) has existed since the build stage was written
+    // and was never reachable: it registered a key that was not in this list,
+    // so it got no slot and no tab, and mountActiveView returned early without
+    // saying anything. XNAUT-106 is what it was written for.
+    { key: 'buildfiles', title: 'Slice diff' },
     { key: 'tasks', title: 'Tasks' },
     // Global, not a Build-run sub-tab: the ask was a brief readable during any
     // kind of work, and the log is keyed by project rather than by build.
@@ -80,6 +87,18 @@
 .rpane-bar-separator { flex:0 0 1px; width:1px; height:18px; margin:0 4px; background:var(--border); }
 .rpane-title { margin-left:auto; font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45%; }
 .rpane-content { flex:1 1 0%; min-height:0; position:relative; display:flex; flex-direction:column; }
+/* Provenance band: which worktree every view below is reading. Without it a
+   file tree during a build is worse than none — with three slices open you
+   would read one slice's code believing it was another's (XNAUT-106). */
+.rpane-origin { display:none; flex:0 0 auto; gap:3px; flex-direction:column; padding:6px 10px; border-bottom:1px solid var(--border); background:var(--bg-tertiary, #16181d); }
+.rpane-origin[data-origin] { display:flex; }
+.rpane-origin-line { display:flex; align-items:baseline; gap:7px; min-width:0; }
+.rpane-origin-badge { flex:0 0 auto; font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent, #4f8cff); }
+.rpane-origin-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--text-primary, #e8eaf0); }
+.rpane-origin-path { font-family:var(--font-mono, monospace); font-size:10px; color:var(--text-secondary, #8a8f98); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+.rpane-origin-ro { flex:0 0 auto; font-size:9.5px; font-weight:700; letter-spacing:.03em; color:#f5b840; }
+.rpane-origin[data-live="1"] { background:rgba(245,184,64,.10); border-bottom-color:rgba(245,184,64,.45); }
+.rpane-origin[data-live="1"] .rpane-origin-badge { color:#f5b840; }
 .rpane-view { flex:1 1 0%; min-height:0; overflow-y:auto; display:none; flex-direction:column; }
 .rpane-view.rpane-view-active { display:flex; }
 .rpane-empty { padding:16px 12px; font-size:12px; color:var(--text-secondary); text-align:center; }
@@ -591,10 +610,12 @@
         <span class="rpane-bar-separator"></span>
         <span class="rpane-title" title=""></span>
       </div>
+      <div class="rpane-origin" role="status"></div>
       <div class="rpane-content"></div>
     `;
     const content = hostElement.querySelector('.rpane-content');
     const titleEl = hostElement.querySelector('.rpane-title');
+    const originEl = hostElement.querySelector('.rpane-origin');
 
     const viewSlots = new Map();
     for (const v of VIEW_ORDER) {
@@ -619,7 +640,7 @@
     // the worktree manager claim no folder was open (XNAUT-259).
     const inheritedRoot = (typeof window.xnautActiveProjectPath === 'function'
       && window.xnautActiveProjectPath()) || null;
-    mountedState = { host: hostElement, root: inheritedRoot, activeKey: 'workspace', viewSlots, titleEl };
+    mountedState = { host: hostElement, root: inheritedRoot, activeKey: 'workspace', viewSlots, titleEl, originEl, origin: null };
 
     // Full-screen (center-screen) toggle. The visible control lives in the chat
     // header (.chatp-maximize, chat-panel.js) right next to the close ✕ and calls
@@ -743,8 +764,38 @@
       setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
     }
 
-    function setRoot(path) {
+    // Draw the provenance band. `origin` is null for an ordinary project root —
+    // the band disappears, which is the honest state: nothing to disambiguate.
+    function paintOrigin() {
+      const o = mountedState.origin;
+      if (!o) {
+        originEl.removeAttribute('data-origin');
+        originEl.removeAttribute('data-live');
+        originEl.innerHTML = '';
+        return;
+      }
+      originEl.setAttribute('data-origin', o.kind || 'slice');
+      if (o.live) originEl.setAttribute('data-live', '1');
+      else originEl.removeAttribute('data-live');
+      const label = o.label || basename(o.path) || 'worktree';
+      originEl.innerHTML = `
+        <div class="rpane-origin-line">
+          <span class="rpane-origin-badge">${escapeText(o.badge || 'slice')}</span>
+          <span class="rpane-origin-name">${escapeText(label)}</span>
+          ${o.live ? '<span class="rpane-origin-ro">READ-ONLY · agent writing</span>' : ''}
+        </div>
+        <div class="rpane-origin-path" title="${escapeText(o.path || '')}">${escapeText(o.path || '')}</div>
+      `;
+    }
+
+    // `origin` is optional and describes WHERE this root came from, so the views
+    // below can be trusted: a build slice names itself, a project switch passes
+    // nothing and clears the band. Every pre-XNAUT-106 caller passes one
+    // argument and therefore clears it, which is the behaviour it always had.
+    function setRoot(path, origin) {
       mountedState.root = path || null;
+      mountedState.origin = origin && path ? { ...origin, path } : null;
+      paintOrigin();
       const name = basename(path);
       titleEl.textContent = name;
       titleEl.title = path || '';
@@ -790,6 +841,7 @@
       showView: (key) => setActive(key),
       showLibrarianConversations,
       getRoot: () => (mountedState ? mountedState.root : null),
+      getOrigin: () => (mountedState ? mountedState.origin : null),
       destroy: destroyHost,
     };
   }
@@ -799,10 +851,17 @@
     lastController = mountRightPane(hostElement);
     return lastController;
   };
-  window.xnautRightPaneSetRoot = (path) => {
-    if (mountedState && lastController) lastController.setRoot(path);
+  window.xnautRightPaneSetRoot = (path, origin) => {
+    if (mountedState && lastController) lastController.setRoot(path, origin);
     // no-op if unmounted
   };
+  // What the pane is currently rooted at and why. Returns null when the pane is
+  // unmounted or the root is an ordinary project rather than a build slice.
+  window.xnautRightPaneOrigin = () => (
+    mountedState && lastController && typeof lastController.getOrigin === 'function'
+      ? lastController.getOrigin()
+      : null
+  );
   // Bring a registered right-pane view forward (e.g. PM → Looms).
   window.xnautRightPaneShow = (key) => {
     if (mountedState && lastController && typeof lastController.showView === 'function') { lastController.showView(key); return true; }

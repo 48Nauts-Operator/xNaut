@@ -453,6 +453,14 @@ identifier = "allow-workspace"
 description = "Allow Workspace capture + session-discovery commands"
 commands.allow = ["workspace_agentic_items", "workspace_sessions"]
 
+[[permission]]
+identifier = "allow-wiki"
+description = "Allow the Wiki tab to fetch a docs page and keep its per-project collection"
+commands.allow = [
+  "wiki_fetch", "wiki_slug", "wiki_collection_read",
+  "wiki_collection_record", "wiki_collection_pin", "wiki_collection_forget",
+]
+
 [[set]]
 identifier = "allow-all-commands"
 description = "Allow all xNAUT commands"
@@ -476,6 +484,7 @@ permissions = [
   "allow-vault",
   "allow-nautloom",
   "allow-workspace",
+  "allow-wiki",
   "allow-agent-profiles",
   "allow-loops",
   "allow-tasks-mode",

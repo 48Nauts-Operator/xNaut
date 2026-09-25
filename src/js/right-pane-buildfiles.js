@@ -51,13 +51,20 @@
     return ({ mjs: 'js', cjs: 'js', jsx: 'js', ts: 'ts', tsx: 'ts', py: 'py', rs: 'rs', yaml: 'yml', yml: 'yml', json: '{}', md: 'md', html: '<>', css: 'css' })[e] || e.slice(0, 3);
   };
 
-  function mount(container) {
+  // Set while a host is mounted, so destroy() can stop the poll. The view used
+  // to hang its cleanup on the container and the host calls `view.destroy()`
+  // with no arguments — so the 15s git poll ran forever after the pane closed.
+  // It never showed because the view was unreachable; reviving it (XNAUT-106)
+  // makes it real.
+  let live = null;
+
+  function mount(container, root) {
     styleOnce();
     container.innerHTML = '';
     const host = document.createElement('div');
     host.className = 'bf-host';
     host.innerHTML = `
-      <div class="bf-head"><span class="bf-title">Files</span><select class="bf-pick"></select></div>
+      <div class="bf-head"><span class="bf-title">Slice diff</span><select class="bf-pick"></select></div>
       <div class="bf-meta"></div>
       <div class="bf-list"></div>`;
     container.appendChild(host);
@@ -65,18 +72,29 @@
     const pick = host.querySelector('.bf-pick');
     const meta = host.querySelector('.bf-meta');
     const list = host.querySelector('.bf-list');
-    const state = { wt: '', open: new Set() };
+    const state = { wt: root || '', open: new Set() };
 
     function slices() {
       const q = (window.xnautBuild && window.xnautBuild.queue) || [];
       return q.filter((w) => w && w.wt);
     }
 
+    // The options are every build slice, plus the directory the pane is rooted
+    // at when that is not one of them — so the view is useful outside a build
+    // too (slice_changes measures any worktree against its closest fork).
+    function options() {
+      const s = slices().map((w) => ({ wt: w.wt, label: w.title || w.id || w.wt }));
+      if (state.wt && !s.some((o) => o.wt === state.wt)) {
+        s.unshift({ wt: state.wt, label: state.wt.replace(/\/+$/, '').split('/').pop() || state.wt });
+      }
+      return s;
+    }
+
     function renderPicker() {
-      const s = slices();
-      pick.innerHTML = s.map((w) => `<option value="${w.wt}">${(w.title || w.id || w.wt).slice(0, 34)}</option>`).join('')
+      const s = options();
+      pick.innerHTML = s.map((o) => `<option value="${o.wt}">${o.label.slice(0, 34)}</option>`).join('')
         || '<option value="">no slices</option>';
-      if (!state.wt || !s.some((w) => w.wt === state.wt)) state.wt = (s[0] && s[0].wt) || '';
+      if (!state.wt || !s.some((o) => o.wt === state.wt)) state.wt = (s[0] && s[0].wt) || '';
       pick.value = state.wt;
       return s;
     }
@@ -120,8 +138,8 @@
       const s = renderPicker();
       if (!s.length || !state.wt) {
         meta.textContent = '';
-        list.innerHTML = '<div class="bf-empty">No build running. Start one and each slice’s changes appear here, '
-          + 'measured against the commit it forked from.</div>';
+        list.innerHTML = '<div class="bf-empty">Nothing rooted here yet. Open a project or select a build slice, '
+          + 'and its changes appear here, measured against the commit it forked from.</div>';
         return;
       }
       let ch = null;
@@ -162,13 +180,24 @@
     // Slow on purpose: this shells out to git several times, and a slice's diff
     // does not change fast enough to justify paying for it every second.
     const timer = setInterval(refresh, 15000);
-    container.__bfCleanup = () => { clearInterval(timer); window.removeEventListener('xnaut-build-update', onSwarm); };
+    live = {
+      setRoot(next) {
+        const wt = next || '';
+        if (wt === state.wt) return;
+        state.wt = wt;
+        state.open.clear();
+        refresh();
+      },
+      cleanup() { clearInterval(timer); window.removeEventListener('xnaut-build-update', onSwarm); },
+    };
   }
 
   const view = {
     mount,
-    setRoot() {},
-    destroy(container) { if (container && container.__bfCleanup) container.__bfCleanup(); },
+    // Follow the pane root: selecting a build slice roots every view at that
+    // slice's worktree, and this one answers with what the slice has changed.
+    setRoot(root) { if (live) live.setRoot(root); },
+    destroy() { if (live) { live.cleanup(); live = null; } },
   };
   // Also exposed so the Build run pane can host it as a sub-tab: these are
   // only meaningful inside a build, so they do not deserve a global icon.

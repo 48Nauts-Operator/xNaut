@@ -18,7 +18,11 @@
 //        project dropdown, no project rail, no section nav (XNAUT-342). This
 //        module used to hide all three with CSS, which is a disguise rather
 //        than a fold, and the Work tab lost its New ticket button to it.
-//   Delivery   window.xnautCreateDeliveryPanel(label, host, { project })
+//   Delivery   window.xnautCreateDeliveryPanel(label, host, { project, hideProjectSelect:true })
+//        It drew its own project dropdown at the top of its left column. The
+//        workspace now carries that control for every tab (XNAUT-435), so
+//        Delivery's is switched off here: two selects for one project is two
+//        ways to switch, and whichever one you did not use is then wrong.
 //   Vault      window.xnautCreateVaultPane(label, host, { vault:'work', scopePrefix, projectKey, hideChat:true })
 //   Memory     window.xnautCreateMemoryPanel(label, host, { project })
 // Nothing falls back to opening its own tab; every tab renders in this body.
@@ -262,6 +266,16 @@
         font-size:12px; padding:8px 12px; cursor:pointer; border-bottom:2px solid transparent; }
       .wsp-tabs button:hover { color:var(--text-primary,#e0e0e0); }
       .wsp-tabs button.active { color:var(--text-primary,#e0e0e0); border-bottom-color:var(--text-primary,#e0e0e0); }
+      /* The project switcher (XNAUT-435). It sits between the tab strip and the
+         body rather than inside the Code tab, because it has to be on EVERY
+         tab: the Delivery tab's own select is gone and the sidebar tree can be
+         replaced by the Sessions list, so on most tabs this is the only way to
+         change project. Constrained to the left column's width so it reads as
+         the head of that column — above the file tree on Code, above whatever
+         list the hosted surface puts there on the others. */
+      .wsp-projbar { display:flex; align-items:flex-end; flex:0 0 auto; padding-top:6px;
+        border-bottom:1px solid var(--border,#2a2a2f); }
+      .wsp-projbar .xps { width:240px; }
       .wsp-body { position:relative; display:flex; flex:1 1 auto; min-height:0; min-width:0; overflow:hidden; }
       .wsp-surface { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
       /* A configuration surface from the three-dot menu, over the body rather
@@ -393,6 +407,7 @@
         <button class="wsp-dots" title="More about this project" aria-label="More about this project">&#8943;</button>
       </header>
       <nav class="wsp-tabs" role="tablist"></nav>
+      <div class="wsp-projbar"></div>
       <div class="wsp-body">
         <div class="wsp-code">
           <div class="wsp-tree"></div>
@@ -421,6 +436,7 @@
     const sheetBodyEl = $('.wsp-sheet-body');
     const ftabsEl = $('.wsp-ftabs');
     const viewEl = $('.wsp-view');
+    const projbarEl = $('.wsp-projbar');
 
     const state = {
       projectKey: '',
@@ -953,7 +969,12 @@
     function surfaceFactory(name, host) {
       if (name === 'delivery') {
         if (typeof window.xnautCreateDeliveryPanel !== 'function') return null;
-        return window.xnautCreateDeliveryPanel(`${label}-delivery`, host, { project: state.projectKey });
+        // No select of its own: the switcher above the tabs is the workspace's
+        // one project control, and Delivery's was the second (XNAUT-435).
+        return window.xnautCreateDeliveryPanel(`${label}-delivery`, host, {
+          project: state.projectKey,
+          hideProjectSelect: true,
+        });
       }
       if (name === 'memory') {
         if (typeof window.xnautCreateMemoryPanel !== 'function') return null;
@@ -1060,6 +1081,66 @@
       $('.wsp-root').textContent = dir ? dir + suffix : 'no source path';
       $('.wsp-root').title = dir || '';
     }
+
+    // ── The project switcher ──────────────────────────────────────────────
+    // The front door (XNAUT-435). Until this, the sidebar's project tree was
+    // the only thing that could change which project the workspace is showing,
+    // and the Sessions list replaces that tree — so on a machine with the
+    // Sessions list up there was no way to switch at all, and no way in except
+    // by clicking a file in the file system.
+    //
+    // It is the same control the Delivery tab used to draw for its own list
+    // (project-select.js, lifted out of delivery-panel.js), in the same place:
+    // the top of the left column. Delivery no longer draws its own, so there is
+    // one select and not two.
+    function paintProjectSelect() {
+      // Assigned in project-select.js:78, which index.html loads before this
+      // file. Grepped and checked rather than assumed: an undefined global here
+      // would throw inside setProject and leave the workspace half-painted.
+      if (!window.xnautProjectSelect || typeof window.xnautProjectSelect.html !== 'function') {
+        projbarEl.innerHTML = '';
+        console.error('[workspace] xnautProjectSelect is not loaded; the project switcher cannot render');
+        return;
+      }
+      projbarEl.innerHTML = window.xnautProjectSelect.html(state.projects, state.projectKey);
+      window.xnautProjectSelect.bind(projbarEl, (key) => {
+        if (!key || key === state.projectKey) return;
+        switchProject(key);
+      });
+    }
+
+    // Switching is done IN PLACE, on this pane, rather than by calling
+    // xnautOpenWorkspace: the workspace is a singleton tab, so re-opening it
+    // would route back to this same pane through updateOptions and do the same
+    // work one indirection later. The tab is kept — a person reading Work stays
+    // on Work — and the open files are not, because they are paths into the
+    // previous project's checkout.
+    async function switchProject(key) {
+      const tab = state.tab;
+      await setProject({ project: key });
+      show(tab);
+    }
+
+    // Cmd+P (Ctrl+P elsewhere) reaches the switcher from anywhere in the
+    // workspace, which is what André asked for before the control moved to the
+    // left column. It FOCUSES the select rather than opening it: a native
+    // <select> has no programmatic open, and faking one with a custom listbox
+    // would be a second control that behaves almost like the first. From the
+    // focus, the arrow keys and typing pick a project the way they do in any
+    // other select on the page.
+    function onWorkspaceKey(event) {
+      if (event.key !== 'p' && event.key !== 'P') return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      // Only the workspace that is actually on screen answers: panes.get keeps
+      // torn-down panes out, but a workspace behind another tab is still in the
+      // document and must not steal the key.
+      if (!pane.isConnected || !pane.getClientRects().length) return;
+      const select = projbarEl.querySelector('.xps-select');
+      if (!select) return;
+      event.preventDefault();
+      select.focus();
+    }
+    document.addEventListener('keydown', onWorkspaceKey);
 
     // ── The header's live numbers ─────────────────────────────────────────
     // The Overview tab is gone (XNAUT-342): a dashboard of links to the other
@@ -1195,12 +1276,15 @@
       }
       if (typeof next.worktree === 'string') state.worktree = next.worktree;
 
+      // Always asked for, even when the caller handed us the project object:
+      // the switcher below the tabs lists every project, so the list is not an
+      // optional lookup any more, it is what that control is made of.
+      try {
+        state.projects = (await invoke('pm_project_list')) || [];
+      } catch (_error) {
+        state.projects = [];
+      }
       if (state.projectKey && !state.project) {
-        try {
-          state.projects = (await invoke('pm_project_list')) || [];
-        } catch (_error) {
-          state.projects = [];
-        }
         const key = state.projectKey.toUpperCase();
         state.project = state.projects.find((item) => String(item.key || '').toUpperCase() === key)
           || state.projects.find((item) => String(item.name || '') === state.projectKey)
@@ -1208,6 +1292,7 @@
         if (state.project && state.project.key) state.projectKey = state.project.key;
       }
       paintHead();
+      paintProjectSelect();
       // A different project is a different sheet: what was open in it belonged
       // to the project that is no longer selected.
       closeSheet();
@@ -1254,6 +1339,7 @@
         show(next.tab || state.tab);
       },
       destroy() {
+        document.removeEventListener('keydown', onWorkspaceKey);
         themeObserver.disconnect();
         disposeCodeEditor();
         disposeSurface();
