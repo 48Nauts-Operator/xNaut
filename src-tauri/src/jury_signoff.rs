@@ -484,7 +484,6 @@ pub fn start(
         .iter()
         .find(|j| {
             j.gate == Gate::Signoff
-                && j.source_sha == record.commit_sha
                 && j.state != "superseded"
                 // A job parked on the owner is reusable only for the SAME
                 // record and scope. A different record (XNAUT-305: a fresh
@@ -495,9 +494,15 @@ pub fn start(
                 // minutes, and superseding the parked job each time wrote a
                 // receipt whose revision bump made the replacement refuse
                 // itself, forever (XNAUT-431, 4,905 receipts on 2026-09-24).
-                && (j.state != "owner_required"
-                    || (j.record_id.as_deref() == Some(record.id.as_str())
-                        && j.ticket_scope_hash == scope_now))
+                // Keyed on the record, not the commit: `new_job` pins the
+                // tree's HEAD as source_sha, so a record verified on an
+                // earlier commit never matched the job it had opened.
+                && if j.state == "owner_required" {
+                    j.record_id.as_deref() == Some(record.id.as_str())
+                        && j.ticket_scope_hash == scope_now
+                } else {
+                    j.source_sha == record.commit_sha
+                }
         })
     {
         return Ok(j.clone());
