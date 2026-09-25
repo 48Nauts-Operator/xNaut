@@ -96,6 +96,14 @@ const STUB_JS = `
       branch: 'main', last_commit: '', dirty: false, ahead: 0, behind: 0 },
     tasks_list: [],
     zellij_sessions_info: [],
+    // XNAUT-86: where a session may be opened, and why not. The default is this
+    // machine's real answer — local only, nothing else configured — because a
+    // stub that claimed a ready sandbox would enable a button no test drives.
+    launch_env_options: [
+      { env: 'local', ready: true, detail: 'zellij on this machine; always available' },
+      { env: 'exe-dev', ready: false, detail: 'no "exe-dev" entry in settings.sandboxes' },
+      { env: 'gitvm', ready: false, detail: 'no "gitvm" entry in settings.sandboxes; a CLI key alone does not opt the fleet in' },
+    ],
     agent_sessions_list: [],
     exe_machines: [],
     agent_profile_list: [NAUTBOT, AGENT],

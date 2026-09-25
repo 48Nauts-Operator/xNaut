@@ -479,6 +479,8 @@ async fn main() {
             zellij::zellij_prune_exited,
             zellij::zellij_sessions_info,
             zellij::zellij_open_command,
+            // Where a session can be opened, and why not (XNAUT-86).
+            sandbox::launch_env::launch_env_options,
             // Tasks Mode v1.6 — text search (rg + git-grep fallback)
             search::search_text,
             // Tasks Mode v1.6 — git pane

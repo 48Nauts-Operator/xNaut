@@ -701,6 +701,10 @@ Regular text between code blocks is supported too!"></textarea>
   <!-- Before app.js: it replaces the native alert/confirm/prompt, which are no-ops here. -->
   <script src="js/dialogs.js"></script>
   <script src="js/hidden-projects.js"></script>
+  <!-- The one <agent>-<project> session-name rule, before every surface that
+       creates or matches one: the sidebar, the Observatory and the project
+       page (XNAUT-86). No dependencies of its own. -->
+  <script src="js/session-naming.js"></script>
   <!-- Before app.js, markdown-pane.js and tasks-mode-glue.js: all three ask it
        whether a path belongs to a slice an agent is writing (XNAUT-106). -->
   <script src="js/slice-scope.js"></script>
