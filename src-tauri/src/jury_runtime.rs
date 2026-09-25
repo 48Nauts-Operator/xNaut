@@ -215,6 +215,7 @@ pub fn new_job(
         signoff: None,
         plan_file: None,
         plan_hash: None,
+        record_id: None,
     })
 }
 
@@ -633,7 +634,10 @@ pub fn run_job(
             reason = Some("plan changed during review".into());
         }
     }
-    if current.revision != job.ticket_revision {
+    // Scope, not revision. Every receipt this job writes about itself bumps
+    // the revision, so a job compared on revision refused itself on its own
+    // bookkeeping (XNAUT-431). `scope_hash` is what an approval is for.
+    if scope_hash(&current) != job.ticket_scope_hash {
         reason = Some("ticket changed during review; owner must review the new scope".into());
     }
     if git(Path::new(&job.worktree), &["rev-parse", "HEAD"])? != job.source_sha {

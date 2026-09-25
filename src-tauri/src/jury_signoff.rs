@@ -477,6 +477,7 @@ pub fn start(
         Ok(p) => (p, None),
         Err(e) => (Policy::default(), Some(e)),
     };
+    let scope_now = crate::jury_runtime::scope_hash(&t);
     if let Some(j) = t
         .approval
         .jury_reviews
@@ -484,14 +485,19 @@ pub fn start(
         .find(|j| {
             j.gate == Gate::Signoff
                 && j.source_sha == record.commit_sha
-                // A job parked on the owner is not reusable: its inputs may
-                // have moved on (policy, ticket revision), in which case its
-                // owner decision is refused as stale, and reusing it here
-                // meant no fresh review could ever start. XNAUT-305 sat in
-                // that deadlock for an hour on 2026-09-07 after a green verify
-                // with the totals it had been escalated for lacking.
-                && j.state != "owner_required"
                 && j.state != "superseded"
+                // A job parked on the owner is reusable only for the SAME
+                // record and scope. A different record (XNAUT-305: a fresh
+                // green verify carrying the totals the first one lacked) or a
+                // changed scope must start a fresh review, or no review could
+                // ever follow an escalation. The same record on the next tick
+                // must NOT: the sweep offers every green record every three
+                // minutes, and superseding the parked job each time wrote a
+                // receipt whose revision bump made the replacement refuse
+                // itself, forever (XNAUT-431, 4,905 receipts on 2026-09-24).
+                && (j.state != "owner_required"
+                    || (j.record_id.as_deref() == Some(record.id.as_str())
+                        && j.ticket_scope_hash == scope_now))
         })
     {
         return Ok(j.clone());
@@ -583,8 +589,12 @@ pub fn start(
         crate::project_management::attach_jury_in(repo, &stale, None)?;
         crate::inbox::jury_archive_asks(None, &stale.id, &stale.ticket);
     }
+    // Re-read: retiring the stale escalations above wrote receipts, and a job
+    // born with the revision from before them starts out stale.
+    let t = ticket(repo, &record.ticket_id)?;
     let mut job =
         crate::jury_runtime::new_job(Gate::Signoff, &t, tree, input, policy, author_run, None)?;
+    job.record_id = Some(record.id.clone());
     // The record carries the soft misses too, or the tier is invisible and a
     // reader cannot tell an advisory observation from a refusal.
     job.checks = checks;
@@ -1805,6 +1815,37 @@ pub(crate) mod tests {
         let fresh = start(None, &control, &registry, &store, &record).unwrap();
         assert_eq!(fresh.state, "owner_required");
         assert!(store.join(format!("{}.json", fresh.id)).exists());
+    }
+
+    #[test]
+    fn a_parked_signoff_is_reused_for_the_same_record_and_reopened_by_a_new_one() {
+        // XNAUT-431. The sweep offers the same green record every tick.
+        let (_root, control, registry, store, _t, mut job) = fixture_with_env("parked", false);
+        job.state = "owner_required".into();
+        job.decision = Some(Decision::Owner);
+        job.reason = "integration merge conflict".into();
+        job.record_id = Some("v".into());
+        write_job(&store, &job).unwrap();
+        crate::project_management::attach_jury_in(&control, &job, None).unwrap();
+        let record = |id: &str| -> crate::sandbox_verify::VerifyRecord {
+            serde_json::from_value(serde_json::json!({
+                "id":id, "run_id":"r", "ticket_id":job.ticket, "project":job.project,
+                "repo_path":job.worktree, "commit_sha":job.source_sha, "provider_kind":"local",
+                "sandbox_id":"", "public_url":"", "status":"passed", "steps":[],
+                "log_dir":"", "video_path":null, "created_at":"today", "updated_at":"today"
+            })).unwrap()
+        };
+        let same = start(None, &control, &registry, &store, &record("v")).unwrap();
+        assert_eq!(same.id, job.id, "the parked job is the answer, not a replacement");
+        assert_eq!(same.state, "owner_required");
+        let jobs = ticket(&control, &job.ticket).unwrap().approval.jury_reviews;
+        assert_eq!(jobs.len(), 1, "no receipt, no supersede: {:?}", jobs.iter().map(|j| &j.state).collect::<Vec<_>>());
+        // A different record is a new question and retires the parked one.
+        let fresh = start(None, &control, &registry, &store, &record("v2")).unwrap();
+        assert_ne!(fresh.id, job.id);
+        assert_eq!(fresh.record_id.as_deref(), Some("v2"));
+        let jobs = ticket(&control, &job.ticket).unwrap().approval.jury_reviews;
+        assert_eq!(jobs.iter().find(|j| j.id == job.id).unwrap().state, "superseded");
     }
 
     #[test]

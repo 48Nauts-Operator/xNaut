@@ -370,6 +370,14 @@ pub struct Job {
     pub plan_file: Option<String>,
     #[serde(default)]
     pub plan_hash: Option<String>,
+    /// The sandbox verify record this sign-off was opened for. A job parked
+    /// on the owner is reopened only by a DIFFERENT record (XNAUT-431): the
+    /// sweep offers every green record on every tick, and without this key
+    /// each tick superseded the parked job, wrote a receipt, and the receipt's
+    /// revision bump made the replacement refuse itself. 4,905 receipts on
+    /// 2026-09-24 alone.
+    #[serde(default)]
+    pub record_id: Option<String>,
 }
 pub fn hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
