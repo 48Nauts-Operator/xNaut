@@ -8243,6 +8243,9 @@ window.saveEditorFile = async function() {
   if (!editorState.path) return;
   const textarea = document.getElementById('editor-textarea');
   if (!textarea) return;
+  // Same rule as the markdown pane: while a slice is building, its worktree
+  // belongs to the agent (XNAUT-106).
+  if (window.xnautSliceWriteBlocked && window.xnautSliceWriteBlocked(editorState.path)) return;
   try {
     await invoke('write_file', { path: editorState.path, content: textarea.value });
     editorState.originalContent = textarea.value;
