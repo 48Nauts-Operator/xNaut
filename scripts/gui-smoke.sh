@@ -517,6 +517,11 @@ if [ -n "$APP_PID" ]; then
   # rendered. Note that the AX tree does not have this problem -- a covered pane
   # is still in the tree and still answers -- which is why this had to be caught
   # by looking at a picture and would never have failed an assertion.
+  # XNAUT-342: "Open Projects (tasks & plan)" opened the standalone Projects
+  # panel, which is gone. The same button opens the project WORKSPACE now, and
+  # its marker is that workspace's three-dot button ("More about this
+  # project") -- nothing else on screen carries that label, while "Workspace"
+  # alone would also match the right pane the second step toggles.
   for triple in \
     "Toggle projects sidebar|~Refresh plan usage|" \
     "Toggle project pane|~Workspace|" \
@@ -524,7 +529,7 @@ if [ -n "$APP_PID" ]; then
     "Open new browser tab|Browser|" \
     "Open new markdown tab|Markdown|" \
     "Open new diff tab|Diff|" \
-    "Open Projects (tasks & plan)|Project filter|" \
+    "Open project workspace|More about this project|" \
     "Open worktree manager|Close worktree manager|Close worktree manager" \
     "More actions|Knowledge Graph|" \
     "Help and keyboard shortcuts|Close help|Help and keyboard shortcuts"
@@ -719,7 +724,7 @@ if [ -n "$APP_PID" ]; then
   # The two overlays used to be closed here. They are closed in the surfaces loop
   # now, immediately after their own shot, because leaving them up until here put
   # them in front of every screenshot taken after them.
-  for t in Browser Markdown Diff Projects; do close_tab "$t"; done
+  for t in Browser Markdown Diff Workspace; do close_tab "$t"; done
   shot cleaned
 fi
 

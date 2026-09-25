@@ -141,7 +141,10 @@
     { key: 'skills', label: 'Skills' },
     { key: 'plugins', label: 'Plugins' },
     { key: 'tasks', label: 'Tasks' },
-    { key: 'pm', label: 'Projects' },
+    // No 'pm' entry: the standalone Projects panel is gone (XNAUT-342). Its
+    // nine surfaces are tabs of a project's workspace, and the tree below is
+    // how a project is chosen — a menu entry here would be a second selector
+    // for a question this list has already answered.
     { key: 'delivery', label: 'Delivery' },
     // What xNAUT remembers (XNAUT-333). It opens its own panel rather than a
     // nav key, so the Delivery panel's Memory tab and this entry are one path.
@@ -787,8 +790,10 @@
     });
     head.querySelector('[data-head-gear]').addEventListener('click', (event) => {
       event.stopPropagation();
+      // "Manage projects" opened the standalone Projects panel and is gone with
+      // it (XNAUT-342). What is left here is about THIS list — what it shows and
+      // how fresh it is. Managing one project happens in its workspace.
       openMenu(event.clientX, event.clientY, [
-        { label: 'Manage projects', action: () => navigate('pm') },
         {
           label: state.onlyPinned ? 'Show all projects' : 'Show only pinned',
           action: () => { setOnlyPinned(!state.onlyPinned); },

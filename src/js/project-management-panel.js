@@ -469,10 +469,8 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 /* display:flex beats a bare [hidden], and the embedded panel hides its toolbar
    on every section that has no use for one. */
 .pmw-head[hidden] { display:none !important; }
-.pmw-title { font-size:14px; font-weight:650; margin-right:4px; }
-.pmw-project-select,.pmw-filter,.pmw-input,.pmw-select,.pmw-textarea { background:var(--input-bg,rgba(255,255,255,.05)); border:1px solid var(--border-color,#3a3d45); border-radius:6px; color:inherit; font:inherit; outline:none; }
-.pmw-project-select,.pmw-filter,.pmw-input,.pmw-select { min-height:30px; padding:4px 8px; }
-.pmw-project-select { width:190px; }
+.pmw-filter,.pmw-input,.pmw-select,.pmw-textarea { background:var(--input-bg,rgba(255,255,255,.05)); border:1px solid var(--border-color,#3a3d45); border-radius:6px; color:inherit; font:inherit; outline:none; }
+.pmw-filter,.pmw-input,.pmw-select { min-height:30px; padding:4px 8px; }
 /* The filter and its clear button are one control: the wrapper carries the
    flex sizing the input used to, so the toolbar lays out exactly as before,
    and the button is absolutely placed inside the input's right padding
@@ -504,30 +502,8 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-segment button.active { color:var(--text-primary,#fff); background:var(--active-bg,rgba(79,140,255,.17)); }
 .pmw-sync-state { max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-secondary,#8f949e); font-size:11px; }
 .pmw-main { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
-.pmw-rail { flex:0 0 210px; min-width:170px; border-right:1px solid var(--border-color,#34363d); display:flex; flex-direction:column; overflow:hidden; }
-.pmw-rail-head { display:flex; align-items:center; min-height:40px; padding:6px 9px 4px 12px; color:var(--text-secondary,#9297a1); font-size:11px; font-weight:650; text-transform:uppercase; }
-.pmw-projects { flex:1 1 auto; min-height:0; overflow:auto; padding:3px 6px 10px; }
-.pmw-project { display:flex; align-items:center; gap:8px; width:100%; padding:7px 8px; border:0; border-radius:6px; background:transparent; color:var(--text-secondary,#a0a5af); font:inherit; text-align:left; cursor:pointer; }
-.pmw-project:hover { background:var(--hover-bg,rgba(255,255,255,.05)); color:var(--text-primary,#fff); }
-.pmw-hidden-toggle { font-size:11px; color:var(--text-muted,#737985); justify-content:flex-start; }
-.pmw-project.active { background:var(--active-bg,rgba(79,140,255,.15)); color:var(--text-primary,#fff); }
-.pmw-project-key { width:46px; flex:0 0 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted,#737985); font-size:10px; font-weight:700; }
-.pmw-project-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pmw-count { flex:0 0 auto; color:var(--text-muted,#737985); font-size:11px; }
-.pmw-focus { flex:0 0 auto; padding:2px 8px; border:1px solid var(--border-color,#3a3d45); border-radius:5px; background:transparent; color:var(--text-secondary,#9297a1); font:inherit; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; cursor:pointer; }
-.pmw-focus:hover { color:var(--text-primary,#fff); border-color:var(--xnaut-yellow,#f5b840); }
-.pmw-focus.active { background:var(--xnaut-yellow,#f5b840); border-color:var(--xnaut-yellow,#f5b840); color:#1a1400; }
-.pmw-projects.focused .pmw-project:not(.active) { display:none; }
-.pmw-rail-toggle{width:22px;height:22px;border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:14px;line-height:1;flex:0 0 auto}
-.pmw-rail-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:var(--text-primary,#fff)}
-.pmw-project-mono{display:none}
-.pmw-rail-collapsed{flex-basis:58px!important;min-width:58px!important}
-.pmw-rail-collapsed .pmw-rail-title,.pmw-rail-collapsed .pmw-project-key,.pmw-rail-collapsed .pmw-project-name,.pmw-rail-collapsed .pmw-count,.pmw-rail-collapsed .pmw-focus{display:none}
-.pmw-rail-collapsed .pmw-rail-head{justify-content:center;padding:6px 0}
-.pmw-rail-collapsed .pmw-projects{padding:6px 0}
-.pmw-rail-collapsed .pmw-project{justify-content:center;padding:5px 0}
-.pmw-rail-collapsed .pmw-project-mono{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;background:var(--bg-tertiary,#22252c);color:var(--text-secondary,#9a9faa);font:600 12px/1 "SF Mono",Menlo,monospace;text-transform:uppercase}
-.pmw-rail-collapsed .pmw-project.active .pmw-project-mono{background:rgba(245,184,64,.16);color:#f5b840;box-shadow:inset 0 0 0 1.5px rgba(245,184,64,.5)}
+/* No project rail, project rows or Focus button: the sidebar's tree is the
+   one project list, and this surface is always about one project (XNAUT-342). */
 .pmw-nf-toggle{width:20px;height:20px;border:0;border-radius:5px;background:transparent;color:var(--text-muted,#7f8590);cursor:pointer;font-size:13px;flex:0 0 auto}
 .pmw-nf-toggle:hover{background:var(--hover-bg,rgba(255,255,255,.06));color:#fff}
 .pmw-nf-reset{border:1px solid var(--border-color,#3a3d45);border-radius:5px;background:transparent;color:var(--text-secondary,#9a9faa);cursor:pointer;font-size:10px;letter-spacing:.02em;padding:2px 7px;flex:0 0 auto}
@@ -543,11 +519,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-work { flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; display:flex; }
 .pmw-content { flex:1 1 auto; min-width:320px; min-height:0; overflow:auto; }
 .pmw-project-shell { container-type:inline-size; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; color:var(--text-primary,#e4e6eb); }
-.pmw-project-nav { position:sticky; top:0; z-index:4; display:flex; align-items:center; min-height:44px; padding:0 20px; gap:22px; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); }
-.pmw-project-nav button { align-self:stretch; padding:0; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:12px; cursor:pointer; }
-.pmw-project-nav button.active { border-bottom-color:var(--accent,#4f8cff); color:var(--text-primary,#fff); font-weight:650; }
 .pmw-project-page { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; padding:22px; gap:18px; }
-.pmw-project-docs { display:flex; flex:1 1 auto; min-width:0; min-height:0; overflow:hidden; }
 .pmw-project-hero { display:flex; align-items:flex-start; gap:18px; }
 .pmw-project-heading { flex:1 1 auto; min-width:0; }
 .pmw-project-heading h2 { margin:0; color:var(--text-primary,#fff); font-size:22px; line-height:1.25; }
@@ -558,7 +530,6 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-flow-phase:last-child { border-right:0; }.pmw-flow-phase.current { background:rgba(74,222,128,.055); }
 .pmw-flow-phase-label { color:var(--text-muted,#7f8590); font-size:10px; font-weight:700; text-transform:uppercase; }.pmw-flow-phase.current .pmw-flow-phase-label { color:#86c7a5; }
 .pmw-flow-phase-stages { margin-top:5px; overflow:hidden; color:var(--text-secondary,#a0a5af); font-size:12px; line-height:1.35; text-overflow:ellipsis; }.pmw-flow-phase.current .pmw-flow-phase-stages { color:var(--text-primary,#e4e6eb); }
-.pmw-project-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,32%); gap:16px; }
 .pmw-project-page-nautflow { flex:1 1 auto; min-height:0; padding:0; gap:0; overflow:hidden; }
 .pmw-flow-stage-nav { display:flex; flex:0 0 45px; min-height:45px; padding:0 12px; overflow-x:auto; overflow-y:hidden; border-bottom:1px solid var(--border-color,#34363d); background:var(--editor-surface,#1b1d23); scrollbar-width:thin; }
 .pmw-flow-stage-nav button { flex:0 0 auto; padding:0 11px; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-secondary,#9a9faa); font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; }
@@ -658,12 +629,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-wiz-live { font-family:"SF Mono",Menlo,ui-monospace,monospace; font-size:11px; color:var(--text-secondary,#9a9faa); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pmw-wiz-badge { font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted,#7f8590); }
 .pmw-nf-mode.active { border-color:var(--accent,#4f8cff); color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.14)); }
-.pmw-overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:18px; min-height:0; }.pmw-overview-main,.pmw-overview-rail { display:flex; flex-direction:column; gap:16px; }.pmw-overview-band { padding:16px 0; border-top:1px solid var(--border-color,#34363d); }.pmw-overview-band:first-child { padding-top:0; border-top:0; }.pmw-overview-band-head { display:flex; align-items:center; gap:10px; margin-bottom:11px; }.pmw-overview-band-head h3 { margin:0; color:var(--text-primary,#fff); font-size:13px; }.pmw-overview-band-head span { margin-left:auto; color:var(--text-muted,#7f8590); font-size:10px; }.pmw-artifact-row,.pmw-contributor-row,.pmw-system-row { display:flex; align-items:center; gap:10px; min-height:36px; }.pmw-artifact-icon,.pmw-contributor-avatar { display:flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 auto; border-radius:5px; background:var(--bg-tertiary,#292c33); color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-artifact-icon svg { width:15px; height:15px; }.pmw-row-copy { min-width:0; flex:1 1 auto; }.pmw-row-title { color:var(--text-primary,#fff); font-size:12px; }.pmw-row-meta { margin-top:2px; color:var(--text-muted,#7f8590); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-system-mark { width:20px; flex:0 0 auto; color:var(--accent,#4f8cff); font-size:10px; font-weight:700; }.pmw-system-state { color:#9BC5B0; font-size:10px; }
-.pmw-active-work-wrap { overflow-x:auto; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-active-work-table { width:100%; min-width:690px; border-collapse:collapse; table-layout:fixed; }.pmw-active-work-table th { padding:8px 10px; border-bottom:1px solid var(--border-color,#34363d); color:var(--text-muted,#7f8590); font-size:9px; font-weight:700; text-align:left; text-transform:uppercase; }.pmw-active-work-table td { height:43px; padding:7px 10px; border-bottom:1px solid var(--border-color,#303239); color:var(--text-secondary,#a0a5af); font-size:11px; vertical-align:middle; }.pmw-active-work-table tbody tr:last-child td { border-bottom:0; }.pmw-active-work-table tr[data-overview-ticket] { cursor:pointer; outline:none; }.pmw-active-work-table tr[data-overview-ticket]:hover,.pmw-active-work-table tr[data-overview-ticket]:focus { background:var(--hover-bg,rgba(255,255,255,.045)); }.pmw-active-state { display:flex; align-items:center; gap:7px; color:var(--text-primary,#e4e6eb); font-weight:650; }.pmw-work-indicator { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:#737985; }.pmw-work-indicator[data-state="running"] { border:2px solid rgba(96,165,250,.28); border-top-color:#60a5fa; background:transparent; animation:pmw-work-spin .8s linear infinite; }.pmw-work-indicator[data-state="completed"] { background:#34d399; box-shadow:0 0 0 3px rgba(52,211,153,.1); }.pmw-work-indicator[data-state="blocked"],.pmw-work-indicator[data-state="failed"] { background:#f87171; box-shadow:0 0 0 3px rgba(248,113,113,.1); }.pmw-work-indicator[data-state="review"] { background:#fbbf24; }.pmw-work-indicator[data-state="ready"] { background:#a78bfa; }.pmw-active-item { min-width:0; }.pmw-active-item strong { display:block; overflow:hidden; color:var(--text-primary,#e4e6eb); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-item span { display:block; margin-top:2px; color:var(--text-muted,#7f8590); font-size:9px; }.pmw-active-activity { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.pmw-active-artifacts { color:var(--accent,#60a5fa); }.pmw-active-empty { padding:18px!important; color:var(--text-muted,#7f8590)!important; text-align:center; }.pmw-active-work-table th:nth-child(1){width:104px}.pmw-active-work-table th:nth-child(2){width:31%}.pmw-active-work-table th:nth-child(4){width:76px}.pmw-active-work-table th:nth-child(5){width:95px}.pmw-active-work-table th:nth-child(6){width:88px}@keyframes pmw-work-spin{to{transform:rotate(360deg)}}
+/* No Overview layout, band, Active-work table or work indicator: the Overview
+   tab is gone (XNAUT-342). Its work table is the Work tab, its stage band the
+   NAUT-Flow tab, its artifact band the Vault tab. */
 .pmw-settings-form { display:flex; flex-direction:column; max-width:920px; gap:18px; }.pmw-settings-section { padding:17px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); }.pmw-settings-section h3 { margin:0 0 13px; color:var(--text-primary,#fff); font-size:13px; }.pmw-settings-actions { position:sticky; bottom:0; display:flex; align-items:center; gap:8px; padding:12px 0; background:var(--editor-surface,#1b1d23); }
-.pmw-surface { padding:16px; border:1px solid var(--border-color,#34363d); border-radius:6px; background:var(--bg-secondary,#202229); color:var(--text-primary,#e4e6eb); }
-.pmw-surface h3 { margin:0 0 6px; color:var(--text-primary,#fff); font-size:15px; }.pmw-surface p { margin:0; color:var(--text-secondary,#9a9faa); line-height:1.5; }
-.pmw-metric-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:15px; }.pmw-metric label,.pmw-summary-label { display:block; margin-bottom:4px; color:var(--text-muted,#7f8590); font-size:10px; font-weight:650; text-transform:uppercase; }.pmw-metric strong { color:var(--text-primary,#fff); font-size:17px; }
 .pmw-project-empty { display:flex; flex-direction:column; align-items:flex-start; max-width:680px; padding:22px; border:1px dashed var(--border-color,#3a3d45); border-radius:6px; color:var(--text-secondary,#9a9faa); }
 .pmw-board { display:flex; align-items:stretch; gap:0; min-width:max-content; height:100%; padding:0 8px 10px; }
 .pmw-column { width:258px; min-width:258px; display:flex; flex-direction:column; border-right:1px solid var(--border-color,#303239); }
@@ -705,13 +674,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
 .pmw-doc-links { display:flex; flex-wrap:wrap; gap:5px; }.pmw-doc-links .pmw-btn { display:flex; align-items:center; gap:5px; max-width:100%; overflow:hidden; text-overflow:ellipsis; }.pmw-doc-links svg { width:13px; height:13px; flex:0 0 auto; }
 .pmw-empty { padding:28px; color:var(--text-secondary,#979ca6); }.pmw-error { color:#f87171; white-space:pre-wrap; }
 .pmw-overlay { position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(5,7,10,.68); }.pmw-overlay[hidden] { display:none; }.pmw-dialog { width:min(520px,100%); max-height:calc(100% - 30px); overflow:auto; padding:16px; border:1px solid var(--border-color,#42454e); border-radius:7px; background:var(--bg-secondary,#202229); box-shadow:0 18px 50px rgba(0,0,0,.5); }.pmw-dialog-head { display:flex; align-items:center; margin-bottom:14px; }.pmw-dialog-title { font-size:15px; font-weight:650; }.pmw-dialog-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:14px; }.pmw-toast { position:absolute; z-index:30; left:50%; bottom:16px; transform:translateX(-50%); max-width:80%; padding:7px 12px; border:1px solid var(--border-color,#444750); border-radius:6px; background:#262931; box-shadow:0 8px 25px rgba(0,0,0,.4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.pmw-toast.error { color:#f87171; }
-.pmw-create-page { display:flex; flex-direction:column; width:min(980px,100%); max-height:calc(100% - 24px); overflow:hidden; border:1px solid var(--border-color,#42454e); border-radius:7px; background:var(--editor-surface,#1b1d23); color:var(--text-primary,#e4e6eb); box-shadow:0 18px 50px rgba(0,0,0,.5); }
-.pmw-create-head { display:flex; align-items:flex-start; padding:20px 22px 16px; border-bottom:1px solid var(--border-color,#34363d); }.pmw-create-head h2 { margin:0; color:var(--text-primary,#fff); font-size:20px; }.pmw-create-head p { margin:5px 0 0; color:var(--text-secondary,#9a9faa); font-size:12px; }
-.pmw-create-body { overflow:auto; padding:20px 22px 24px; }.pmw-create-section { padding-bottom:20px; }.pmw-create-section+.pmw-create-section { padding-top:18px; border-top:1px solid var(--border-color,#34363d); }.pmw-create-section h3 { margin:0 0 12px; color:var(--text-primary,#fff); font-size:13px; }.pmw-create-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.pmw-create-grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }.pmw-help { color:var(--text-muted,#7f8590); font-size:10px; line-height:1.4; }.pmw-flow-choice { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }.pmw-flow-choice label { display:flex; gap:10px; padding:12px; border:1px solid var(--border-color,#3a3d45); border-radius:6px; cursor:pointer; }.pmw-flow-choice label:has(input:checked) { border-color:var(--accent,#4f8cff); background:var(--active-bg,rgba(79,140,255,.12)); }.pmw-flow-choice input { margin:2px 0 0; accent-color:var(--accent,#4f8cff); }.pmw-flow-choice strong { display:block; color:var(--text-primary,#fff); font-size:12px; }.pmw-flow-choice span { display:block; margin-top:3px; color:var(--text-secondary,#9a9faa); font-size:11px; line-height:1.4; }.pmw-create-actions { display:flex; align-items:center; gap:8px; padding:12px 22px; border-top:1px solid var(--border-color,#34363d); background:var(--bg-secondary,#202229); }
-@media(max-width:1000px){.pmw-overview-layout{grid-template-columns:1fr}}
-@media(max-width:900px){.pmw-rail{display:none}.pmw-detail{position:absolute;inset:0;z-index:8;min-width:0;flex-basis:auto}.pmw-work{position:relative}.pmw-sync-state{display:none}.pmw-project-grid{grid-template-columns:1fr}.pmw-create-grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:650px){.pmw-create-grid,.pmw-create-grid-3,.pmw-flow-choice{grid-template-columns:1fr}.pmw-flow-rail{flex-direction:column}.pmw-flow-phase{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-project-nav{gap:14px;overflow:auto}.pmw-create-actions .pmw-help{display:none}.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:190px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
-@container(max-width:760px){.pmw-nautflow{grid-template-columns:180px minmax(0,1fr)}.pmw-stage-ref{flex-basis:100%}.pmw-stage-document{padding:12px}.pmw-stage-head{padding:14px}.pmw-overview-layout{grid-template-columns:1fr}}
+.pmw-create-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.pmw-create-grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }.pmw-help { color:var(--text-muted,#7f8590); font-size:10px; line-height:1.4; }
+@media(max-width:900px){.pmw-detail{position:absolute;inset:0;z-index:8;min-width:0;flex-basis:auto}.pmw-work{position:relative}.pmw-sync-state{display:none}.pmw-create-grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.pmw-create-grid,.pmw-create-grid-3{grid-template-columns:1fr}.pmw-flow-rail{flex-direction:column}.pmw-flow-phase{border-right:0;border-bottom:1px solid var(--border-color,#34363d)}.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:190px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
+@container(max-width:760px){.pmw-nautflow{grid-template-columns:180px minmax(0,1fr)}.pmw-stage-ref{flex-basis:100%}.pmw-stage-document{padding:12px}.pmw-stage-head{padding:14px}}
 @container(max-width:520px){.pmw-nautflow{grid-template-columns:1fr}.pmw-document-rail{max-height:180px;border-right:0;border-bottom:1px solid var(--border-color,#34363d)}}
 `;
     document.head.appendChild(style);
@@ -721,24 +687,38 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     opts = opts || {};
     injectStyles();
     const label = `pmw-${Date.now().toString(36)}-${++counter}`;
-    // XNAUT-342. Mounted FOR a project (which is what the project workspace
-    // does) this panel is one surface of that workspace, not an app of its own.
-    // It takes the project from its argument and renders no second copy of the
-    // choice: no project dropdown, no project rail, no section nav. The sidebar
-    // owns the selection and the workspace owns the tabs, and a selector inside
-    // the body was asking a question both of them had already answered.
+    // XNAUT-342. This panel is ONE SURFACE OF ONE PROJECT. It takes that
+    // project from its argument and renders no copy of the choice: no project
+    // dropdown, no project rail, no section nav. The sidebar owns the
+    // selection and the workspace owns the tabs, and a selector in here was
+    // asking a question both of them had already answered.
     //
-    // Mounted WITHOUT a project it is still the standalone Projects panel that
-    // the sidebar's More menu opens, and it keeps all three, because with no
-    // project in the argument there is nothing else here to pick one with.
-    const embedded = Boolean(opts.project);
-    const section0 = opts.section || (embedded ? 'work' : '');
+    // It used to have a second life: mounted with no project it WAS the
+    // standalone Projects panel, an app of its own with its own project list,
+    // its own dropdown and its own nine tabs. André, testing 1.27.1: "why is
+    // the old project view still there, the workspace was supposed to replace
+    // that." That mode is gone, and with it the Overview, Docs and Delivery
+    // sections — Overview was a dashboard of the other tabs, Docs was the
+    // Vault pane under a second name, and Delivery was an empty placeholder
+    // for a panel the workspace mounts itself.
+    //
+    // A project is REQUIRED. Defaulting to "all projects" would resurrect the
+    // standalone board by accident, so a missing one says so on screen and in
+    // the console rather than quietly rendering something else.
+    const projectKey = String(opts.project || '');
+    const section0 = opts.section || 'work';
     const pane = document.createElement('div');
-    pane.className = embedded ? 'pmw pmw-embedded' : 'pmw';
+    pane.className = 'pmw pmw-embedded';
+    if (!projectKey) {
+      console.error('[pm] the project-management panel needs a project: it is a surface of one, not a panel of its own');
+      pane.innerHTML = '<div class="pmw-empty pmw-error"><strong>This surface needs a project.</strong><br>It was mounted without one. Choose a project in the sidebar to open its workspace.</div>';
+      parent.appendChild(pane);
+      const stub = { kind: 'project-management', label, pane, refresh: () => {}, dispose: () => {} };
+      panes.set(label, stub);
+      return stub;
+    }
     pane.innerHTML = `
-      <header class="pmw-head"${embedded && section0 !== 'work' ? ' hidden' : ''}>
-        ${embedded ? '' : `<span class="pmw-title">Projects</span>
-        <select class="pmw-project-select" aria-label="Project filter"></select>`}
+      <header class="pmw-head"${section0 !== 'work' ? ' hidden' : ''}>
         <span class="pmw-filter-wrap">
           <input class="pmw-filter" type="search" placeholder="Filter: text, or status:review owner:claude release:1.28" spellcheck="false">
           <button type="button" class="pmw-filter-clear" title="Clear filter" aria-label="Clear filter" hidden>&times;</button>
@@ -747,12 +727,9 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
         <span class="pmw-spacer"></span><span class="pmw-sync-state"></span>
         <button class="pmw-icon pmw-refresh" title="Refresh" aria-label="Refresh">${ICON.refresh}</button>
         <button class="pmw-icon pmw-sync" title="Pull and push control repository" aria-label="Synchronize">${ICON.sync}</button>
-        ${embedded ? '' : `<button class="pmw-btn pmw-project-details" hidden>Project details</button>
-        <button class="pmw-btn pmw-new-project">New project</button>`}
         <button class="pmw-btn pmw-btn-primary pmw-new-ticket">New ticket</button>
       </header>
       <div class="pmw-main">
-        ${embedded ? '' : '<aside class="pmw-rail"><div class="pmw-rail-head"><span class="pmw-rail-title">Projects</span><span class="pmw-spacer"></span><button class="pmw-focus" hidden title="Show only this project">Focus</button><button class="pmw-rail-toggle" title="Collapse projects" aria-label="Collapse projects">‹</button></div><div class="pmw-projects"></div></aside>'}
         <div class="pmw-work"><main class="pmw-content"></main><aside class="pmw-detail" hidden></aside></div>
       </div>
       <div class="pmw-overlay" hidden></div>`;
@@ -769,7 +746,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
     const VIEW_KEY = 'xnaut-pm-list-view';
     let savedView = null;
     try { savedView = localStorage.getItem(VIEW_KEY); } catch (_) { savedView = null; }
-    const state = { sort: savedSort && savedSort.key ? savedSort : { key: 'updated', dir: 'desc' }, projects: [], tickets: [], status: null, project: opts.project || '', section: section0 || 'work', flowStage: opts.flowStage || '', view: savedView === 'board' ? 'board' : 'list', focus: false, selected: null, events: [], ownerHistory: [], request: 0, docsRequest: 0, docsEntry: null };
+    const state = { sort: savedSort && savedSort.key ? savedSort : { key: 'updated', dir: 'desc' }, projects: [], tickets: [], status: null, project: projectKey, section: section0, flowStage: opts.flowStage || '', view: savedView === 'board' ? 'board' : 'list', selected: null, events: [], ownerHistory: [], request: 0 };
 
     function toast(message, error, ms) {
       const node = document.createElement('div');
@@ -808,21 +785,16 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       return project ? project.name : key;
     }
 
-    function projectKeySeed(name) {
-      let key = String(name || '').replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 12);
-      if (key.length === 1) key += 'X';
-      return key;
-    }
-
     function money(value) {
       const amount = Number(value);
       return Number.isFinite(amount) ? `CHF ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'Not set';
     }
 
-    function projectTabs(active) {
-      const tabs = [['overview', 'Overview'], ['nautflow', 'NAUT-Flow'], ['docs', 'Docs'], ['designer', 'Designer'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['delivery', 'Delivery'], ['settings', 'Settings']];
-      return `<nav class="pmw-project-nav">${tabs.map(([section, label]) => `<button data-project-section="${section}" class="${active === section ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
-    }
+    // No projectTabs(): the nine tabs this panel drew are the workspace's now
+    // (XNAUT-342). Work, Delivery, NAUT-Flow and Vault are tabs across the top
+    // of the project workspace; Designer, Artifacts, Settings and Project
+    // details are its three-dot menu; Overview became the live header and the
+    // Sessions block moved to the Observatory.
 
     function stagesFor(project) {
       if (project.flow_type === 'incident') return INCIDENT_STAGES;
@@ -867,44 +839,15 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       };
     }
 
-    function bindProjectTabs() {
-      $('.pmw-content').querySelectorAll('[data-project-section]').forEach((button) => {
-        button.onclick = () => {
-          state.section = button.dataset.projectSection;
-          state.selected = null;
-          renderDetail();
-          renderContent();
-        };
-      });
-    }
+    // No bindProjectTabs(): there is no section nav to bind. The section is the
+    // argument this panel was mounted with, and the workspace's tab strip is
+    // what changes it (XNAUT-342).
 
-    function disposeProjectDocs() {
-      state.docsRequest += 1;
-      if (!state.docsEntry) return;
-      try { state.docsEntry.dispose?.(); } catch (_) { /* already disposed */ }
-      state.docsEntry = null;
-    }
-
-    async function mountProjectDocs(project) {
-      const host = $('.pmw-project-docs');
-      if (!host || typeof window.xnautCreateVaultPane !== 'function') return;
-      const request = ++state.docsRequest;
-      const stages = stagesFor(project);
-      // Scope the Docs tab to the whole PROJECT folder (e.g. "xnaut/") so it shows
-      // every doc — Development/, features/, Architecture/ — not just one subtree.
-      const prefix = stageDocumentRef(project, stages[0], 0).split('/')[0];
-      try {
-        const entry = await window.xnautCreateVaultPane(`${label}-docs`, host, { vault: 'work', scopePrefix: prefix, projectKey: project.key, hideChat: true });
-        if (request !== state.docsRequest || !host.isConnected || state.section !== 'docs') {
-          entry.dispose?.();
-          entry.pane?.remove();
-          return;
-        }
-        state.docsEntry = entry;
-      } catch (error) {
-        if (request === state.docsRequest && host.isConnected) host.innerHTML = `<div class="pmw-empty">${esc(error)}</div>`;
-      }
-    }
+    // Docs mounted the work Vault under a second name — the same
+    // xnautCreateVaultPane, scoped to the project, with the chat switched off.
+    // The workspace has ONE Vault tab that does exactly that, so this stopped
+    // existing rather than being moved (XNAUT-342). See workspace.js's `vault`
+    // tab for the surviving call.
 
     // The filter reads the columns, never the body. Typing "In Progress"
     // used to return every ticket whose text mentioned the phrase and miss
@@ -954,72 +897,10 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       });
     }
 
-    function renderProjectFilters() {
-      // Everything below paints the project dropdown and the project rail, and
-      // an embedded panel has neither: its project is the argument it was
-      // mounted with (XNAUT-342).
-      if (embedded) return;
-      if (state.projectsCollapsed === undefined) { try { state.projectsCollapsed = localStorage.getItem('xnaut-projects-collapsed') === '1'; } catch (_) { state.projectsCollapsed = false; } }
-      const collapsed = !!state.projectsCollapsed;
-      const counts = state.tickets.reduce((map, ticket) => map.set(ticket.project, (map.get(ticket.project) || 0) + 1), new Map());
-      const options = ['<option value="">All projects</option>'].concat(state.projects.map((project) => `<option value="${esc(project.key)}">${esc(project.key)} - ${esc(project.name)}</option>`));
-      $('.pmw-project-select').innerHTML = options.join('');
-      $('.pmw-project-select').value = state.project;
-      $('.pmw-project-details').hidden = !state.project;
-      const railEl = $('.pmw-rail'); if (railEl) railEl.classList.toggle('pmw-rail-collapsed', collapsed);
-      const toggleBtn = $('.pmw-rail-toggle');
-      if (toggleBtn) { toggleBtn.textContent = collapsed ? '›' : '‹'; toggleBtn.title = collapsed ? 'Expand projects' : 'Collapse projects'; toggleBtn.onclick = () => { state.projectsCollapsed = !state.projectsCollapsed; try { localStorage.setItem('xnaut-projects-collapsed', state.projectsCollapsed ? '1' : '0'); } catch (_) {} renderProjectFilters(); }; }
-      const mono = (k) => esc(String(k || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 2) || '·');
-      // Hidden projects are filtered out of the rail; they stay in the PM
-      // registry untouched. state.showHidden reveals them to unhide.
-      const pmHidden = window.xnautHiddenProjects.list('pm');
-      const visibleProjects = state.showHidden
-        ? state.projects
-        : state.projects.filter((p) => !pmHidden.includes(String(p.key)));
-      const pmHiddenCount = state.projects.length - visibleProjects.length;
-      $('.pmw-projects').innerHTML = `<button class="pmw-project${state.project ? '' : ' active'}" data-project="" title="All tickets"><span class="pmw-project-mono">∗</span><span class="pmw-project-key">ALL</span><span class="pmw-project-name">All tickets</span><span class="pmw-count">${state.tickets.length}</span></button>` + visibleProjects.map((project) => `<button class="pmw-project${state.project === project.key ? ' active' : ''}" data-project="${esc(project.key)}" title="${esc(project.key)} · ${esc(project.name)}"><span class="pmw-project-mono">${mono(project.key)}</span><span class="pmw-project-key">${esc(project.key)}</span><span class="pmw-project-name">${esc(project.name)}</span><span class="pmw-count">${counts.get(project.key) || 0}</span></button>`).join('');
-      $('.pmw-projects').querySelectorAll('[data-project]').forEach((button) => {
-        button.onclick = () => selectProject(button.dataset.project || '');
-        const key = button.dataset.project || '';
-        if (!key) return; // "All tickets" is not hideable
-        button.oncontextmenu = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const hidden = window.xnautHiddenProjects.isHidden('pm', key);
-          window.xnautContextMenu(e.clientX, e.clientY, [{
-            label: hidden ? 'Unhide' : 'Hide',
-            action: () => {
-              window.xnautHiddenProjects.toggle('pm', key);
-              // Hiding the selected project would leave the panel filtered to
-              // something invisible — fall back to All tickets.
-              if (!hidden && state.project === key) selectProject('');
-              else renderProjectFilters();
-            },
-          }]);
-        };
-      });
-      // The way back out; without it hiding is irreversible from the UI.
-      const projectsEl = $('.pmw-projects');
-      if (pmHiddenCount > 0 || state.showHidden) {
-        const back = document.createElement('button');
-        back.type = 'button';
-        back.className = 'pmw-project pmw-hidden-toggle';
-        back.textContent = state.showHidden
-          ? 'Hide hidden again'
-          : `${pmHiddenCount} hidden — show`;
-        back.title = 'Right-click a revealed project and choose Unhide';
-        back.onclick = () => { state.showHidden = !state.showHidden; renderProjectFilters(); };
-        projectsEl.appendChild(back);
-      }
-      const focusBtn = $('.pmw-focus');
-      if (focusBtn) {
-        if (!state.project) state.focus = false;
-        focusBtn.hidden = !state.project || collapsed;
-        focusBtn.classList.toggle('active', state.focus);
-        focusBtn.onclick = () => { state.focus = !state.focus; renderProjectFilters(); };
-      }
-      $('.pmw-projects').classList.toggle('focused', state.focus && !!state.project);
-    }
+    // No renderProjectFilters(): it painted the project dropdown and the
+    // project rail, the two selectors this panel drew for a project the
+    // sidebar had already chosen (XNAUT-342). Hiding and pinning a project
+    // live on the sidebar's own rows, which is the one project list left.
 
     function ticketCard(ticket) {
       return `<article class="pmw-card${state.selected && state.selected.id === ticket.id ? ' selected' : ''}" data-id="${esc(ticket.id)}" draggable="true"><div class="pmw-card-title">${esc(ticket.title)}</div><div class="pmw-card-meta"><span>${esc(ticket.id)}</span><span class="pmw-chip">${esc(ticket.type)}</span><span class="pmw-chip pmw-priority-${esc(ticket.priority)}">${esc(ticket.priority)}</span><span class="pmw-owner${ticket.owner ? '' : ' unassigned'}">${esc(ticket.owner ? '@' + String(ticket.owner).replace(/^@/, '') : 'unassigned')}</span></div></article>`;
@@ -1287,84 +1168,36 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
       return `<div class="pmw-project-page"><div class="pmw-project-hero"><div class="pmw-project-heading"><h2>Project settings</h2><p>Editable project baselines and connections. The project key remains stable because it identifies tickets.</p></div><span class="pmw-stage-badge">Revision ${esc(project.revision || 1)}</span></div><form class="pmw-settings-form"><section class="pmw-settings-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Project key</label><input class="pmw-input" value="${esc(project.key)}" disabled><span class="pmw-help">Used for ticket IDs and cannot be changed.</span></div><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-settings-name" value="${esc(project.name)}" required></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-settings-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required>${esc(purpose)}</textarea></div><div class="pmw-field"><label>NAUT-Flow</label><select class="pmw-select pmw-settings-flow">${FLOW_TYPES.map(([value, label]) => `<option value="${value}"${(project.flow_type || 'standard') === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></section><section class="pmw-settings-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-settings-owner" value="${esc(project.owner || '')}"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-settings-client" value="${esc(context.client)}"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-settings-contact" value="${esc(project.contact_name || '')}"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-settings-email" type="email" value="${esc(project.contact_email || '')}"></div></section><section class="pmw-settings-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-settings-source" value="${esc(project.source_repo || '')}"></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-settings-budget" type="number" min="0" step="1" value="${context.budget == null ? '' : esc(context.budget)}"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-settings-rate" type="number" min="0" step="0.01" value="${context.rate == null ? '' : esc(context.rate)}"></div></div></section><section class="pmw-settings-section"><h3>Agent connection · MCP</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Local endpoint</label><input class="pmw-input pmw-mcp-url" value="Starting local server..." readonly></div><div class="pmw-field"><label>Bearer token</label><input class="pmw-input pmw-mcp-token" type="password" readonly><span class="pmw-help">Full access: read plus create/update tickets, documents and decisions.</span></div><div class="pmw-field"><label>Read-only token</label><input class="pmw-input pmw-mcp-read-token" type="password" readonly><span class="pmw-help">Same endpoint, list/search/read only. Write tools are hidden and refused.</span></div></div><div class="pmw-field"><span class="pmw-help">Document tools are scoped to this project's work Vault folder. Paths must be visible, relative and end in .md; traversal, absolute paths and symlinked directories are refused. Updates require the current SHA-256 and return a document_conflict instead of overwriting newer content. Every write is recorded in the project event trail.</span></div><div style="display:flex;gap:8px"><button class="pmw-btn pmw-copy-mcp" type="button">Copy MCP connection</button><button class="pmw-btn pmw-copy-mcp-read" type="button">Copy read-only connection</button></div></section><div class="pmw-settings-actions"><span class="pmw-settings-state pmw-help"></span><span class="pmw-spacer"></span><button type="submit" class="pmw-btn pmw-btn-primary pmw-settings-save">Save settings</button></div></form></div>`;
     }
 
-    function activeWorkState(ticket) {
-      const states = {
-        in_progress: ['running', 'Running', 'Implementation in progress'],
-        done: ['review', 'Done', 'Finished, back with NautBot to verify'],
-        complete: ['completed', 'Complete', 'Tested, checked and approved'],
-        blocked: ['blocked', 'Blocked', 'Blocked or requires attention'],
-        failed: ['failed', 'Issue', 'Execution failed'],
-        review: ['review', 'Review', 'Ready for independent review'],
-        ready: ['ready', 'Ready', 'Ready to start'],
-        inbox: ['planned', 'Planned', 'Awaiting prioritization'],
-      };
-      return states[ticket.status] || ['planned', LABELS[ticket.status] || ticket.status, 'Status pending'];
-    }
-
     // ── Project facts ────────────────────────────────────────────────────
-    // Filled after render because it needs the backend. Everything here is
-    // read from the machine — nothing is defaulted, and a value we cannot
-    // determine stays "—" rather than becoming a plausible-looking number.
+    // GONE with the Overview tab (XNAUT-342). `fillProjectFacts` painted the
+    // health card's [data-fact] slots — last commit, uncommitted, worktrees,
+    // started — by reading the machine after the page rendered. Nothing here
+    // carries a [data-fact] any more: the three git numbers are the workspace
+    // header's, read live there (XNAUT-341), and Started is a stored field on
+    // the Project details page above.
+    //
+    // Its `ago()` went with it, which also settles the duplication XNAUT-341's
+    // handback named: `ago` existed verbatim here and in workspace.js, and it
+    // was left alone on purpose because merging them meant editing the card
+    // this ticket was about to delete. One copy now, in workspace.js.
 
-    function ago(ms) {
-      if (!ms) return '—';
-      const d = Math.max(0, Date.now() - ms);
-      const mins = Math.round(d / 60000);
-      if (mins < 60) return `${mins}m ago`;
-      const hrs = Math.round(mins / 60);
-      if (hrs < 48) return `${hrs}h ago`;
-      return `${Math.round(hrs / 24)}d ago`;
-    }
-    async function fillProjectFacts(host, project) {
-      const set = (k, v) => {
-        const el = host.querySelector(`[data-fact="${k}"]`);
-        if (el) el.textContent = v;
-      };
-      const created = project && project.created_at;
-      if (created) {
-        const d = new Date(created);
-        if (!Number.isNaN(d.getTime())) set('started', d.toISOString().slice(0, 10));
-      }
-      // source_path is where the code lives; a project without one has nothing
-      // to inspect, and the fields stay "—" rather than showing zeros.
-      const path = project && project.source_path;
-      if (!path) return;
-      try {
-        const f = await invoke('project_facts', { path });
-        if (!f || !f.is_repo) return;
-        set('lastcommit', ago(f.last_commit_ms));
-        set('changes', f.changes == null ? '—' : String(f.changes));
-        set('worktrees', f.worktrees == null ? '—' : String(f.worktrees));
-      } catch (e) {
-        console.error('[pm] project_facts failed:', e);
-      }
-    }
+    // No renderActiveWork(): the Overview's Active work table was the Work
+    // tab's ticket list, truncated to eight rows and with no filter, sort or
+    // detail pane. The Work tab is the whole of it (XNAUT-342).
 
-    function renderActiveWork(tickets) {
-      const rank = { in_progress: 0, blocked: 1, failed: 1, done: 2, review: 3, ready: 4, inbox: 5, complete: 6 };
-      const items = tickets.slice().sort((a, b) => {
-        const status = (rank[a.status] ?? 7) - (rank[b.status] ?? 7);
-        return status || String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
-      }).slice(0, 8);
-      const active = tickets.filter((ticket) => ticket.status === 'in_progress').length;
-      const completed = tickets.filter((ticket) => ticket.status === 'done' || ticket.status === 'complete').length;
-      const rows = items.map((ticket) => {
-        const [stateKey, stateLabel, activity] = activeWorkState(ticket);
-        const artifacts = Array.isArray(ticket.documentation) ? ticket.documentation.length : 0;
-        return `<tr data-overview-ticket="${esc(ticket.id)}" tabindex="0"><td><span class="pmw-active-state"><span class="pmw-work-indicator" data-state="${esc(stateKey)}"></span>${esc(stateLabel)}</span></td><td><div class="pmw-active-item"><strong>${esc(ticket.title)}</strong><span>${esc(ticket.id)} · ${esc(ticket.type)}</span></div></td><td class="pmw-active-activity">${esc(activity)}</td><td class="pmw-active-artifacts">${artifacts ? `${artifacts} linked` : 'None'}</td><td>${esc(ticket.owner || 'Unassigned')}</td><td>${esc(relativeTime(ticket.updated_at))}</td></tr>`;
-      }).join('');
-      const body = rows || '<tr><td class="pmw-active-empty" colspan="6">No project work has been created yet.</td></tr>';
-      return `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Active work</h3><span>${active} running · ${completed} completed</span></div><div class="pmw-active-work-wrap"><table class="pmw-active-work-table"><thead><tr><th>State</th><th>Work item</th><th>Activity</th><th>Artifacts</th><th>Owner</th><th>Updated</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
-    }
-
+    // The sections a workspace tab or three-dot entry asks for, and nothing
+    // else. Overview, Docs and Delivery used to live here too and do not any
+    // more (XNAUT-342): Overview was a dashboard of the other tabs and is now
+    // the workspace's live header, Docs was the work Vault under a second name
+    // and is the Vault tab, and Delivery was a placeholder for a panel the
+    // workspace mounts itself.
     function renderProjectSection(project, tickets) {
       const context = projectContext(project);
       const title = projectHero(project, context.purpose);
       if (state.section === 'work') return ticketWorkspace(tickets);
       if (state.section === 'nautflow') return renderNautFlow(project);
-      if (state.section === 'docs') return '<div class="pmw-project-docs"></div>';
       if (state.section === 'settings') return renderSettings(project);
-      // What the standalone panel's Project details dialog says, as a page, so
+      // What the standalone panel's Project details dialog said, as a page, so
       // the workspace's three-dot menu can open it without a dialog inside a
       // sheet (XNAUT-342).
       if (state.section === 'details') return `<div class="pmw-project-page">${title}${projectDetailFields(project)}</div>`;
@@ -1385,35 +1218,12 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
           : '<p style="margin-top:14px">This project is not in NAUT-Flow, so it has no current stage document. Open the NAUT-Flow tab to start it.</p>';
         return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>NAUT-Flow artifacts</h3><p>Stage documents are stored in the work Vault under ${esc(project.name)}/Development/NAUT-Flow and remain available outside the project workspace.</p>${open}</section></div>`;
       }
-      if (state.section === 'delivery') {
-        return `<div class="pmw-project-page">${title}<section class="pmw-project-empty"><h3>Delivery has not started</h3><p>Build sessions, reviews, tests, releases, and Engram learning become available after the Plan gate is approved.</p></section></div>`;
-      }
-      const flow = currentStageOf(project);
-      const sourceConnected = Boolean(project.source_repo);
-      // The page answers, top to bottom: can I get in / what needs me / where is
-      // this / context. The middle two are always real. The stage bands are
-      // rendered ONLY when the project is genuinely in a flow — see
-      // currentStageOf; an empty string here is the honest answer, not a gap to
-      // be filled with stage 1.
-      const stageBand = flow
-        ? `<section class="pmw-overview-band pmw-stage-band"><div class="pmw-overview-band-head"><h3>Current stage</h3><span>${flow.index + 1} of ${flow.stages.length} · ${esc(flow.stage[1])}</span></div><div class="pmw-artifact-row"><div class="pmw-row-copy"><div class="pmw-row-title">${esc(flow.stage[2])}</div><div class="pmw-row-meta">${esc(stageDescription(flow.key))}</div></div><button class="pmw-btn pmw-open-nautflow">Open NAUT-Flow</button></div></section>`
-        : '';
-      // The primary artifact IS the current stage's document. With no stage
-      // there is no such document, and naming one would invent a Vault path the
-      // Open button then offers to create.
-      const artifactBand = flow
-        ? `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Primary artifact</h3><span>Work Vault</span></div><div class="pmw-artifact-row"><span class="pmw-artifact-icon">${ICON.doc}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(flow.stage[2])}</div><div class="pmw-row-meta">work:${esc(stageDocumentRef(project, flow.stage, flow.index))}</div></div><button class="pmw-btn pmw-open-overview-artifact">Open</button></div></section>`
-        : '';
-      // "Unassigned · Project owner" was a contributor row for a project with no
-      // contributors, under a "Stage ownership" heading that never reflected a
-      // stage. An unowned project shows no Contributors band at all.
-      const owner = (project.owner || '').trim();
-      const contributors = owner
-        ? `<section class="pmw-overview-band"><div class="pmw-overview-band-head"><h3>Contributors</h3><span>Project owner</span></div><div class="pmw-contributor-row"><span class="pmw-contributor-avatar">${esc(owner.slice(0, 2).toUpperCase())}</span><div class="pmw-row-copy"><div class="pmw-row-title">${esc(owner)}</div><div class="pmw-row-meta">Project owner</div></div></div></section>`
-        : '';
-      const health = `<section class="pmw-surface"><h3>Project health</h3><div class="pmw-metric-row"><div class="pmw-metric"><label>Budget</label><strong>${esc(money(context.budget))}</strong></div><div class="pmw-metric"><label>Tickets</label><strong>${tickets.length}</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Started</label><strong data-fact="started">—</strong></div><div class="pmw-metric"><label>Last commit</label><strong data-fact="lastcommit">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Uncommitted</label><strong data-fact="changes">—</strong></div><div class="pmw-metric"><label>Worktrees</label><strong data-fact="worktrees">—</strong></div></div><div class="pmw-metric-row"><div class="pmw-metric"><label>Rate</label><strong>${context.rate == null ? 'Not set' : esc(money(context.rate))}</strong></div><div class="pmw-metric"><label>Flow</label><strong>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</strong></div></div></section>`;
-      const systems = `<section class="pmw-surface"><h3>Connected systems</h3><div class="pmw-system-row"><span class="pmw-system-mark">SC</span><div class="pmw-row-copy"><div class="pmw-row-title">Source repository</div><div class="pmw-row-meta">${sourceConnected ? esc(project.source_repo) : 'Configure in Settings'}</div></div><span class="pmw-system-state">${sourceConnected ? 'Linked' : 'Open'}</span></div></section>`;
-      return `<div class="pmw-project-page">${title}<div class="pmw-overview-layout"><main class="pmw-overview-main">${renderActiveWork(tickets)}${stageBand}${artifactBand}${contributors}</main><aside class="pmw-overview-rail">${health}${systems}</aside></div></div>`;
+      // A section nobody routes to. Every caller is the workspace, and the
+      // workspace knows its six keys; anything else is a stale call site, and
+      // saying so beats rendering the Overview page this used to fall through
+      // to (XNAUT-342).
+      console.error('[pm] no such project section:', state.section);
+      return `<div class="pmw-project-page">${title}<div class="pmw-empty pmw-error"><strong>There is no “${esc(state.section)}” section.</strong><br>This surface renders Work, NAUT-Flow, Designer, Artifacts, Settings and Project details.</div></div>`;
     }
 
     async function writeStageDocument(rel, content) {
@@ -1963,7 +1773,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
             const advanceKey = targetIndex > curIdx ? next[0] : (project.stage || stages[0][0]);
             const updated = await invoke('pm_project_update', { request: projectUpdatePayload(project, advanceKey) });
             const idx = state.projects.findIndex((x) => x.key === updated.key); if (idx >= 0) state.projects[idx] = updated;
-            state.flowStage = next[0]; renderProjectFilters(); renderContent();
+            state.flowStage = next[0]; renderContent();
             toast(stage[2] + ' approved → ' + next[2]);
             // Crossing into Build: the Validator checks the whole doc
             // chain automatically — the report lands in the right pane.
@@ -1987,7 +1797,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         nfReset.onclick = async () => {
           if (!armed) { armed = true; nfReset.textContent = 'Confirm reset?'; nfReset.classList.add('armed'); setTimeout(() => { if (nfReset.isConnected) { armed = false; nfReset.textContent = '⟲'; nfReset.classList.remove('armed'); } }, 3000); return; }
           nfReset.disabled = true; nfReset.textContent = 'Resetting…';
-          try { const n = await resetFlow(project); toast(`Full reset — cleared ${n} document${n === 1 ? '' : 's'}. The flow starts over at the capture card.`); renderProjectFilters(); renderContent(); }
+          try { const n = await resetFlow(project); toast(`Full reset — cleared ${n} document${n === 1 ? '' : 's'}. The flow starts over at the capture card.`); renderContent(); }
           catch (e) { toast(String((e && e.message) || e), true); if (nfReset.isConnected) { nfReset.disabled = false; nfReset.textContent = '⟲'; nfReset.classList.remove('armed'); } }
         };
       }
@@ -2006,7 +1816,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const idx = state.projects.findIndex((item) => item.key === updated.key);
           if (idx >= 0) state.projects[idx] = updated;
           state.flowStage = skipTarget[0];
-          renderProjectFilters(); renderContent();
+          renderContent();
           toast(`${stage[2]} skipped — ${skipTarget[2]} is the current stage.`);
         } catch (error) { toast(error, true); if (skipBtn.isConnected) { skipBtn.disabled = false; skipBtn.textContent = 'Skip'; } }
       };
@@ -2249,7 +2059,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const index = state.projects.findIndex((item) => item.key === updated.key);
           if (index >= 0) state.projects[index] = updated;
           state.flowStage = targetStage[0];
-          renderProjectFilters();
           renderContent();
           // The Build stage is where the ACTUAL build runs (Build Manager → worktrees),
           // NOT a doc-writing persona — spawning one here is why "no build started".
@@ -3963,7 +3772,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const idx = state.projects.findIndex((item) => item.key === updated.key);
           if (idx >= 0) state.projects[idx] = updated;
           state.flowStage = targetStage[0];
-          renderProjectFilters();
           renderContent();
           toast(`${stage[2]} promoted to ${targetStage[2]}`);
         } catch (error) { toast(error, true); if (promote.isConnected) { promote.disabled = false; promote.textContent = origLabel; } }
@@ -3996,94 +3804,52 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
           const index = state.projects.findIndex((item) => item.key === updated.key);
           if (index >= 0) state.projects[index] = updated;
           status.textContent = 'Saved';
-          renderProjectFilters(); renderContent();
+          renderContent();
           toast('Project settings saved');
         } catch (error) { status.textContent = String(error); toast(error, true); button.disabled = false; button.textContent = 'Save settings'; }
       };
     }
 
     function bindProjectSection(project) {
-      if (state.section === 'docs') mountProjectDocs(project);
       if (state.section === 'nautflow') bindNautFlow(project);
       if (state.section === 'settings') bindSettings(project);
-      pane.querySelectorAll('[data-overview-ticket]').forEach((row) => {
-        const open = () => openTicket(row.dataset.overviewTicket);
-        row.onclick = open;
-        row.onkeydown = (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            open();
-          }
-        };
-      });
-      const openFlow = $('.pmw-open-nautflow');
-      if (openFlow) openFlow.onclick = () => { state.section = 'nautflow'; state.flowStage = project.stage || ''; renderContent(); };
-      // Project facts are read from the machine after the page paints: the
-      // call hits the backend and must not delay the render.
-      if ($('[data-fact]')) fillProjectFacts(pane, project);
-      // Both buttons only render when the project is genuinely in a flow, so
+      // The button only renders when the project is genuinely in a flow, so
       // the stage is read rather than defaulted — `Math.max(0, findIndex)` here
       // was the same fabrication as the render, one layer down.
       const flow = currentStageOf(project);
-      [$('.pmw-open-overview-artifact'), $('.pmw-open-stage-artifacts')].forEach((button) => {
-        if (button && flow) button.onclick = () => openDocument(`work:${stageDocumentRef(project, flow.stage, flow.index)}`);
-      });
+      const artifacts = $('.pmw-open-stage-artifacts');
+      if (artifacts && flow) artifacts.onclick = () => openDocument(`work:${stageDocumentRef(project, flow.stage, flow.index)}`);
     }
 
     function renderContent() {
-      if (state.section === 'docs' && state.docsEntry?.pane?.isConnected) return;
-      disposeProjectDocs();
       const tickets = visibleTickets();
       const project = state.projects.find((item) => item.key === state.project);
-      const projectWork = Boolean(project && state.section === 'work');
-      if (!project || state.section !== 'nautflow') window.xnautClearAgentWorkspaceContext?.(label);
-      $('.pmw-view-switch').hidden = Boolean(project && !projectWork);
-      $('.pmw-filter-wrap').hidden = Boolean(project && !projectWork);
-      // Embedded, the toolbar is only about the ticket board: on every other
-      // section it is a bar of controls for something that is not on screen.
-      if (embedded) $('.pmw-head').hidden = state.section !== 'work';
-      if (!state.projects.length) {
-        $('.pmw-content').innerHTML = '<div class="pmw-empty"><strong>No projects yet.</strong><br>Create the first project to start the NAUT-Flow lifecycle.</div>';
+      const projectWork = state.section === 'work';
+      if (state.section !== 'nautflow') window.xnautClearAgentWorkspaceContext?.(label);
+      $('.pmw-view-switch').hidden = !projectWork;
+      $('.pmw-filter-wrap').hidden = !projectWork;
+      // The toolbar is only about the ticket board: on every other section it
+      // is a bar of controls for something that is not on screen.
+      $('.pmw-head').hidden = !projectWork;
+      if (!project) {
+        // The project this surface was mounted for is not in the control repo.
+        // Naming it is the point — a bare "No projects yet" sent the reader to
+        // create one they already had.
+        $('.pmw-content').innerHTML = state.projects.length
+          ? `<div class="pmw-empty"><strong>${esc(state.project)} is not in the control repository.</strong><br>It may have been renamed or removed. Pick another project in the sidebar.</div>`
+          : '<div class="pmw-empty"><strong>No projects yet.</strong><br>Create the first project with the plus beside Projects in the sidebar.</div>';
         return;
       }
-      if (project) {
-        // Embedded, the sections ARE the workspace's tabs, so the panel does
-        // not draw a second row of them (XNAUT-342).
-        const nav = embedded ? '' : projectTabs(state.section);
-        $('.pmw-content').innerHTML = `<div class="pmw-project-shell">${nav}${renderProjectSection(project, tickets)}</div>`;
-        if (!embedded) bindProjectTabs();
-        bindProjectSection(project);
-      } else {
-        $('.pmw-content').innerHTML = ticketWorkspace(tickets);
-      }
-      if (!project || projectWork) bindTickets();
+      // No section nav: the sections ARE the workspace's tabs (XNAUT-342).
+      $('.pmw-content').innerHTML = `<div class="pmw-project-shell">${renderProjectSection(project, tickets)}</div>`;
+      bindProjectSection(project);
+      if (projectWork) bindTickets();
     }
 
-    // Let other views jump straight to a project's overview (the New project
-    // form does this after creating one). Assigned per panel instance so it
-    // always targets the live one; a key arriving before any panel exists is
-    // held and consumed when one mounts.
-    // An embedded panel must not claim this: it cannot change project (its own
-    // is the argument it was mounted with), so answering here would make the
-    // caller's jump land nowhere while the standalone panel sat unused.
-    if (!embedded) {
-      window.xnautShowProject = (key) => {
-        if (!key) return false;
-        selectProject(String(key).toUpperCase());
-        return true;
-      };
-    }
-
-    function selectProject(key) {
-      state.project = key;
-      state.section = key ? 'overview' : 'work';
-      state.flowStage = '';
-      state.selected = null;
-      renderDetail();
-      $('.pmw-project-select').value = key;
-      renderProjectFilters();
-      renderContent();
-    }
+    // No window.xnautShowProject: it existed so another view could jump the
+    // standalone panel to a project, and there is no standalone panel to jump
+    // (XNAUT-342). Its one caller, the New project form, now opens that
+    // project's workspace directly — see right-pane-newproject.js.
 
     async function openTicket(id) {
       state.selected = state.tickets.find((item) => item.id === id) || null;
@@ -4305,7 +4071,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         const index = state.tickets.findIndex((item) => item.id === updated.id);
         if (index >= 0) state.tickets[index] = updated;
         if (state.selected && state.selected.id === updated.id) state.selected = updated;
-        renderProjectFilters(); renderContent(); if (state.selected) renderDetail();
+        renderContent(); if (state.selected) renderDetail();
         return updated;
       } catch (error) { toast(error, true); await load(); return null; }
     }
@@ -4329,45 +4095,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       };
     }
 
-    function showProjectCreate() {
-      const overlay = $('.pmw-overlay');
-      overlay.hidden = false;
-      overlay.innerHTML = `<form class="pmw-create-page"><header class="pmw-create-head"><div><h2>New project</h2><p>Start a project at the Idea stage and carry it through NAUT-Flow.</p></div><span class="pmw-spacer"></span><button type="button" class="pmw-icon pmw-dialog-close" aria-label="Close">${ICON.close}</button></header><div class="pmw-create-body"><section class="pmw-create-section"><h3>Basics</h3><div class="pmw-create-grid"><div class="pmw-field"><label>Name</label><input class="pmw-input pmw-new-project-name" placeholder="Project name" required></div><div class="pmw-field"><label>Project key</label><input class="pmw-input pmw-new-key" maxlength="12" pattern="[A-Za-z0-9]{2,12}" placeholder="PROJECT" required><span class="pmw-help">Used for ticket IDs, for example XNAUT-42. 2-12 letters or numbers.</span></div></div><div class="pmw-field"><label>Purpose</label><textarea class="pmw-textarea pmw-new-purpose" placeholder="What problem does this project solve, for whom, and what outcome should it achieve?" required></textarea></div></section><section class="pmw-create-section"><h3>NAUT-Flow</h3><div class="pmw-flow-choice">${FLOW_TYPES.map(([value, label, blurb], i) => `<label><input type="radio" name="pmw-flow-type" value="${value}"${i === 0 ? ' checked' : ''}><span><strong>${label}</strong><span>${blurb}</span></span></label>`).join('')}</div></section><section class="pmw-create-section"><h3>Ownership</h3><div class="pmw-create-grid pmw-create-grid-3"><div class="pmw-field"><label>Project owner</label><input class="pmw-input pmw-new-owner" placeholder="Owner"></div><div class="pmw-field"><label>Client</label><input class="pmw-input pmw-new-client" placeholder="Internal or company"></div><div class="pmw-field"><label>Primary contact</label><input class="pmw-input pmw-new-contact" placeholder="Contact name"></div></div><div class="pmw-field"><label>Contact email</label><input class="pmw-input pmw-new-contact-email" type="email" placeholder="name@example.com"></div></section><section class="pmw-create-section"><h3>Repository and commercial baseline</h3><div class="pmw-field"><label>Source repository or local folder</label><input class="pmw-input pmw-new-source" placeholder="/path/to/project or ssh://git@forge/team/project.git"><span class="pmw-help">Optional during discovery. The control repository already stores the project record.</span></div><div class="pmw-create-grid"><div class="pmw-field"><label>Budget (CHF)</label><input class="pmw-input pmw-new-budget" type="number" min="0" step="1" placeholder="Optional"></div><div class="pmw-field"><label>Hourly rate (CHF)</label><input class="pmw-input pmw-new-rate" type="number" min="0" step="0.01" placeholder="Optional"></div></div></section></div><footer class="pmw-create-actions"><span class="pmw-help">The project opens at Idea. Tickets become executable work during Plan.</span><span class="pmw-spacer"></span><button type="button" class="pmw-btn pmw-dialog-cancel">Cancel</button><button type="submit" class="pmw-btn pmw-btn-primary pmw-dialog-submit">Create project</button></footer></form>`;
-      const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
-      overlay.querySelector('.pmw-dialog-close').onclick = close;
-      overlay.querySelector('.pmw-dialog-cancel').onclick = close;
-      overlay.onclick = (event) => { if (event.target === overlay) close(); };
-      const form = overlay.querySelector('form');
-      const name = overlay.querySelector('.pmw-new-project-name');
-      const key = overlay.querySelector('.pmw-new-key');
-      let keyEdited = false;
-      name.oninput = () => { if (!keyEdited) key.value = projectKeySeed(name.value); };
-      key.oninput = () => { keyEdited = true; key.value = key.value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 12); };
-      form.onsubmit = async (event) => {
-        event.preventDefault();
-        if (!form.reportValidity()) return;
-        const button = overlay.querySelector('.pmw-dialog-submit');
-        button.disabled = true;
-        button.textContent = 'Creating...';
-        try {
-          const numberValue = (selector) => { const value = overlay.querySelector(selector).value; return value === '' ? null : Number(value); };
-          const project = await invoke('pm_project_create', { request: { key: key.value, name: name.value, purpose: overlay.querySelector('.pmw-new-purpose').value, owner: overlay.querySelector('.pmw-new-owner').value, client_name: overlay.querySelector('.pmw-new-client').value, contact_name: overlay.querySelector('.pmw-new-contact').value, contact_email: overlay.querySelector('.pmw-new-contact-email').value, budget_chf: numberValue('.pmw-new-budget'), hourly_rate_chf: numberValue('.pmw-new-rate'), flow_type: overlay.querySelector('[name="pmw-flow-type"]:checked').value, source_repo: overlay.querySelector('.pmw-new-source').value } });
-          state.project = project.key;
-          state.section = 'overview';
-          close();
-          await load();
-          toast(`${project.name} created`);
-        } catch (error) {
-          toast(error, true);
-          button.disabled = false;
-          button.textContent = 'Create project';
-        }
-      };
-      setTimeout(() => name.focus(), 0);
-    }
+    // No showProjectCreate(): the New project button that opened it was the
+    // standalone panel's, and a project is created from the sidebar's plus
+    // now (right-pane-newproject.js), which is the one place that makes one
+    // (XNAUT-342). That form asks for name, key and source; owner, client,
+    // contact, budget, rate and flow type are the project's Settings tab,
+    // which is where they were edited afterwards anyway.
 
-    function showDialog(kind) {
-      if (kind === 'project') { showProjectCreate(); return; }
+    // One dialog, one kind: the New project half went with the standalone
+    // panel's button (XNAUT-342).
+    function showTicketDialog() {
       const overlay = $('.pmw-overlay');
       const projectOptions = state.projects.map((project) => `<option value="${esc(project.key)}"${state.project === project.key ? ' selected' : ''}>${esc(project.key)} - ${esc(project.name)}</option>`).join('');
       overlay.hidden = false;
@@ -4388,24 +4125,21 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       setTimeout(() => overlay.querySelector('input,select,textarea')?.focus(), 0);
     }
 
-    // The read-only view of a project, used twice: by the standalone panel's
-    // Project details dialog, and by the 'details' section the workspace's
-    // three-dot menu opens (XNAUT-342). One source, so the two cannot drift.
+    // The read-only view of a project. It was the standalone panel's Project
+    // details DIALOG as well as this page; the dialog went with the panel, so
+    // the workspace's three-dot Project details entry is the only reader
+    // (XNAUT-342).
+    //
+    // Started comes from the same removal. The Overview's health card carried
+    // budget, rate, flow, tickets, started and four git numbers; the git ones
+    // are the workspace header's (XNAUT-341) and read live, and the rest are
+    // here. Started is `created_at` — a stored field, not a machine read, so
+    // it is rendered inline rather than filled in afterwards like a fact.
     function projectDetailFields(project) {
       const context = projectContext(project);
-      return `<div class="pmw-field"><label>Purpose</label><div>${esc(context.purpose)}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Stage</label><div>${esc(project.stage || 'idea')}</div></div><div class="pmw-field"><label>Flow</label><div>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</div></div><div class="pmw-field"><label>Owner</label><div>${esc(project.owner || 'Unassigned')}</div></div></div><div class="pmw-field"><label>Source</label><div>${esc(project.source_path || project.forge_remote || project.source_repo || 'Not linked')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Client</label><div>${esc(context.client || 'Internal')}</div></div><div class="pmw-field"><label>Budget</label><div>${esc(money(context.budget))}</div></div><div class="pmw-field"><label>Rate</label><div>${context.rate == null ? 'Not set' : `${esc(money(context.rate))} / hour`}</div></div></div>`;
-    }
-
-    function showProjectDetails() {
-      const project = state.projects.find((item) => item.key === state.project);
-      if (!project) return;
-      const overlay = $('.pmw-overlay');
-      overlay.hidden = false;
-      overlay.innerHTML = `<div class="pmw-dialog"><div class="pmw-dialog-head"><span class="pmw-dialog-title">${esc(project.key)} - ${esc(project.name)}</span><span class="pmw-spacer"></span><button class="pmw-icon pmw-dialog-close">${ICON.close}</button></div>${projectDetailFields(project)}<div class="pmw-dialog-actions"><button class="pmw-btn pmw-dialog-close-action">Close</button></div></div>`;
-      const close = () => { overlay.hidden = true; overlay.innerHTML = ''; };
-      overlay.querySelector('.pmw-dialog-close').onclick = close;
-      overlay.querySelector('.pmw-dialog-close-action').onclick = close;
-      overlay.onclick = (event) => { if (event.target === overlay) close(); };
+      const created = project.created_at ? new Date(project.created_at) : null;
+      const started = created && !Number.isNaN(created.getTime()) ? created.toISOString().slice(0, 10) : 'Not recorded';
+      return `<div class="pmw-field"><label>Purpose</label><div>${esc(context.purpose)}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Stage</label><div>${esc(project.stage || 'idea')}</div></div><div class="pmw-field"><label>Flow</label><div>${esc(FLOW_LABEL[project.flow_type] || 'Standard')}</div></div><div class="pmw-field"><label>Owner</label><div>${esc(project.owner || 'Unassigned')}</div></div></div><div class="pmw-field"><label>Source</label><div>${esc(project.source_path || project.forge_remote || project.source_repo || 'Not linked')}</div></div><div class="pmw-field-grid"><div class="pmw-field"><label>Client</label><div>${esc(context.client || 'Internal')}</div></div><div class="pmw-field"><label>Budget</label><div>${esc(money(context.budget))}</div></div><div class="pmw-field"><label>Rate</label><div>${context.rate == null ? 'Not set' : `${esc(money(context.rate))} / hour`}</div></div></div><div class="pmw-field"><label>Started</label><div data-project-started>${esc(started)}</div></div>`;
     }
 
     function paintStatus() {
@@ -4488,7 +4222,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         // Skip the periodic re-render while a stage editor, the Guided wizard, or
         // the Build stage is up: re-rendering kills typing / churns terminals.
         const keepNautFlowEditor = state.section === 'nautflow' && Boolean(state.project) && Boolean(($('.pmw-stage-editor') || $('.pmw-wiz') || $('.pmw-build'))?.isConnected);
-        paintStatus(); renderProjectFilters();
+        paintStatus();
         if (!keepNautFlowEditor) renderContent();
         renderDetail();
       } catch (error) {
@@ -4502,13 +4236,10 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       }
     }
 
-    // The selector, New project and Project details are not rendered when the
-    // panel is embedded, so each is bound only if it is there.
-    if (!embedded) {
-      $('.pmw-project-select').onchange = (event) => selectProject(event.target.value);
-      $('.pmw-new-project').onclick = () => showDialog('project');
-      $('.pmw-project-details').onclick = showProjectDetails;
-    }
+    // Nothing to bind for a project selector, New project or Project details:
+    // the first two are the sidebar's (its tree and its plus) and the third is
+    // the 'details' section above (XNAUT-342).
+
     // Typing, the x and Escape all end in the same two lines, so the list
     // re-renders identically however the box was emptied (XNAUT-395).
     function applyFilter() {
@@ -4544,7 +4275,7 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     });
     $('.pmw-refresh').onclick = () => load();
     $('.pmw-sync').onclick = async (event) => { const button = event.currentTarget; button.disabled = true; $('.pmw-sync-state').textContent = 'Synchronizing...'; try { state.status = await invoke('pm_module_sync'); await load(); toast('Control repository synchronized'); } catch (error) { toast(error, true); paintStatus(); } finally { button.disabled = false; } };
-    $('.pmw-new-ticket').onclick = () => state.projects.length ? showDialog('ticket') : showDialog('project');
+    $('.pmw-new-ticket').onclick = () => newTicket();
 
     const refreshWhenVisible = () => {
       if (!document.hidden && pane.isConnected) load(false);
@@ -4555,10 +4286,16 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     load();
     // An action the caller asked for, rather than a place to look. The sidebar's
     // project menu opens the workspace on this panel and then wants the New
-    // ticket dialog straight away, and `showDialog` is a closure in here, so
-    // the entry exposes it rather than the caller reaching for a button that
-    // may be hidden when embedded.
-    const newTicket = () => (state.projects.length ? showDialog('ticket') : showDialog('project'));
+    // ticket dialog straight away, and `showTicketDialog` is a closure in here,
+    // so the entry exposes it rather than the caller reaching for a button that
+    // is hidden on every section but Work.
+    //
+    // With no project in the control repository there is nothing to file a
+    // ticket against, and creating one is the sidebar's job now — so say that
+    // rather than opening a project form this surface no longer has.
+    const newTicket = () => (state.projects.length
+      ? showTicketDialog()
+      : toast('No projects yet — create one with the plus beside Projects in the sidebar.', true));
     if (opts && opts.action === 'new-ticket') newTicket();
     // A ticket asked for on arrival (a link in a chat reply): open it as
     // soon as the board holds it. Polled, because `load` is already running
@@ -4579,7 +4316,6 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       newTicket,
       refresh: load,
       dispose: () => {
-        disposeProjectDocs();
         window.clearInterval(refreshTimer);
         window.removeEventListener('focus', refreshWhenVisible);
         document.removeEventListener('visibilitychange', refreshWhenVisible);

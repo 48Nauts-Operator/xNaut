@@ -430,6 +430,10 @@
       tab: 'code',
       pendingAction: String(opts.action || ''),
       pendingTicket: String(opts.ticket || ''),
+      // A NAUT-Flow stage to land on. The Observatory's "last project" card
+      // knows the stage it watched and used to open the standalone panel at it;
+      // it opens this workspace's NAUT-Flow tab at it instead (XNAUT-342).
+      pendingFlowStage: String(opts.flowStage || ''),
       open: [],          // absolute paths, in tab order
       active: '',        // the file being read
       treeGeneration: 0, // invalidates in-flight directory loads after a re-root
@@ -985,11 +989,14 @@
         state.pendingAction = '';
         const ticket = state.pendingTicket;
         state.pendingTicket = '';
+        const flowStage = state.pendingFlowStage;
+        state.pendingFlowStage = '';
         return window.xnautCreateProjectManagementPanel(`${label}-${name}`, host, {
           project: state.projectKey,
           section,
           action,
           ticket,
+          flowStage,
         });
       }
       return null;
@@ -1231,6 +1238,7 @@
       if (next.action) state.pendingAction = String(next.action);
       // A ticket link (ticket-links.js) lands on the Work tab with it open.
       if (next.ticket) state.pendingTicket = String(next.ticket);
+      if (next.flowStage) state.pendingFlowStage = String(next.flowStage);
       if (next.sheet) openSheet(String(next.sheet));
     }
 
@@ -1249,7 +1257,13 @@
         // A file asked for when the project did not change: setProject never
         // ran, so nothing would have opened it.
         else if (next.file) openFile(String(next.file));
+        // Asked-for actions arrive on re-open as well as on first open. Only
+        // `action` used to be carried here, so a ticket link or an Observatory
+        // stage jump into an ALREADY-OPEN workspace was dropped on the floor —
+        // the tab changed and the thing that was asked for did not happen.
         if (next.action) state.pendingAction = String(next.action);
+        if (!changed && next.ticket) state.pendingTicket = String(next.ticket);
+        if (!changed && next.flowStage) state.pendingFlowStage = String(next.flowStage);
         if (!changed && next.sheet) openSheet(String(next.sheet));
         show(next.tab || state.tab);
       },

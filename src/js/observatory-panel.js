@@ -470,8 +470,16 @@
       if (lp) lp.onclick = () => {
         let d = null; try { d = JSON.parse(localStorage.getItem('xnaut-nf-last') || 'null'); } catch (_) {}
         if (!d) return;
-        try { window.xnautHomeContext && window.xnautHomeContext(); } catch (_) {}
-        if (window.xnautAttachProjectManagementTab) window.xnautAttachProjectManagementTab({ project: d.key, section: 'nautflow', flowStage: d.stageKey });
+        // The project's NAUT-Flow is a tab of its workspace, not a panel of its
+        // own (XNAUT-342). `xnautOpenWorkspace` is assigned in workspace.js and
+        // enters the Home context itself, so this no longer does it separately.
+        // Grepped rather than assumed: an undefined global here would leave the
+        // card looking clickable and doing nothing.
+        if (typeof window.xnautOpenWorkspace !== 'function') {
+          console.error('[observatory] xnautOpenWorkspace is not loaded, so the last project cannot open');
+          return;
+        }
+        window.xnautOpenWorkspace({ project: d.key, tab: 'nautflow', flowStage: d.stageKey });
       };
     }
 
