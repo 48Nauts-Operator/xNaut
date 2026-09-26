@@ -2,7 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [Unreleased]
+## [1.27.2] - 2026-09-27
 
 ### Added
 - The project workspace has a front door. A Projects icon sits first on the rail, and the same project switcher that Delivery had is on the Code tab, so a project opens in one click from either place. (XNAUT-435)
