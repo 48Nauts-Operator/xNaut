@@ -602,12 +602,27 @@
 
     // Attaching and OPENING are not the same command: `attach --create` makes a
     // session with a plain shell in it and never starts the agent.
-    async function openNewSession(project, provider, model) {
-      const name = 'cl-' + String((project && project.name) || 'session');
+    //
+    // `agentKey` picks WHICH agent (XNAUT-86). It used to be Claude, always,
+    // with `cl-` and `claude` written into this function — so a machine running
+    // Codex on half its projects could start one from nowhere in the app.
+    async function openNewSession(project, agentKey, provider, model) {
+      const rule = window.xnautSessions;
+      const agent = rule.AGENTS.find((item) => item.key === agentKey) || rule.AGENTS[0];
+      // The name is the whole reason the sidebar can find this session later,
+      // so it comes from the one rule rather than from string concatenation
+      // here. `'cl-' + project.name` was that concatenation, and it produced a
+      // name `zellij_open_command` then lowercased into something the sidebar
+      // did not match.
+      const name = rule.nameFor(agent.key, project || {});
       const cwd = (project && project.source_path) || '~/';
       try {
-        let env = await providerEnvFor(provider, model);
-        if (!provider || provider === 'nautgate') {
+        // The NautGate wrapper and the provider pair are Claude's: they set
+        // ANTHROPIC_* and register a Max launch. Handing that to Codex or Pi
+        // would point them at an endpoint they do not speak, so a non-Claude
+        // session takes the agent's own configuration and no env at all.
+        let env = agent.key === 'cl' ? await providerEnvFor(provider, model) : null;
+        if (agent.key === 'cl' && (!provider || provider === 'nautgate')) {
           const runId = (globalThis.crypto && globalThis.crypto.randomUUID)
             ? globalThis.crypto.randomUUID()
             : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -618,7 +633,10 @@
           if (model) env.ANTHROPIC_MODEL = model;
         }
         const open = await invoke('zellij_open_command', {
-          session: name, cwd, command: "zsh -ic 'claude; exec zsh'",
+          // `exec zsh` so quitting the agent leaves a shell in the project
+          // rather than ending the session and with it the layout that could
+          // have resurrected the conversation.
+          session: name, cwd, command: "zsh -ic '" + agent.command + "; exec zsh'",
         });
         if (window.xnautFocusTabForSession && window.xnautFocusTabForSession(open.name)) return;
         const sessionId = await startShell(cwd, open.command, env);
@@ -635,10 +653,9 @@
       }
     }
 
-    const agentOf = (name) => {
-      const m = /^([a-z]{2,4})-/.exec(String(name || ''));
-      return ({ cl: 'Claude Code', cx: 'Codex', pi: 'Pi' })[m && m[1]] || (m && m[1]) || 'agent';
-    };
+    // One agent vocabulary, shared with the sidebar and the name builder above
+    // (session-naming.js). This was a third copy of the cl/cx/pi map.
+    const agentOf = (name) => window.xnautSessions.agentLabel(name);
 
     // The project this band is scoped to: the sidebar's selection when there is
     // one, otherwise the first project, and always overridable by the picker.
@@ -652,8 +669,44 @@
       return byPath || list[0] || null;
     }
 
+    // Which agent a new session starts, and where a session may be opened.
+    // Both outlive one repaint: the band redraws whenever a session is opened,
+    // attached or killed, and a picker that reset each time would be unusable.
+    let newAgent = 'cl';
+    let sandboxEnv = null;
+
+    /** Where a session may run, asked of the backend rather than decided here.
+     *
+     * `launch_env::status_of` is where "configured" is defined; a second
+     * definition in JavaScript would be a second answer, and would call a
+     * `gitvm` entry with no api key ready. When nothing is ready the reason
+     * names EVERY remote environment, the way the Rust refusal does — quoting
+     * only the first would answer "no exe-dev entry" to somebody reaching for
+     * GitVM.
+     */
+    async function loadSandboxEnv() {
+      try {
+        const options = (await invoke('launch_env_options')) || [];
+        const remote = options.filter((o) => o && o.env !== 'local');
+        const ready = remote.find((o) => o.ready);
+        sandboxEnv = ready
+          ? { ready: true, env: ready.env, detail: `${ready.env}: ${ready.detail}` }
+          : {
+            ready: false,
+            detail: remote.length
+              ? remote.map((o) => `${o.env}: ${o.detail}`).join(' · ')
+              : 'no sandbox environment is configured',
+          };
+      } catch (e) {
+        console.warn('[obs] launch_env_options:', e);
+        sandboxEnv = { ready: false, detail: String(e) };
+      }
+      return sandboxEnv;
+    }
+
     async function renderSessions() {
       const band = pane.querySelector('[data-sessions]'); if (!band) return;
+      if (!sandboxEnv) await loadSandboxEnv();
       const sel = band.querySelector('[data-sess-project]');
       const list = band.querySelector('[data-sess-list]');
       const count = band.querySelector('[data-sess-count]');
@@ -674,35 +727,60 @@
         list.innerHTML = '<div class="obs-empty">No projects yet, so no project sessions to show.</div>';
         return;
       }
-      // Same name rule as the grouping below (source 3), so the band and the
-      // table cannot disagree about which sessions are this project's.
-      const tokens = (ctx.projects.find((p) => p.key === project.key) || { tokens: [] }).tokens;
+      // The band and the SIDEBAR now share one rule (session-naming.js,
+      // XNAUT-86), so neither can decide a session belongs to a project the
+      // other does not. `attribute` source 3 below applies the same rule with a
+      // best-match tie-break, because it has to pick one project out of many
+      // rather than answer yes or no about one.
       let sessions = [];
       try {
-        sessions = ((await invoke('zellij_sessions_info')) || []).filter((z) => {
-          const rest = slug(stripAgent(z && z.name));
-          if (rest.length < 3) return false;
-          return tokens.some((t) => t.length >= 3 && (t === rest || t.startsWith(rest) || rest.startsWith(t)));
-        });
+        sessions = ((await invoke('zellij_sessions_info')) || [])
+          .filter((z) => window.xnautSessions.belongsTo(z && z.name, project));
       } catch (_) { /* zellij absent, so fall through to the empty state */ }
+      // Running first, then resurrectable, each newest first: the two answers
+      // to "where do I continue", ranked by how close they are to being one.
+      sessions.sort((a, b) => {
+        if (Boolean(a.exited) !== Boolean(b.exited)) return a.exited ? 1 : -1;
+        return (b.last_active_ms || b.created_ms || 0) - (a.last_active_ms || a.created_ms || 0);
+      });
       const running = sessions.filter((z) => !z.exited).length;
       if (count) count.textContent = sessions.length ? `${running} running · ${sessions.length - running} resumable` : 'none';
 
+      // Which agent a new session starts. Claude Code, Codex or Pi — this used
+      // to be Claude with no way to say otherwise (XNAUT-86).
+      const agents = window.xnautSessions.AGENTS
+        .map((a) => `<option value="${esc(a.key)}"${a.key === newAgent ? ' selected' : ''}>${esc(a.label)}</option>`)
+        .join('');
+      // Rendered and refused rather than hidden, with the reason the backend
+      // itself gives, so the reader learns the option exists AND what would
+      // make it work.
+      const connect = sandboxEnv && sandboxEnv.ready
+        ? '<button class="obs-btn" data-sess-connect title="Open this session in the configured sandbox">Connect to sandbox</button>'
+        : `<button class="obs-btn" data-sess-connect disabled title="${esc((sandboxEnv && sandboxEnv.detail) || 'no sandbox environment is configured')}">Connect to sandbox</button>`;
       const opener = `<div class="obs-sess-new">
+        <select class="obs-select" data-sess-agent aria-label="Agent for a new session">${agents}</select>
         <select class="obs-select" data-sess-provider aria-label="Provider for a new session"><option value="">Default provider</option></select>
         <select class="obs-select" data-sess-model aria-label="Model for a new session"><option value="">Provider default</option></select>
         <button class="obs-btn${sessions.length ? '' : ' primary'}" data-sess-open>${sessions.length ? 'Open another session' : 'Open a new session'}</button>
+        ${connect}
         <span class="obs-hint" data-sess-hint></span></div>`;
       list.innerHTML = (sessions.length
         ? sessions.map((z) => `
           <div class="obs-sess-row">
             <span class="obs-chip zellij">${esc(String(z.name || '').slice(0, 2).toUpperCase())}</span>
             <div class="nm"><span class="t">${esc(z.name)}</span>
-              <span class="s">${esc(agentOf(z.name))} · ${z.exited ? 'exited · resumable' : 'running'}</span></div>
+              <span class="s">${esc(agentOf(z.name))} · ${z.exited
+                // The fact nothing surfaced: `zellij attach` rebuilds the
+                // session from its serialized layout, and that layout carries
+                // the cwd and the exact command, `claude --continue` included.
+                // What comes back is the conversation, not a shell in the
+                // right folder.
+                ? 'exited · Resume restores the conversation, not a shell'
+                : 'running'}</span></div>
             <button class="obs-btn" data-sess-attach="${esc(z.name)}">${z.exited ? 'Resume' : 'Connect'}</button>
             <button class="obs-kill" data-sess-kill="${esc(z.name)}" title="Delete this session">Kill</button>
           </div>`).join('')
-        : '<div class="obs-empty">No session for this project yet.</div>') + opener;
+        : '<div class="obs-empty">No session for this project yet. Opening one always starts it inside zellij, so it outlives the app.</div>') + opener;
 
       list.querySelectorAll('[data-sess-attach]').forEach((b) => {
         b.onclick = () => {
@@ -746,6 +824,7 @@
 
       const openBtn = list.querySelector('[data-sess-open]');
       if (openBtn) {
+        const agentSel = list.querySelector('[data-sess-agent]');
         const provSel = list.querySelector('[data-sess-provider]');
         const modelSel = list.querySelector('[data-sess-model]');
         const hint = list.querySelector('[data-sess-hint]');
@@ -759,23 +838,34 @@
           }).catch(() => {});
         }
         const fillModels = () => {
+          // The provider pair configures Claude Code and nothing else: it sets
+          // ANTHROPIC_* and routes through NautGate. Leaving it live for Codex
+          // or Pi would let somebody pick a model that is never passed on.
+          const claude = agentSel.value === 'cl';
           const cat = window.xnautModelCatalog;
-          const models = (provSel.value && cat && cat.forProvider(provSel.value)) || [];
+          const models = (claude && provSel.value && cat && cat.forProvider(provSel.value)) || [];
           modelSel.innerHTML = '<option value="">Provider default</option>'
             + models.map((m) => {
               const id = typeof m === 'string' ? m : (m.id || m.name || '');
               return id ? `<option value="${esc(id)}">${esc(id)}</option>` : '';
             }).join('');
-          modelSel.disabled = !provSel.value;
-          hint.textContent = provSel.value
-            ? 'Claude Code runs against this provider and model.'
-            : 'Default routes through the NautGate wrapper.';
+          provSel.disabled = !claude;
+          modelSel.disabled = !claude || !provSel.value;
+          const agent = window.xnautSessions.AGENTS.find((a) => a.key === agentSel.value);
+          hint.textContent = !claude
+            ? `${agent ? agent.label : 'This agent'} runs with its own configuration; the provider pair is Claude's.`
+            : provSel.value
+              ? 'Claude Code runs against this provider and model.'
+              : 'Default routes through the NautGate wrapper.';
         };
+        // The choice survives the repaint that follows opening a session:
+        // re-reading zellij is cheap, re-picking an agent is not.
+        agentSel.onchange = () => { newAgent = agentSel.value; fillModels(); };
         provSel.onchange = fillModels;
         fillModels();
         openBtn.onclick = async () => {
           openBtn.disabled = true;
-          try { await openNewSession(project, provSel.value, modelSel.value); }
+          try { await openNewSession(project, agentSel.value, provSel.value, modelSel.value); }
           finally { if (openBtn.isConnected) openBtn.disabled = false; }
           renderSessions();
         };

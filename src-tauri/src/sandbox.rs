@@ -185,6 +185,42 @@ pub mod launch_env {
         ALL.iter().map(|env| status_of(*env, sandboxes)).collect()
     }
 
+    /// `EnvStatus` on the wire, for a surface that offers a choice of where to
+    /// run (XNAUT-86's Connect button).
+    #[derive(Debug, serde::Serialize)]
+    pub struct EnvOption {
+        pub env: String,
+        pub ready: bool,
+        pub detail: String,
+    }
+
+    /// Every launch environment and whether configuration can reach it.
+    ///
+    /// The frontend asks rather than deciding for itself, because `status_of`
+    /// is where "configured" is defined and a second definition in JavaScript
+    /// would be a second answer. In particular a UI that read
+    /// `settings.sandboxes` directly would call a `gitvm` entry with no api key
+    /// ready, and offer a button that can only fail.
+    ///
+    /// `detail` is the sentence the refusal itself would use, so a disabled
+    /// button says exactly what a refused launch would have said.
+    #[tauri::command]
+    pub fn launch_env_options() -> Vec<EnvOption> {
+        env_options(&crate::settings::load_or_default().sandboxes)
+    }
+
+    /// The pure half, so the shape is testable without a settings file.
+    pub fn env_options(sandboxes: &[SandboxProviderSettings]) -> Vec<EnvOption> {
+        survey(sandboxes)
+            .into_iter()
+            .map(|status| EnvOption {
+                env: status.env.key().to_string(),
+                ready: status.ready,
+                detail: status.detail,
+            })
+            .collect()
+    }
+
     /// The single place that answers "where does this run".
     ///
     /// `pinned` is the one deliberate exception the ticket keeps: a profile that
@@ -1487,6 +1523,64 @@ run `gitvm stop` there by hand if it is still up",
                 LaunchEnv::Local.route(&[]),
                 Ok(LaunchRoute::Local)
             ));
+        }
+
+        /// What a surface offering a choice of environment is told (XNAUT-86).
+        ///
+        /// The UI must not decide "configured" for itself — a `gitvm` entry
+        /// with no api key looks configured from JavaScript and is not — so it
+        /// asks, and what it gets back has to carry the REASON as well as the
+        /// verdict. A disabled Connect button that cannot say why is the
+        /// fabricated-state failure XNAUT-87 spent a ticket removing.
+        #[test]
+        fn the_launch_options_carry_the_verdict_and_the_reason() {
+            let options = env_options(&[]);
+            assert_eq!(options.len(), ALL.len(), "every environment is offered");
+
+            let local = options.iter().find(|o| o.env == "local").expect("local");
+            assert!(local.ready, "local is always available");
+
+            let gitvm = options.iter().find(|o| o.env == "gitvm").expect("gitvm");
+            assert!(!gitvm.ready);
+            assert!(
+                gitvm.detail.contains("no \"gitvm\" entry in settings.sandboxes"),
+                "the reason has to be actionable, got {:?}",
+                gitvm.detail
+            );
+
+            // Half-configured is NOT ready, and says which half is missing.
+            let keyless = env_options(&[provider("gitvm", None)]);
+            let gitvm = keyless.iter().find(|o| o.env == "gitvm").expect("gitvm");
+            assert!(!gitvm.ready, "a gitvm entry with no key is not reachable");
+            assert!(gitvm.detail.contains("api key"), "{:?}", gitvm.detail);
+
+            let ready = env_options(&[provider("gitvm", Some("k"))]);
+            assert!(ready.iter().find(|o| o.env == "gitvm").expect("gitvm").ready);
+        }
+
+        /// The option list and the launcher cannot disagree: anything reported
+        /// ready has to actually route, and anything not ready has to refuse.
+        /// Two answers to "can I run here" is how a button that works appears
+        /// disabled, or worse.
+        #[test]
+        fn an_option_reported_ready_is_an_option_that_routes() {
+            for sandboxes in [
+                vec![],
+                vec![provider("gitvm", None)],
+                vec![provider("gitvm", Some("k"))],
+                vec![provider("exe-dev", None), provider("gitvm", Some("k"))],
+            ] {
+                for option in env_options(&sandboxes) {
+                    let env = LaunchEnv::from_key(&option.env).expect("a known environment");
+                    assert_eq!(
+                        option.ready,
+                        env.route(&sandboxes).is_ok(),
+                        "{} reported ready={} but routes differently",
+                        option.env,
+                        option.ready
+                    );
+                }
+            }
         }
 
         /// Settings order is the switch: whichever ready provider is listed

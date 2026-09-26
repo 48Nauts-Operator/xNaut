@@ -2,9 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [Unreleased]
+## [1.27.2] - 2026-09-27
+
+### Added
+- The project workspace has a front door. A Projects icon sits first on the rail, and the same project switcher that Delivery had is on the Code tab, so a project opens in one click from either place. (XNAUT-435)
+- A Wiki tab in the Build run pane. A URL bar and the docs page rendered as reading content only, with the pages you opened remembered per project so a reference is one click away next time. (XNAUT-438)
+- The file, diff and git panes in a build root at the slice the agent is working in, so what you see is the codebase the agent sees. (XNAUT-106)
+- A number the workspace header cannot read says why: not a git repository, no checkout on this machine, no commits yet, the ticket store could not be read. A bare dash gave no way to tell a bug from an empty repository. (XNAUT-341)
 
 ### Fixed
+- A sign-off parked on the owner stays on the board. The sweep re-offered every green build every three minutes, the rail replaced the parked card each time and the replacement refused itself on the receipt it had just written; four tickets produced 4,905 receipt commits in one day and no card lived long enough to be answered. A parked job is now reused for the same build, and staleness is judged on scope, not on the revision counter. (XNAUT-431)
 - The browser pane lands on its pane under UI zoom. Since Cmd+/- zoom arrived, every coordinate from getBoundingClientRect was multiplied by the zoom, but WebKit reports those rects in viewport points already, so at 110% the page sat a tenth too far right with a gap on the left and its right edge cut off. The factor is now measured from the root rect, so it is right on either kind of engine. (XNAUT-437)
 - The Code tab's Open in editor button works. It sent an empty working directory, the backend refused, and the refusal was swallowed; the editor now opens in the file's own directory through a login shell and a failure shows as a toast. (XNAUT-434)
 - A keychain secret longer than 128 characters is stored whole. The store typed the value into `security`'s password prompt, which keeps 128 bytes; a 1155-character Securosys JWT came back cut twice and the HSM refused it. The value now goes to `security -i` as one command on stdin, off the process list, and the item is read back before the store reports success. (XNAUT-433)

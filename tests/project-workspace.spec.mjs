@@ -578,10 +578,11 @@ test('no folded surface carries the panel project selector, rail or tab row', as
   // The three pieces of the Projects panel's own chrome. Removed rather than
   // hidden, so counting them is the assertion: a CSS-hidden copy still counts.
   //
-  // NOT asserted here, and it is the one that remains: the Delivery tab brings
-  // its own project dropdown (delivery-panel.js:496, `.dlv-proj-select`), which
-  // is that panel's file and not this ticket's.
-  const CHROME = ['.pmw-project-select', '.pmw-rail', '.pmw-project-nav'];
+  // The fourth was the Delivery tab's own project dropdown, which survived
+  // XNAUT-342 because it lives in delivery-panel.js. XNAUT-435 switches it off
+  // inside the workspace (`hideProjectSelect`) and puts one switcher above the
+  // tabs for every tab, so a select found INSIDE the body is now a second one.
+  const CHROME = ['.pmw-project-select', '.pmw-rail', '.pmw-project-nav', '.xps-select'];
   const found = [];
 
   // Each surface is also asked to have rendered: absence proves nothing about a
@@ -591,7 +592,7 @@ test('no folded surface carries the panel project selector, rail or tab row', as
     await page.waitForTimeout(400);
     if (!(await page.locator('.wsp-surface').innerText()).trim()) found.push(`${tab}: rendered nothing`);
     for (const selector of CHROME) {
-      if (await page.locator(`.wsp ${selector}`).count()) found.push(`${tab}: ${selector}`);
+      if (await page.locator(`.wsp-body ${selector}`).count()) found.push(`${tab}: ${selector}`);
     }
   }
   for (const [key, label] of MENU) {
@@ -600,11 +601,90 @@ test('no folded surface carries the panel project selector, rail or tab row', as
     await page.waitForTimeout(400);
     if (!(await page.locator('.wsp-sheet-body').innerText()).trim()) found.push(`${label}: rendered nothing`);
     for (const selector of CHROME) {
-      if (await page.locator(`.wsp ${selector}`).count()) found.push(`${label}: ${selector}`);
+      if (await page.locator(`.wsp-body ${selector}`).count()) found.push(`${label}: ${selector}`);
     }
   }
 
   expect(found, `a second project selector survived in:\n  ${found.join('\n  ')}`).toEqual([]);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// XNAUT-435: the workspace's project switcher.
+//
+// XNAUT-342 removed the project dropdown on the grounds that the sidebar tree is
+// the selector. The Sessions list can take that tree's place, and then there is
+// no selector at all — which is how the workspace ended up with no front door
+// and no way across. André, 2026-09-22, on the Delivery tab: "This dropdown has
+// to be on the code tab too. Same dropdown."
+//
+// The failure this guards is quiet in the usual way: a select that renders and
+// changes nothing looks exactly like one that works. So the assertions are about
+// what the switch DID — the header repainted, the tab survived, the tree re-rooted
+// — and not about the control existing.
+const switcher = (page) => page.locator('.wsp-projbar .xps-select');
+
+test('the project switcher lists every project with the open one selected', async ({ page }) => {
+  await openWorkspace(page);
+
+  await expect(switcher(page)).toBeVisible();
+  await expect(switcher(page)).toHaveValue('SMOKE');
+  // The list is the projects the app knows, named the way the sidebar names
+  // them, and nothing else: a switcher that invents an "All" row would switch
+  // the workspace to a project that does not exist.
+  await expect(switcher(page).locator('option')).toHaveText(['Smoke Test', 'No Checkout']);
+});
+
+test('the switcher is on every tab, at the head of the left column', async ({ page }) => {
+  await openWorkspace(page);
+
+  // "At the head of the left column" is a claim about layout, so it is measured
+  // against the file tree rather than asserted about the markup.
+  const bar = await page.locator('.wsp-projbar .xps').boundingBox();
+  const tree = await page.locator('.wsp-tree').boundingBox();
+  expect(bar.x, 'the switcher is not at the workspace left edge').toBeCloseTo(tree.x, 0);
+  expect(bar.width, 'the switcher is not the width of the left column').toBeCloseTo(tree.width, 0);
+  expect(bar.y + bar.height, 'the switcher is not above the file tree').toBeLessThanOrEqual(tree.y + 1);
+
+  // Every tab, because on all but Code this is the ONLY way to change project:
+  // the Delivery tab's own select is gone and the sidebar tree may be covered.
+  for (const tab of ['work', 'delivery', 'nautflow', 'vault', 'memory', 'code']) {
+    await page.locator(`.wsp-tabs button[data-wsp-tab="${tab}"]`).click();
+    await page.waitForTimeout(300);
+    await expect(switcher(page), `the switcher is missing on the ${tab} tab`).toBeVisible();
+  }
+});
+
+test('switching project keeps the tab, repaints the header and re-roots the tree', async ({ page }) => {
+  await openWorkspace(page);
+
+  // On Work, because "a person on Work stays on Work" is the requirement and
+  // switching from Code could pass by accident: Code is the default.
+  await page.locator('.wsp-tabs button[data-wsp-tab="work"]').click();
+  await expect(page.locator('.wsp-tabs button[data-wsp-tab="work"]')).toHaveClass(/active/);
+
+  await switcher(page).selectOption('NOSRC');
+
+  await expect(page.locator('.wsp-name')).toHaveText('No Checkout');
+  await expect(page.locator('.wsp-tabs button[data-wsp-tab="work"]'),
+    'switching project threw the reader back to Code').toHaveClass(/active/);
+  await expect(switcher(page)).toHaveValue('NOSRC');
+
+  // The Code tab follows the switch rather than keeping the previous project's
+  // checkout: NOSRC has no source path, and the tree has to say so.
+  await page.locator('.wsp-tabs button[data-wsp-tab="code"]').click();
+  await expect(page.locator('.wsp-tree')).toContainText('no source path');
+  await expect(page.locator('.wsp-row')).toHaveCount(0);
+});
+
+test('Cmd+P reaches the switcher from anywhere in the workspace', async ({ page }) => {
+  await openWorkspace(page);
+
+  // Focus starts somewhere else entirely, which is the case the shortcut is
+  // for: a reader deep in a file who wants another project.
+  await page.locator('.wsp-row[data-file="/tmp/smoke/README.md"]').click();
+  await page.keyboard.press('ControlOrMeta+p');
+
+  await expect(switcher(page)).toBeFocused();
 });
 
 test('NAUT-Flow puts its stages in the left column and its detail in the centre', async ({ page }) => {

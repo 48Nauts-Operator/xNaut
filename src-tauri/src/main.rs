@@ -115,6 +115,7 @@ mod delivery;
 mod vault_tools;
 mod worklog;
 mod worklog_sources;
+mod wiki;
 mod workspace;
 mod writer_lease;
 mod worktree;
@@ -478,6 +479,8 @@ async fn main() {
             zellij::zellij_prune_exited,
             zellij::zellij_sessions_info,
             zellij::zellij_open_command,
+            // Where a session can be opened, and why not (XNAUT-86).
+            sandbox::launch_env::launch_env_options,
             // Tasks Mode v1.6 — text search (rg + git-grep fallback)
             search::search_text,
             // Tasks Mode v1.6 — git pane
@@ -596,6 +599,12 @@ async fn main() {
             vault::vault_tree,
             workspace::workspace_agentic_items,
             workspace::workspace_sessions,
+            wiki::wiki_fetch,
+            wiki::wiki_slug,
+            wiki::wiki_collection_read,
+            wiki::wiki_collection_record,
+            wiki::wiki_collection_pin,
+            wiki::wiki_collection_forget,
             nautloom::looms_list,
             nautloom::loom_read,
             nautloom::loom_write,

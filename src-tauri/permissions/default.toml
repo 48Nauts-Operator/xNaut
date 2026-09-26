@@ -445,12 +445,21 @@ commands.allow = ["looms_list", "loom_read", "loom_write", "looms_seed_defaults"
   "shared_notes_link",
   "shared_notes_list",
   "zellij_delete_session", "zellij_prune_exited", "zellij_scroll_to_bottom",
-  "zellij_sessions_info", "zellij_open_command", "loom_report", "loom_ship", "loom_sandbox_stats"]
+  "zellij_sessions_info", "zellij_open_command", "launch_env_options",
+  "loom_report", "loom_ship", "loom_sandbox_stats"]
 
 [[permission]]
 identifier = "allow-workspace"
 description = "Allow Workspace capture + session-discovery commands"
 commands.allow = ["workspace_agentic_items", "workspace_sessions"]
+
+[[permission]]
+identifier = "allow-wiki"
+description = "Allow the Wiki tab to fetch a docs page and keep its per-project collection"
+commands.allow = [
+  "wiki_fetch", "wiki_slug", "wiki_collection_read",
+  "wiki_collection_record", "wiki_collection_pin", "wiki_collection_forget",
+]
 
 [[set]]
 identifier = "allow-all-commands"
@@ -475,6 +484,7 @@ permissions = [
   "allow-vault",
   "allow-nautloom",
   "allow-workspace",
+  "allow-wiki",
   "allow-agent-profiles",
   "allow-loops",
   "allow-tasks-mode",

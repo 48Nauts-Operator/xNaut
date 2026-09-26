@@ -13,6 +13,11 @@
 // because that is the name axui presses and the name the enumerator records.
 
 export const SMOKED = [
+  // The workspace's front door (XNAUT-435). It is the sidebar rail's own
+  // "Projects", not the top bar's "Open Projects (tasks & plan)" below, and not
+  // the More menu's "Manage projects" — which is named that way precisely so
+  // this name stays unambiguous.
+  'Projects',
   'Toggle projects sidebar', 'Toggle project pane', 'Command snippets',
   'Open new browser tab', 'Open new markdown tab', 'Open new diff tab',
   'Open project workspace', 'Open worktree manager', 'More actions',

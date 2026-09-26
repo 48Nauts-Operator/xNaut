@@ -91,6 +91,11 @@
   // ---------- icons ----------
   const SVG_ATTRS = 'viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
   const ICONS = {
+    // Two stacked cards: the projects, and the one on top is the one that
+    // opens. Not the `folder` glyph below, which is already the mark on every
+    // row of the tree — a rail icon that repeats a row icon says "a folder"
+    // rather than "all of them".
+    projects: `<svg ${SVG_ATTRS}><rect x="2" y="5.5" width="9" height="8" rx="1.2"/><path d="M5 5.5V3.7a1.2 1.2 0 0 1 1.2-1.2H13a1 1 0 0 1 1 1v6.8"/></svg>`,
     sessions: `<svg ${SVG_ATTRS}><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5l2 1.5-2 1.5M8 9.5h3"/></svg>`,
     search: `<svg ${SVG_ATTRS}><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>`,
     // Three nodes and the edges between them: the mesh, not a mailbox. The
@@ -112,10 +117,19 @@
     close: `<svg ${SVG_ATTRS}><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>`,
   };
 
-  // The rail. Five icons, no labels, because these five are the only surfaces
-  // that are not about one project: search, the Mesh, automations, the
-  // observatory, and what is waiting on you.
+  // The rail. Icons, no labels. Five of them are the surfaces that are not
+  // about one project: search, the Mesh, automations, the observatory, and what
+  // is waiting on you.
+  //
+  // Projects is the sixth and it is not one of those — it is the front door
+  // (XNAUT-435). Until this entry existed the workspace had no icon, no menu
+  // entry and no command that opened it: the only way in was to click a file in
+  // the file system and let it open the workspace sideways. André, 2026-09-22
+  // on 1.27.1: "the way I got there is not natural". It is first in the rail
+  // because it is the one an owner presses most, and because a front door at
+  // the end of a corridor is not a front door.
   const RAIL_ITEMS = [
+    { key: 'projects', label: 'Projects', frontDoor: true },
     // Order is André's (2026-09-15): what he checks first sits first.
     { key: 'observatory', label: 'Observatory' },
     // No dedicated Inbox SURFACE exists: open asks and approvals live in the
@@ -521,6 +535,10 @@
     // whose switch would warn on an unknown key. The typeof guard is the
     // point: an unassigned window.* is a silent no-op, not a crash.
     function openItem(item) {
+      // The front door is handled by key rather than by an `open` on the item,
+      // because RAIL_ITEMS is built at module scope and what this has to open
+      // lives in this closure: the collapse state, the scope, and the entries.
+      if (item.frontDoor) return openFrontDoor();
       if (typeof item.open === 'function') return item.open();
       if (item.global) {
         if (typeof window[item.global] === 'function') return window[item.global]();
@@ -830,6 +848,52 @@
       localStorage.setItem(PROJECTS_COLLAPSE_KEY, projectsCollapsed ? '1' : '0');
       applyProjectsCollapsed(projectsCollapsed);
     });
+    // The front door (XNAUT-435). Pressing Projects in the rail has to leave
+    // the owner looking at a project's Code tab, and it has to do that from
+    // whatever the sidebar happens to be showing — collapsed to its 52px strip,
+    // with the Projects section folded, or with a submenu over the tree.
+    //
+    // So it does three things, in this order: put the tree back on screen, then
+    // open the workspace for the project already in scope, falling back to the
+    // first project in the list. The fallback is the whole point on a fresh
+    // launch, when nothing is in scope: without it the press would reveal a
+    // tree and open nothing, and the second click would be the first.
+    //
+    // That is the two clicks in the acceptance: rail, then a project row.
+    function openFrontDoor() {
+      // `closeSubmenu` is declared further down this same closure; it is read
+      // when the icon is pressed, which is long after createSidebar has run.
+      if (!submenu.hidden) closeSubmenu();
+      if (root.dataset.collapsed === '1') applyMasterCollapsed(false);
+      if (projectsCollapsed) {
+        projectsCollapsed = false;
+        try { localStorage.setItem(PROJECTS_COLLAPSE_KEY, '0'); } catch (_) { /* quota; the fold is just not remembered */ }
+        applyProjectsCollapsed(false);
+      }
+      // Assigned in workspace.js; an unassigned global here would be a silent
+      // no-op and the rail's newest icon would look dead, which is the exact
+      // failure this entry exists to fix.
+      if (typeof window.xnautOpenWorkspace !== 'function') {
+        console.error('[sidebar] xnautOpenWorkspace is not loaded, so the Projects rail cannot open a workspace');
+        return undefined;
+      }
+      const scoped = state.scope && state.scope.project;
+      const hidden = window.xnautHiddenProjects.list('sidebar');
+      const first = buildEntries().find((entry) => entry.projectKey && !hidden.includes(entry.id));
+      const key = scoped || (first && first.projectKey);
+      if (!key) {
+        // No project on this machine yet. Say so where the tree says it, rather
+        // than opening an empty workspace that blames the project for it.
+        if (typeof window.xnautToast === 'function') window.xnautToast('No projects yet — add one to open a workspace');
+        return undefined;
+      }
+      return window.xnautOpenWorkspace({
+        project: key,
+        worktree: (scoped && state.scope.worktree) || '',
+        tab: 'code',
+      });
+    }
+
     state.onlyPinned = localStorage.getItem(ONLY_PINNED_KEY) === '1';
     function setOnlyPinned(on) {
       state.onlyPinned = !!on;
@@ -1722,11 +1786,14 @@
     }
 
     // Sessions are named <agent>-<project> by the shell wrappers: cl-Bucky and
-    // cx-Bucky both belong to Bucky. Zellij truncates long names (cl-nautflow-
-    // incident-loo), so the project side is matched as a prefix.
+    // cx-Bucky both belong to Bucky. The rule itself lives in session-naming.js
+    // (XNAUT-86) — this used to hold a third copy of it, and that copy compared
+    // raw strings, so `cl-bucky` (the name every session xNAUT opens actually
+    // gets, because zellij::session_name lowercases) never matched the project
+    // Bucky. The row showed no live dot and would not attach.
     function sessionsFor(task) {
-      const name = String(task.name || task.id || '');
-      if (!name) return [];
+      const rule = window.xnautSessions;
+      if (!rule) { console.error('[sidebar] session-naming.js did not load'); return []; }
       return (state.sessions || []).filter((s) => {
         // zellij keeps EXITED sessions listed as "attach to resurrect", and
         // zellij_sessions_info reports them with exited: true. A row that
@@ -1734,10 +1801,7 @@
         // is exactly what this list is for. Killing NautGate in zellij left it
         // in the sidebar until this filter existed (2026-08-18).
         if (s.exited) return false;
-        const m = /^([a-z]{2,4})-(.+)$/.exec(String(s.name || ''));
-        if (!m) return false;
-        const proj = m[2];
-        return name === proj || name.startsWith(proj) || proj.startsWith(name);
+        return rule.belongsTo(s.name, task);
       });
     }
 

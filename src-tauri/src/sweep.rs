@@ -166,6 +166,29 @@ impl Announced {
     }
 }
 
+/// One green record per ticket: the newest. Every verify leaves a record, and
+/// offering all of them for sign-off opened one job per record per tick for
+/// the older ones, whose commit no longer matched the tree (XNAUT-431: 86 had
+/// three green records and gained two jobs and two receipts every three
+/// minutes). A superseded verify is history, not a second question.
+pub(crate) fn newest_green(
+    records: &[crate::sandbox_verify::VerifyRecord],
+) -> Vec<&crate::sandbox_verify::VerifyRecord> {
+    let mut newest: std::collections::HashMap<&str, &crate::sandbox_verify::VerifyRecord> =
+        std::collections::HashMap::new();
+    for r in records.iter().filter(|r| r.status == "passed" && !r.not_evidence) {
+        let keep = newest
+            .get(r.ticket_id.as_str())
+            .is_none_or(|have| r.updated_at > have.updated_at);
+        if keep {
+            newest.insert(r.ticket_id.as_str(), r);
+        }
+    }
+    let mut out: Vec<_> = newest.into_values().collect();
+    out.sort_by(|a, b| a.ticket_id.cmp(&b.ticket_id));
+    out
+}
+
 /// Statuses that mean "a human or an agent finished something and it needs
 /// checking". `review` and `done` are the same claim from an agent's side
 /// (project_management.rs makes both hand back to NautBot).
@@ -305,7 +328,7 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(e)=crate::jury_runtime::reconcile(Some(&jury_app),&jury_repo,&jury_registry,&jury_root) { eprintln!("jury reconcile: {e}"); }
     });
-    for record in records.iter().filter(|r|r.status=="passed" && !r.not_evidence) {
+    for record in newest_green(&records) {
         // A record with no commit is not reviewable: there is nothing to diff
         // and no evidence rule to apply. Records from before the registry
         // carry `commit_sha: null`, and scheduling on one produced
@@ -1576,6 +1599,23 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn only_the_newest_green_record_per_ticket_is_offered_for_signoff() {
+        // XNAUT-431: three green verifies of one ticket are one question.
+        let records = vec![
+            record("XNAUT-86", "passed", "2026-09-22T18:00:00Z"),
+            record("XNAUT-86", "passed", "2026-09-25T10:00:00Z"),
+            record("XNAUT-86", "failed", "2026-09-25T11:00:00Z"),
+            record("XNAUT-86", "passed", "2026-09-22T19:00:00Z"),
+            record("XNAUT-90", "passed", "2026-09-01T00:00:00Z"),
+        ];
+        let offered = newest_green(&records);
+        assert_eq!(offered.len(), 2);
+        assert_eq!(offered[0].ticket_id, "XNAUT-86");
+        assert_eq!(offered[0].updated_at, "2026-09-25T10:00:00Z");
+        assert_eq!(offered[1].ticket_id, "XNAUT-90");
     }
 
     fn record(ticket: &str, status: &str, updated: &str) -> crate::sandbox_verify::VerifyRecord {
