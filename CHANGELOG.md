@@ -2,7 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.27.2] - 2026-09-27
+## [1.27.2] - 2026-09-28
 
 ### Added
 - The project page has a Sessions band: the sessions running in a project are listed on it, and Open a new session starts one there. (XNAUT-86)
