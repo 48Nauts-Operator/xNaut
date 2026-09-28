@@ -27,10 +27,28 @@
     overlay.setAttribute('aria-label', 'Voice conversation');
     overlay.innerHTML = '<strong data-live-destination></strong>'
       + '<div class="voice-orb" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>'
-      + '<span data-live-status role="status" aria-live="polite"></span>'
+      + '<span data-live-status role="status" aria-label="Voice activity" aria-live="polite"></span>'
+      + '<span data-live-mic-status role="status" aria-label="Microphone status" aria-live="polite"></span>'
       + '<p data-live-caption aria-live="polite"></p>'
       + '<small data-live-policy></small>'
-      + '<div><button type="button" data-live-end>End voice</button></div>';
+      + '<div><button type="button" data-live-mute aria-pressed="false">Mute microphone</button> '
+      + '<button type="button" data-live-end>End voice</button></div>';
+    overlay.querySelector('[data-live-mute]').onclick = async () => {
+      const session = active;
+      if (!session || session.muting) return;
+      session.muting = true;
+      session.muteError = '';
+      render('Listening — just talk');
+      try {
+        const muted = await invoke('voice_live_mute', { sessionId: session.id, muted: !session.muted });
+        if (typeof muted !== 'boolean') throw new Error('The microphone did not confirm the change.');
+        session.muted = muted;
+      } catch (error) { session.muteError = `Microphone unchanged: ${String(error?.message || error)}`; }
+      finally {
+        session.muting = false;
+        if (active === session) render('Listening — just talk');
+      }
+    };
     overlay.querySelector('[data-live-end]').onclick = () => {
       void teardown('Start a voice conversation');
     };
@@ -52,10 +70,17 @@
     // A spoken acknowledgement can overlap the agent request. Keep the
     // pending work visible, matching the chat's Thinking state, until every
     // delegated request settles; playback becomes green after that.
-    overlay.dataset.state = active.working ? 'thinking' : active.speaking ? 'speaking' : 'listening';
+    overlay.dataset.state = active.working ? 'thinking' : active.speaking ? 'speaking' : active.muted ? 'muted' : 'listening';
+    const mute = overlay.querySelector('[data-live-mute]');
+    mute.textContent = active.muted ? 'Unmute microphone' : 'Mute microphone';
+    mute.setAttribute('aria-pressed', String(active.muted));
+    mute.disabled = active.muting;
+    overlay.querySelector('[data-live-mic-status]').textContent = active.muteError
+      || (active.muted ? 'Microphone muted — replies can still play' : '');
     overlay.querySelector('[data-live-destination]').textContent = active.label;
     overlay.querySelector('[data-live-status]').textContent = active.working ? 'Thinking…'
       : active.speaking ? 'Speaking…'
+      : active.muted ? 'Microphone muted'
       : active.silent && state === 'Listening — just talk'
         ? 'Transcribing — nothing is sent until you press Send' : state;
     overlay.querySelector('[data-live-policy]').textContent = active.silent
@@ -258,6 +283,7 @@
         id, button, overlay, label: surface.label,
         caption: '', captionRole: null, restored: false, working: false, pendingTurns: new Set(),
         silent, transcriptStarted: false,
+        muted: false, muting: false, muteError: '',
         speaking: false,
         inline: !!surface.statusHost,
         unlisten: listen(`voice-live://${id}`, (event) => {

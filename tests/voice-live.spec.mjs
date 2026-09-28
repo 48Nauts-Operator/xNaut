@@ -167,7 +167,7 @@ test('talking over a reply clears the caption and says so', async ({ page }) => 
   await page.evaluate(() => window.emitLive({ kind: 'caption', turn: 0, role: 'assistant', text: 'Let me check that for you' }));
   await expect(page.locator('[data-live-caption]')).toContainText('Let me check that');
   await page.evaluate(() => window.emitLive({ kind: 'interrupted', generation: 1 }));
-  await expect(page.getByRole('status')).toContainText('Stopped');
+  await expect(page.getByRole('status', { name: 'Voice activity' })).toContainText('Stopped');
   await expect(page.locator('[data-live-caption]')).toBeHidden();
 });
 
@@ -424,4 +424,43 @@ test('switching STS to STT closes the old stream and ignores its late events', a
   await expect(page.locator('.chatp-input')).toHaveValue('new draft');
   expect(await page.evaluate(() => window.calls.filter(c => c.name === 'chat_send_tools').length)).toBe(0);
   expect(await page.evaluate(() => window.calls.filter(c => c.name === 'voice_live_close').length)).toBe(1);
+});
+
+test('mute is acknowledged by the backend, keeps playback/session open and can be reversed', async ({ page }) => {
+  await boot(page);
+  await start(page);
+  await page.evaluate(() => {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = (name, args) => name === 'voice_live_mute'
+      ? new Promise(resolve => { window.confirmMute = () => resolve(args.muted); }) : invoke(name, args);
+  });
+  const mute = page.getByRole('button', { name: 'Mute microphone', exact: true });
+  await mute.click();
+  await expect(mute).toBeDisabled();
+  await expect(mute).toHaveAttribute('aria-pressed', 'false');
+  await page.evaluate(() => window.confirmMute());
+  const unmute = page.getByRole('button', { name: 'Unmute microphone', exact: true });
+  await expect(unmute).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.voice-live-overlay')).toHaveAttribute('data-state', 'muted');
+  await page.evaluate(() => window.emitLive({ kind: 'playback', speaking: true }));
+  await expect(page.locator('.voice-live-overlay')).toHaveAttribute('data-state', 'speaking');
+  await expect(page.locator('[data-live-mic-status]')).toContainText('Microphone muted');
+  await unmute.click();
+  await page.evaluate(() => window.confirmMute());
+  await expect(mute).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => window.calls.filter(c => c.name === 'voice_live_open').length)).toBe(1);
+  expect(await page.evaluate(() => window.calls.some(c => c.name === 'voice_live_close'))).toBe(false);
+});
+
+test('a rejected mute never falsely claims the microphone is muted', async ({ page }) => {
+  await boot(page);
+  await start(page);
+  await page.evaluate(() => {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = (name, args) => name === 'voice_live_mute'
+      ? Promise.reject(new Error('Session is unavailable')) : invoke(name, args);
+  });
+  await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
+  await expect(page.locator('[data-live-mic-status]')).toContainText('Microphone unchanged: Session is unavailable');
+  await expect(page.getByRole('button', { name: 'Mute microphone', exact: true })).toHaveAttribute('aria-pressed', 'false');
 });

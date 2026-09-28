@@ -209,3 +209,34 @@ Mesh navigation before creating its test Chat.
 The explicit real-account probe through the new Settings test command passed
 (session accepted in 1.22 seconds). It did not change the saved key or send
 microphone audio. Modified JavaScript lint, syntax and diff checks passed.
+
+## Microphone mute and recording-safe delivery
+
+Owner requested a mute button to talk to other people without transmitting that
+speech. Added **Mute microphone / Unmute microphone** in the shared voice pane
+for STS and STT. It keeps the conversation and speaker playback active. UI
+shows muted only after native acknowledgement, keeps that indication while
+replies play, and shows command failures without falsely claiming silence.
+
+The native mute fence blocks capture from entering the pipeline and rejects
+queued frames at both framing and WebSocket dispatch. Every mute/unmute cycle
+changes an epoch, so previously queued audio cannot be replayed on unmute.
+The microphone device remains allocated; this is an input transmission mute.
+Previously transmitted audio cannot be recalled.
+
+Owner is recording a video: do not quit, reload, restart, replace or launch over
+the recording app. Stopped the pending Settings bundle build when instructed.
+Owner subsequently requested all changes and a new bundle for a later test.
+Package as a separate **xNAUT Voice Preview.app**, retaining the test bundle
+identifier for saved conversation continuity. Do not auto-launch it.
+
+Targeted native mute-fence tests passed, as did full native cargo check. The
+full shared voice/Agent Space/Settings browser suite passed 62 tests across
+Chromium and WebKit, including confirmed mute, unmute, continuing playback and
+error handling. Final native tests and preview packaging are recorded below
+when complete.
+
+Final native voice run: **91 passed, 1 opt-in account test ignored**. Full
+Chromium/WebKit UI run: **62 passed**. The account probe had already passed
+through the Settings command before the mute change. Manual checklist:
+`planning/voice-preview-acceptance.md`.

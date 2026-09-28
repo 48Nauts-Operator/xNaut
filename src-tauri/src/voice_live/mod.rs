@@ -22,6 +22,7 @@
 
 mod context;
 mod gate;
+mod microphone;
 mod protocol;
 pub mod settings;
 pub(crate) mod session;
@@ -153,7 +154,8 @@ pub struct Handle {
     id: String,
     window: String,
     session: Arc<Mutex<LiveSession>>,
-    outbound: mpsc::UnboundedSender<ClientEvent>,
+    outbound: mpsc::UnboundedSender<Outbound>,
+    microphone: Arc<microphone::MicrophoneGate>,
     closed: Arc<AtomicBool>,
     /// Current playback fence. The renderer's cancellation closure compares
     /// against it in the audio callback, so a stale frame is dropped at the
@@ -162,6 +164,11 @@ pub struct Handle {
     /// The speaker, opened lazily and rebuilt after every interruption so one
     /// generation's audio can never be mixed into the next one's.
     renderer: Renderer,
+}
+
+enum Outbound {
+    Event(ClientEvent),
+    Microphone { epoch: u64, pcm: Vec<u8> },
 }
 
 type Renderer = Arc<Mutex<Option<(u64, crate::voice_local::playback::Playback)>>>;
@@ -231,7 +238,7 @@ async fn attach(
     config: &Config,
 ) -> Result<Arc<Handle>, String> {
     let (mut sink, mut stream) = connect(config).await?.split();
-    let (outbound, mut pending) = mpsc::unbounded_channel::<ClientEvent>();
+    let (outbound, mut pending) = mpsc::unbounded_channel::<Outbound>();
     let closed = Arc::new(AtomicBool::new(false));
     // A fresh transport starts at fence zero; the session is new too, because
     // a dropped conversation is reopened rather than re-socketed.
@@ -242,6 +249,7 @@ async fn attach(
         window: window_label.to_string(),
         session: session.clone(),
         outbound,
+        microphone: Arc::new(microphone::MicrophoneGate::default()),
         closed: closed.clone(),
         generation,
         renderer: Arc::new(Mutex::new(None)),
@@ -255,11 +263,19 @@ async fn attach(
     // interleave mid-message.
     {
         let closed = closed.clone();
+        let microphone = handle.microphone.clone();
         tauri::async_runtime::spawn(async move {
             while let Some(event) = pending.recv().await {
                 if closed.load(Ordering::Acquire) {
                     break;
                 }
+                let event = match event {
+                    Outbound::Event(event) => event,
+                    Outbound::Microphone { epoch, pcm } => {
+                        if !microphone.accepts(epoch) { continue; }
+                        ClientEvent::InputAudioAppend { pcm }
+                    }
+                };
                 if sink
                     .send(Message::Text(event.to_json().to_string()))
                     .await
@@ -457,6 +473,19 @@ pub async fn voice_live_result(
     Ok(())
 }
 
+/// Mute only microphone input; playback and the conversation remain open.
+#[tauri::command]
+pub async fn voice_live_mute(
+    window: tauri::Window,
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    muted: bool,
+) -> Result<bool, String> {
+    let handle = owned(state.inner(), window.label(), &session_id).await?;
+    handle.microphone.set_muted(muted);
+    Ok(muted)
+}
+
 /// Typed input during a voice conversation.
 #[tauri::command]
 pub async fn voice_live_text(
@@ -552,7 +581,7 @@ fn emit(app: &tauri::AppHandle, handle: &Arc<Handle>, event: LiveEvent) {
 async fn perform(app: &tauri::AppHandle, handle: &Arc<Handle>, action: SessionAction) {
     match action {
         SessionAction::Send(event) => {
-            let _ = handle.outbound.send(event);
+            let _ = handle.outbound.send(Outbound::Event(event));
         }
         SessionAction::Play { generation, pcm } => {
             play(handle, generation, pcm).await;
@@ -622,9 +651,10 @@ async fn stop_playback(handle: &Arc<Handle>) {
 /// Streams the microphone into the session: resampled to the negotiated rate,
 /// levelled for the barge-in heuristic, framed and sent.
 fn spawn_capture(app: tauri::AppHandle, handle: Arc<Handle>) -> Result<(), String> {
-    let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<(Vec<i16>, f64)>();
+    let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<(u64, Vec<i16>, f64)>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let closed = handle.closed.clone();
+    let microphone = handle.microphone.clone();
 
     std::thread::spawn(move || {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -646,9 +676,10 @@ fn spawn_capture(app: tauri::AppHandle, handle: Arc<Handle>) -> Result<(), Strin
                 cpal::SampleFormat::F32 => device.build_input_stream(
                     &config.into(),
                     move |data: &[f32], _: &_| {
+                        let Some(epoch) = microphone.capture_epoch() else { return; };
                         let pcm: Vec<i16> =
                             data.iter().map(|s| (s * i16::MAX as f32) as i16).collect();
-                        let _ = sink.send((resample(&pcm, rate, channels), level(&pcm)));
+                        let _ = sink.send((epoch, resample(&pcm, rate, channels), level(&pcm)));
                     },
                     err_fn,
                     None,
@@ -656,7 +687,8 @@ fn spawn_capture(app: tauri::AppHandle, handle: Arc<Handle>) -> Result<(), Strin
                 cpal::SampleFormat::I16 => device.build_input_stream(
                     &config.into(),
                     move |data: &[i16], _: &_| {
-                        let _ = sink.send((resample(data, rate, channels), level(data)));
+                        let Some(epoch) = microphone.capture_epoch() else { return; };
+                        let _ = sink.send((epoch, resample(data, rate, channels), level(data)));
                     },
                     err_fn,
                     None,
@@ -691,10 +723,17 @@ fn spawn_capture(app: tauri::AppHandle, handle: Arc<Handle>) -> Result<(), Strin
 
     tauri::async_runtime::spawn(async move {
         let mut buffer: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES * 2);
-        while let Some((samples, level)) = frames_rx.recv().await {
+        let mut buffer_epoch = None;
+        while let Some((epoch, samples, level)) = frames_rx.recv().await {
             if handle.is_closed() {
                 break;
             }
+            if !handle.microphone.accepts(epoch) {
+                buffer.clear();
+                buffer_epoch = None;
+                continue;
+            }
+            if buffer_epoch != Some(epoch) { buffer.clear(); buffer_epoch = Some(epoch); }
             // Energy first: stopping playback before the server's transcript
             // arrives is most of what makes barge-in feel immediate.
             let actions = {
@@ -710,7 +749,7 @@ fn spawn_capture(app: tauri::AppHandle, handle: Arc<Handle>) -> Result<(), Strin
                 let pcm = frame.iter().flat_map(|s| s.to_le_bytes()).collect();
                 if handle
                     .outbound
-                    .send(ClientEvent::InputAudioAppend { pcm })
+                    .send(Outbound::Microphone { epoch, pcm })
                     .is_err()
                 {
                     return;

@@ -284,6 +284,7 @@ async fn main() {
             voice_local::voice_local_speak,
             voice_local::voice_local_interrupt,
             voice_live::voice_live_ready,
+            voice_live::voice_live_mute,
             voice_live::settings::voice_live_settings_get,
             voice_live::settings::voice_live_settings_save,
             voice_live::settings::voice_live_settings_test,
