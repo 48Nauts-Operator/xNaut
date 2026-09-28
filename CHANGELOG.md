@@ -2,6 +2,24 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.28.0] - 2026-09-28
+
+### Added
+- Continuous public voice conversations in Chat and Agent Space, following Bucki's conversation pattern: switch the microphone on, speak naturally, interrupt, and continue without a send button for each turn. Your selected agent handles the work. (XNAUT-416)
+- One microphone menu offers STS (speech to speech) and STT (speech to text). STT puts transcription in the draft without sending it automatically.
+- Settings → Voice lets each user save their own API key and model and test the connection. The key stays in the native app's private profile, outside browser storage; cloud voice uses the user's provider account.
+- Mute and unmute the microphone without ending the conversation or stopping playback. Audio captured while muted is not sent or replayed after unmuting.
+- Voice status in the right pane, red while agent work is pending and green while speaking. Spoken captions and full agent replies stay in the conversation, with saved history used when resuming.
+- New Chat is available from the + menu.
+
+### Fixed
+- Voice menu choices work reliably in macOS WebKit, and Agent Space uses the same continuous voice controls as Chat.
+- Agent acknowledgements no longer hide pending work behind a speaking animation.
+- Ticket lookups resolve an exact ticket ID before applying list limits. Provider errors returned as JSON are surfaced instead of appearing as empty agent replies, including a bounded retry for incompatible reasoning settings.
+- Public voice connects over native TLS.
+
+Public voice is v1. A fully private Jarvis voice route remains planned for v2.
+
 ## [1.27.2] - 2026-09-28
 
 ### Added
