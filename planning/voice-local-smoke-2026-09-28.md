@@ -154,3 +154,9 @@ confirmation. All 16 existing Agent Space tests passed; modified Agent Space
 JavaScript lint, app syntax and diff checks passed. Native debug bundle rebuilt
 for the operator. These tests mock the native command boundary; real audio on
 the Agent Space surface still needs hands-on acceptance.
+
+## Color preference update
+
+Owner requested red for thinking and green for speaking. Thinking now uses
+`#ff5c63`; speaking remains `#2de2a8`. This supersedes the blue thinking color
+in earlier entries. No session-state or animation timing changes.
