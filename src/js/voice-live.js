@@ -16,6 +16,10 @@
 
   let active = null;
   let voicePane = null;
+  const refreshControls = new WeakMap();
+  document.addEventListener('xnaut:voice-settings-changed', () => {
+    document.querySelectorAll('.voice-live-button').forEach((button) => { void refreshControls.get(button)?.(); });
+  });
 
   function createOverlay(surface) {
     const overlay = document.createElement('section');
@@ -203,7 +207,9 @@
     button.replaceWith(wrap);
     wrap.append(button, menu);
     const hideMenu = () => { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); };
+    let ready = false;
     button.onclick = () => {
+      if (!ready) { window.xnautOpenVoiceSettings?.(); return; }
       menu.hidden = !menu.hidden;
       button.setAttribute('aria-expanded', String(!menu.hidden));
       menu.querySelector('[data-mode="stop"]').hidden = !active || active.button !== button;
@@ -231,12 +237,14 @@
       } finally { changing = false; button.focus(); }
     };
 
-    // Offer the control only when a profile exists. A button that always fails
-    // on click is worse than one that explains why it is disabled.
-    invoke('voice_live_ready').then((ready) => {
-      button.disabled = !ready;
-      if (!ready) button.title = 'Public voice needs a profile in xnaut/voice-live.json';
-    }).catch(() => { button.disabled = true; });
+    // An unconfigured mic is an entry into setup, not a dead button. Saving
+    // settings refreshes already-open composers without an app restart.
+    const refresh = async () => {
+      try { ready = !!(await invoke('voice_live_ready')); } catch (_) { ready = false; }
+      button.title = ready ? 'Start a voice conversation' : 'Set up public voice in Settings → Voice';
+    };
+    refreshControls.set(button, refresh);
+    void refresh();
 
     async function start(silent) {
       if (active) {

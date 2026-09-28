@@ -2050,6 +2050,13 @@ window.toggleSettingsPanel = function() {
   }
 }
 
+window.xnautOpenVoiceSettings = function () {
+  const panel = document.getElementById('settings-panel');
+  if (!panel) return;
+  panel.style.display = 'flex';
+  loadSettingsSection('voice');
+};
+
 function loadSettingsSection(section) {
   const content = document.getElementById('settings-content');
   if (!content) return;
@@ -2305,6 +2312,7 @@ function loadSettingsSection(section) {
       <button id="btn-manage-triggers" class="btn btn-primary" style="width:100%; margin-top:8px;">Manage Triggers</button>
     `,
     // Tasks Mode v1.6 — body rendered by tasks-mode-glue.js into the host div.
+    voice: () => `<div id="voice-settings-host">Loading…</div>`,
     tasksmode: () => `<div id="tasksmode-settings-host">Loading…</div>`,
     guardrails: () => `<div id="kill-switches-host">Loading…</div><div id="veto-settings-host">Loading…</div>`,
     // The core team's switch, threshold and idle reason (XNAUT-357).
@@ -2420,6 +2428,7 @@ function loadSettingsSection(section) {
   if (section === 'guardrails' && typeof window.xnautRenderKillSwitches === 'function') {
     window.xnautRenderKillSwitches(document.getElementById('kill-switches-host'));
   }
+  if (section === 'voice') window.xnautRenderVoiceSettings?.(document.getElementById('voice-settings-host'));
   if (section === 'tasksmode' && typeof window.xnautRenderTasksModeSettings === 'function') {
     window.xnautRenderTasksModeSettings(document.getElementById('tasksmode-settings-host'));
   }

@@ -23,6 +23,7 @@
 mod context;
 mod gate;
 mod protocol;
+pub mod settings;
 pub(crate) mod session;
 pub(crate) mod turn;
 
@@ -58,9 +59,9 @@ const FRAME_SAMPLES: usize = AUDIO_SAMPLE_RATE as usize * FRAME_MS / 1000;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// Credentials live in their own private file, never in repository-tracked
-/// settings and never in the webview. Same shape and the same permission check
+/// settings. Saved credentials are never returned to the webview. Same shape and the same permission check
 /// as the local-voice profile, for the same reason.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Config {
     /// Omitted in the common case: the public Live endpoint traced from the
     /// reference snapshot. Present when a deployment routes somewhere else.
@@ -95,20 +96,22 @@ impl Config {
         {
             return Err("public voice requires a wss:// endpoint with no embedded credentials".into());
         }
-        if self.api_key.trim().is_empty() || self.api_key.len() > 512 {
+        if self.api_key.trim().is_empty() || self.api_key.len() > 512 || self.api_key.chars().any(char::is_whitespace) {
             return Err("invalid voice API key".into());
+        }
+        if self.model.as_ref().is_some_and(|m| m.trim().is_empty() || m.len() > 128 || m.chars().any(char::is_control)) {
+            return Err("invalid voice model".into());
         }
         Ok(url)
     }
 
     fn load() -> Result<Self, String> {
-        let path = Self::path()?;
-        let metadata = std::fs::metadata(&path).map_err(|_| {
-            format!(
-                "Public voice setup required. Write your endpoint and API key to {} (chmod 600).",
-                path.display()
-            )
-        })?;
+        Self::load_at(&Self::path()?)
+    }
+
+    fn load_at(path: &std::path::Path) -> Result<Self, String> {
+        let metadata = std::fs::metadata(path)
+            .map_err(|_| "Public voice setup required. Add your API key in Settings → Voice.")?;
         if metadata.len() > 4096 {
             return Err("voice profile is too large".into());
         }
@@ -785,38 +788,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires the private voice-live.json profile and a live account"]
     async fn live_account_accepts_session_start_over_tls() {
-        let config = Config::load().expect("private voice profile required");
-        let mut socket = connect(&config).await.expect("native TLS/auth handshake");
-        let start = ClientEvent::SessionStart {
-            model: config
-                .model
-                .clone()
-                .unwrap_or_else(|| protocol::DEFAULT_VOICE_MODEL.into()),
-            instructions: "Connection test only. Do not speak unless asked.".into(),
-        };
-        socket
-            .send(Message::Text(start.to_json().to_string()))
+        settings::voice_live_settings_test()
             .await
-            .unwrap();
-        let accepted = tokio::time::timeout(Duration::from_secs(15), async {
-            while let Some(frame) = socket.next().await {
-                if let Message::Text(text) = frame.expect("voice service frame") {
-                    let value = serde_json::from_str(&text).expect("voice service JSON");
-                    match ServerEvent::decode(&value) {
-                        ServerEvent::SessionStarted => return true,
-                        ServerEvent::Error { .. } | ServerEvent::SessionClosed => return false,
-                        _ => {}
-                    }
-                }
-            }
-            false
-        })
-        .await;
-        let _ = socket.close(None).await;
-        assert!(
-            matches!(accepted, Ok(true)),
-            "service did not accept session.start"
-        );
+            .expect("saved profile must pass the Settings connection test");
     }
 
     fn profile(endpoint: Option<&str>) -> Config {

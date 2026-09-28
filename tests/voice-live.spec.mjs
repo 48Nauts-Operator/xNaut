@@ -271,8 +271,11 @@ test('a pane torn out of the DOM releases its conversation too', async ({ page }
 test('without a voice profile the control explains itself instead of failing on click', async ({ page }) => {
   await boot(page, { ready: false });
   const button = page.getByRole('button', { name: 'Voice conversation with Chat composer' });
-  await expect(button).toBeDisabled();
-  await expect(button).toHaveAttribute('title', /voice-live\.json/);
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveAttribute('title', /Settings → Voice/);
+  await page.evaluate(() => { window.xnautOpenVoiceSettings = () => { window.openedVoiceSettings = true; }; });
+  await button.click();
+  expect(await page.evaluate(() => window.openedVoiceSettings)).toBe(true);
   expect(await page.evaluate(() =>
     window.calls.some(c => c.name === 'voice_live_open'))).toBe(false);
 });

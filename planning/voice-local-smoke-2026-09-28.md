@@ -177,3 +177,35 @@ and red CSS state during acknowledged/pending work, then green on result and
 neutral when audio drains. Also tested overlapping requests. Full public voice
 and Agent Space voice suites passed in Chromium and WebKit: 52/52. These tests
 mock the native audio/agent boundary. Native debug build passed.
+
+## Public voice setup in Settings
+
+Open **More (⋯) → Settings → Voice**. Enter your own OpenAI API key, keep
+`gpt-live-1` or enter a supported voice model, and choose **Save voice settings**.
+**Test connection** checks the saved key/model by opening a short provider
+session without microphone audio; this can incur API usage. It does not modify
+the profile. Changes apply the next time you start STS or STT.
+
+A microphone without configuration opens this Settings section directly. Saving
+refreshes microphones in existing Chat and Agent Space composers without an
+app restart. The form explains that both public STS and STT send audio to the
+provider, separately from the selected agent's execution model.
+
+Storage remains the private native `xnaut/voice-live.json` profile. Save uses an
+atomic same-directory replacement created with mode 0600 on Unix. Existing
+keys are never returned to the webview; the read API exposes only configured
+status and model. A blank key preserves the stored key; a supplied key replaces
+it. Input clears after a successful save, and keys are not put in browser
+localStorage. This is local-file storage, not an OS keychain migration. Existing
+custom endpoints are preserved; ordinary setup uses the default public route.
+
+Verification: 90 deterministic native voice tests passed, including secret
+redaction, file mode, blank-key preservation, replacement and failed-validation
+non-overwrite. 58 WebKit/Chromium UI tests passed, including first-run setup,
+Settings navigation, no-restart microphone activation and visible save/test
+failures. A test startup race was corrected by waiting for the app's initial
+Mesh navigation before creating its test Chat.
+
+The explicit real-account probe through the new Settings test command passed
+(session accepted in 1.22 seconds). It did not change the saved key or send
+microphone audio. Modified JavaScript lint, syntax and diff checks passed.
