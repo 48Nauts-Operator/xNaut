@@ -1475,6 +1475,7 @@
       if (doc && chatText.length > 280) chatText = '';
       const shown = chatText || (doc ? '📝 Updated the plan in the document pane →' : reply);
       renderAssistantMarkdown(entry.liveBody, shown);
+      entry.voiceAdapter?.reply(entry.voiceTurn, shown);
       // Store only the conversation (the doc lives in the pane/file, fed back each turn).
       entry.history.push({ role: 'assistant', content: chatText || '(updated the plan document)' });
       saveChatHistory(entry);
@@ -1482,8 +1483,47 @@
       entry.history.push({ role: 'assistant', content: reply });
       saveChatHistory(entry);
       renderAssistantMarkdown(entry.liveBody, reply);
+      entry.voiceAdapter?.reply(entry.voiceTurn, reply);
       appendLearningAction(entry, row, reply);
     }
+  }
+
+  // XNAUT-416: one delegated voice turn. The user's words are already in
+  // `entry.history` — the backend committed them before it dispatched — so this
+  // runs the same chat_send_tools path a typed turn runs, with this pane's
+  // provider, model, effort and conversation key. That is what keeps voice on
+  // the selected agent and its NautGate route instead of a second client.
+  async function dispatchVoiceTurn(entry, request) {
+    if (window.xnautSyncChatSettingsFromAiSettings) {
+      await window.xnautSyncChatSettingsFromAiSettings().catch(() => false);
+    }
+    const messages = [
+      { role: 'system', content: entry.systemPrompt },
+      {
+        role: 'system',
+        content: 'This turn arrived by voice and will be spoken back. Answer in plain'
+          + ' prose, briefly, with no Markdown, no code blocks and no tool JSON.'
+          + ' Never claim an action succeeded before its result.',
+      },
+    ];
+    // The pane's own history is the record; the session's rendered context is
+    // the same facts, so sending both would say everything twice.
+    messages.push(...entry.history.slice(-30).map((m) => ({ role: m.role, content: m.content })));
+    const payload = {
+      requestId: newRequestId(),
+      chatKey: entry.chatKey || 'default',
+      messages,
+    };
+    if (entry.modelOverride) payload.model = entry.modelOverride;
+    if (entry.providerOverride) payload.provider = entry.providerOverride;
+    if (entry.reasoningEffort) payload.reasoningEffort = entry.reasoningEffort;
+    const reply = String(await invoke('chat_send_tools', payload) || '').trim();
+    // Structured payloads are not speech. Voice turns take the prose answer;
+    // an action envelope is reported rather than read out as JSON.
+    if (/^[{[]/.test(reply)) {
+      throw new Error('That turn produced a tool action rather than a spoken answer. It is shown in the conversation.');
+    }
+    return reply;
   }
 
   async function sendMessage(entry) {
@@ -1491,6 +1531,21 @@
     if (!text || entry.busy) return;
     entry.inputEl.value = '';
     autoGrow(entry.inputEl);
+
+    // A live voice conversation owns this composer: typing is another way to
+    // talk, so the words join the same turn ledger instead of starting a
+    // second, parallel exchange the assistant cannot hear. The backend commits
+    // and dispatches them exactly as it does speech.
+    if (entry.liveVoice?.isActive()) {
+      try {
+        await entry.liveVoice.send(text);
+      } catch (e) {
+        entry.inputEl.value = text;
+        autoGrow(entry.inputEl);
+        console.error('[chat-panel] voice text failed', e);
+      }
+      return;
+    }
 
     // Inline any referenced documents (Obsidian links, absolute .md paths)
     // into the model-facing message; the UI shows the text as typed + chips.
@@ -1538,6 +1593,7 @@
     const requestId = newRequestId();
     entry.activeRequestId = requestId;
     entry.busy = true;
+    entry.voiceTurn = entry.voiceAdapter?.beginTurn(requestId);
     entry.toolRounds = 0;
     entry.expectingVaultAction = entry.vaultTools && latestUserNeedsVaultAction(entry.history);
     entry.sendBtn.disabled = true;
@@ -1555,6 +1611,7 @@
         console.error('[chat-panel] user vault action failed', e);
       } finally {
         entry.busy = false;
+        entry.voiceAdapter?.finishTurn(entry.voiceTurn);
         entry.activeRequestId = null;
         entry.liveRow = null;
         entry.liveBody = null;
@@ -1574,6 +1631,7 @@
         console.error('[chat-panel] attachment import failed', e);
       } finally {
         entry.busy = false;
+        entry.voiceAdapter?.finishTurn(entry.voiceTurn);
         entry.activeRequestId = null;
         entry.liveRow = null;
         entry.liveBody = null;
@@ -1596,6 +1654,7 @@
       console.error('[chat-panel] chat_send failed', e);
     } finally {
       entry.busy = false;
+      entry.voiceAdapter?.finishTurn(entry.voiceTurn);
       entry.activeRequestId = null;
       entry.liveRow = null;
       entry.liveBody = null;
@@ -1860,6 +1919,7 @@
       const next = String(newKey || '').trim();
       if (!next || next === entry.chatKey) return;
       if (entry.busy) return; // don't swap mid-turn
+      entry.voiceAdapter?.end();
       saveChatHistory(entry);
       entry.chatKey = next;
       hydrateFromKey();
@@ -1867,6 +1927,7 @@
 
     // Wipe this conversation (its persisted history included) and start fresh.
     entry.clearChat = () => {
+      entry.voiceAdapter?.end();
       if (entry.busy) return;
       entry.history = [];
       try { localStorage.removeItem(HIST_PREFIX + entry.chatKey); } catch (_) { /* quota/private mode */ }
@@ -1945,6 +2006,50 @@
     // did nothing, forever, with no error. Grep before you call a window.* global.
     window.xnautAttachDictation(entry.dictateBtn, (text) => {
       window.xnautDictationAppend(entry.inputEl, text, autoGrow);
+    }, 'Chat composer');
+    // XNAUT-416 V1: the continuous public route. Started once, it holds the
+    // whole conversation; the push-to-talk adapter below stays for the private
+    // local prototype (V2) and for machines with no public voice profile.
+    // Guarded, but noisily: an undefined global here means voice-live.js did
+    // not load, which is a load-order bug. Losing the button is survivable;
+    // taking the whole composer down with it is not.
+    if (typeof window.xnautAttachLiveVoice !== 'function') {
+      console.error('[chat-panel] voice-live.js is not loaded; voice conversation is unavailable');
+    }
+    entry.liveVoice = window.xnautAttachLiveVoice?.(entry.dictateBtn, {
+      label: 'Chat composer',
+      connected: () => entry.pane.isConnected,
+      binding: () => ({
+        conversationId: entry.chatKey || 'default',
+        agent: 'chat',
+        project: window.xnautGetAgentWorkspaceContext?.()?.project || '',
+        provider: entry.providerOverride || '',
+        model: entry.modelOverride || '',
+        // What this pane may actually do, so the record says which tools the
+        // spoken turn ran under rather than implying the full set.
+        permission: entry.vaultTools ? 'chat+vault' : 'chat',
+      }),
+      // Oldest first. Reopening a saved conversation replays these into the
+      // voice session's backend context; they are never re-executed.
+      history: () => entry.history
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-60)
+        .map((m) => ({ role: m.role, text: String(m.content || '') })),
+      onCommit: (role, text) => {
+        entry.history.push({ role, content: text });
+        saveChatHistory(entry);
+        appendMessage(entry, role, text);
+        scrollToBottom(entry);
+      },
+      dispatch: (request) => dispatchVoiceTurn(entry, request),
+    });
+    entry.voiceAdapter = window.xnautAttachVoiceConversation(entry.dictateBtn, {
+      label: 'Chat composer', connected: () => entry.pane.isConnected,
+      insert: (text) => window.xnautDictationAppend(entry.inputEl, text, autoGrow),
+      submit: () => {
+        if (entry.busy) throw new Error('The agent is busy. Your words are in the composer; send them when ready.');
+        return sendMessage(entry);
+      },
     });
     const closeBtn = bar.querySelector('.chatp-close');
     if (closeBtn) closeBtn.onclick = () => destroyChatPane(label);
@@ -1965,6 +2070,7 @@
   async function destroyChatPane(label) {
     const entry = panes.get(label);
     if (!entry) return;
+    await entry.liveVoice?.end();
     entry.subs.forEach((p) => {
       Promise.resolve(p).then((un) => { try { un(); } catch (_) { /* already gone */ } }).catch(() => {});
     });

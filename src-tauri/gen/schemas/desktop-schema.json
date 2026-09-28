@@ -789,6 +789,18 @@
           "markdownDescription": "Read and try the tool-call policy."
         },
         {
+          "description": "Hold a public continuous voice conversation bound to one xNAUT conversation",
+          "type": "string",
+          "const": "allow-voice-live",
+          "markdownDescription": "Hold a public continuous voice conversation bound to one xNAUT conversation"
+        },
+        {
+          "description": "Connect to the optional local speech service and render scoped audio",
+          "type": "string",
+          "const": "allow-voice-local",
+          "markdownDescription": "Connect to the optional local speech service and render scoped audio"
+        },
+        {
           "description": "Allow checking whether the speech model is downloaded",
           "type": "string",
           "const": "allow-voice-model-ready",

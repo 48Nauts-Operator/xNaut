@@ -36,6 +36,8 @@
     "allow-all-commands",
     "allow-voice-start",
     "allow-voice-stop",
-    "allow-voice-model-ready"
+    "allow-voice-model-ready",
+    "allow-voice-local",
+    "allow-voice-live"
   ]
 }

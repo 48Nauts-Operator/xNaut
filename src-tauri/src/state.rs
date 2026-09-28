@@ -102,6 +102,10 @@ pub struct AppState {
     /// In-flight microphone capture (XNAUT-187). None unless the user is
     /// holding the dictate button.
     pub voice: Arc<Mutex<Option<VoiceCapture>>>,
+    pub local_voice: Arc<Mutex<Option<Arc<crate::voice_local::Session>>>>,
+    /// The open public voice conversation (XNAUT-416). One at a time, because
+    /// there is one microphone; `voice` and `local_voice` share that lease.
+    pub live_voice: Arc<Mutex<Option<Arc<crate::voice_live::Handle>>>>,
 }
 
 /// Handles onto a capture running on its own thread.
@@ -110,10 +114,14 @@ pub struct AppState {
 /// thread owns it and this struct only holds what crosses threads safely.
 /// Dropping `stop` ends the thread, which drops the stream and the device.
 pub struct VoiceCapture {
+    /// Window and opaque capture token prevent another composer/window from
+    /// stopping or consuming an utterance it did not start.
+    pub owner: crate::voice::CaptureOwner,
     pub samples: Arc<std::sync::Mutex<Vec<i16>>>,
     pub sample_rate: u32,
     pub channels: u16,
     pub stop: std::sync::mpsc::Sender<()>,
+    pub thread: std::thread::JoinHandle<()>,
 }
 
 impl AppState {
@@ -129,6 +137,8 @@ impl AppState {
             mobile_taps: Arc::new(Mutex::new(HashMap::new())),
             terminal_scrollback: Arc::new(Mutex::new(HashMap::new())),
             voice: Arc::new(Mutex::new(None)),
+            local_voice: Arc::new(Mutex::new(None)),
+            live_voice: Arc::new(Mutex::new(None)),
         }
     }
 

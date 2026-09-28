@@ -1,0 +1,5 @@
+# Protocol host only. Install the separately managed speech engine environment
+# for real recognition/TTS; no model or conversational LLM dependency here.
+fastapi==0.141.1
+uvicorn==0.53.0
+websockets==17.1
