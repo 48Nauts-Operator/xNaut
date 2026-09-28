@@ -1886,7 +1886,10 @@
 
     if (!opts.hideChat && entry.chat) {
       const inputArea = entry.chat.pane.querySelector('.chatp-input-area');
-      if (inputArea) inputArea.insertBefore(chatControls, entry.chat.dictateBtn || entry.chat.sendBtn);
+      // Live voice wraps the mic and its menu in one control. Insert beside
+      // that wrapper: the mic itself is no longer a direct composer child.
+      const micControl = entry.chat.dictateBtn?.closest('.voice-mic-control') || entry.chat.dictateBtn;
+      if (inputArea) inputArea.insertBefore(chatControls, micControl || entry.chat.sendBtn);
       entry.chat.inputEl.rows = 2;
     }
 
