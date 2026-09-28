@@ -53,6 +53,12 @@ pub struct Playback {
 }
 
 impl Playback {
+    /// True while the device has queued samples to play, not merely an open stream.
+    pub fn is_playing(&self) -> bool {
+        !self.stop.load(Ordering::Acquire) && !(self.cancelled)()
+            && self.pcm.lock().map(|pcm| !pcm.drained()).unwrap_or(false)
+    }
+
     /// `source_rate` is the rate of the PCM that will be pushed, not the
     /// device rate; the renderer resamples between the two.
     pub async fn open(

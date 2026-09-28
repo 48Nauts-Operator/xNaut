@@ -132,6 +132,7 @@ impl Config {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum LiveEvent {
+    Playback { speaking: bool },
     /// Connected and accepted; speech is flowing.
     Ready { restored: bool },
     /// Live transcript ribbon. Presentation only.
@@ -331,6 +332,22 @@ async fn attach(
     }
 
     spawn_capture(app.clone(), handle.clone())?;
+    {
+        let app = app.clone();
+        let handle = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut previous = false;
+            while !handle.is_closed() {
+                let speaking = handle.renderer.lock().await.as_ref()
+                    .is_some_and(|(_, player)| player.is_playing());
+                if speaking != previous {
+                    emit(&app, &handle, LiveEvent::Playback { speaking });
+                    previous = speaking;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+    }
     Ok(handle)
 }
 
@@ -344,6 +361,7 @@ pub async fn voice_live_open(
     session_id: String,
     binding: ExecutionBinding,
     history: Vec<RestoredMessage>,
+    transcription_only: Option<bool>,
 ) -> Result<(), String> {
     uuid::Uuid::parse_str(&session_id).map_err(|_| "invalid voice session ID")?;
     if binding.conversation_id.trim().is_empty() {
@@ -369,6 +387,7 @@ pub async fn voice_live_open(
         .clone()
         .unwrap_or_else(|| protocol::DEFAULT_VOICE_MODEL.to_string());
     let mut live = LiveSession::new(binding, model);
+    live.set_transcription_only(transcription_only.unwrap_or(false));
     let restored: Vec<(Role, String)> = history
         .into_iter()
         .map(|message| (message.role, message.text))

@@ -26,6 +26,14 @@ test.beforeEach(async ({ page }) => {
   }
   await page.evaluate(async () => {
     window.chatEntry = await window.xnautCreateChatPane('test', document.querySelector('#chat'), { chatKey: 'voice-integration' });
+    // V2 adapter is preserved and tested explicitly, but is no longer offered
+    // next to the public mic in production Chat.
+    const entry = window.chatEntry;
+    entry.voiceAdapter = window.xnautAttachVoiceConversation(entry.dictateBtn, {
+      label: 'Chat composer', connected: () => entry.pane.isConnected,
+      insert: (text) => window.xnautDictationAppend(entry.inputEl, text, () => {}),
+      submit: () => entry.sendBtn.click(),
+    });
   });
 });
 

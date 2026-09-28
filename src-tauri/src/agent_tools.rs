@@ -335,11 +335,12 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "list_tickets",
-                "description": "List Project Management tickets, newest change first. Use this before touching one: it is how you learn a ticket's real status, owner and body rather than guessing.",
+                "description": "Read Project Management tickets with their full body. Pass id for one exact ticket, including older tickets outside the default newest-20 listing. Use live results before touching a ticket.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "project": { "type": "string", "description": "Project key such as XNAUT. Omit for every project." },
+                        "id": { "type": "string", "description": "Exact ticket ID, for example XNAUT-277. Omit to list tickets." },
                         "status": { "type": "string", "description": "Only tickets in this status: inbox, ready, in_progress, review, blocked, done or complete." },
                         "limit": { "type": "integer", "description": "Default 20." }
                     }
@@ -896,11 +897,13 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             let project = args.get("project").and_then(Value::as_str).map(str::to_string);
             let wanted = args.get("status").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim();
             match crate::project_management::ticket_list_in(&repo, project) {
                 Ok(tickets) => {
                     let rows: Vec<Value> = tickets
                         .into_iter()
                         .filter(|t| wanted.is_empty() || t.status == wanted)
+                        .filter(|t| id.is_empty() || t.id.eq_ignore_ascii_case(id))
                         .take(limit)
                         // The body is the expensive field and most of a listing
                         // is scanned, not read. Ask for one ticket by id to see it.
@@ -2007,18 +2010,22 @@ async fn read_round(
     let mut stream = response.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     let mut round = Round::default();
+    let mut raw = Vec::new();
     'outer: while let Some(chunk) = stream.next().await {
-        buf.extend_from_slice(&chunk.map_err(|e| format!("chat stream error: {e}"))?);
+        let chunk = chunk.map_err(|e| format!("chat stream error: {e}"))?;
+        if raw.len() < 262144 { raw.extend_from_slice(&chunk[..chunk.len().min(262144 - raw.len())]); }
+        buf.extend_from_slice(&chunk);
         while let Some(at) = buf.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = buf.drain(..=at).collect();
             let line = String::from_utf8_lossy(&line);
-            let Some(data) = line.trim().strip_prefix("data: ") else {
+            let Some(data) = line.trim().strip_prefix("data:") else {
                 continue;
             };
             let data = data.trim();
             if data == "[DONE]" {
                 break 'outer;
             }
+            reject_provider_error(data)?;
             let Some(delta) = absorb(&mut round, data) else {
                 continue;
             };
@@ -2033,7 +2040,30 @@ async fn read_round(
             }
         }
     }
+    // Some gateways return HTTP 200 + text/event-stream but write a plain JSON
+    // error (with no trailing newline). Never turn that failure into Ok("").
+    reject_provider_error(&String::from_utf8_lossy(&raw))?;
+    if round.content.trim().is_empty() && round.calls.is_empty() {
+        return Err("The model stream ended without an answer or tool calls.".into());
+    }
     Ok(round)
+}
+
+fn reject_provider_error(data: &str) -> Result<(), String> {
+    if let Ok(value) = serde_json::from_str::<Value>(data) {
+        if let Some(error) = value.get("error") {
+            let message = error.get("message").and_then(Value::as_str)
+                .or_else(|| error.as_str()).unwrap_or("unspecified provider error");
+            return Err(format!("Model request rejected: {message}"));
+        }
+    }
+    Ok(())
+}
+
+fn reasoning_override_rejected(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("reasoning") && (error.contains("cannot be disabled")
+        || error.contains("mandatory") || error.contains("not supported"))
 }
 
 pub async fn run_turn(
@@ -2240,8 +2270,11 @@ pub async fn run_turn_streaming(
             // stream and an error is a JSON object, and they cannot be parsed
             // the same way.
             if status.is_success() {
-                round = read_round(response, stream_to).await?;
-                break;
+                match read_round(response, stream_to).await {
+                    Ok(result) => { round = result; break; }
+                    Err(error) if attempt == 0 && reasoning_override_rejected(&error) => continue,
+                    Err(error) => return Err(error),
+                }
             }
             let payload: Value = response.json().await.unwrap_or(Value::Null);
             if attempt == 1 {
@@ -2302,6 +2335,11 @@ pub async fn run_turn_streaming(
                 .and_then(Value::as_str)
                 .unwrap_or("{}");
             let args: Value = serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
+            if let Some((app, request_id)) = stream_to {
+                let _ = tauri::Emitter::emit(app, "chat://tool", json!({
+                    "requestId": request_id, "callId": id, "name": name, "status": "running"
+                }));
+            }
             // "<plugin>__<tool>" belongs to an MCP server; anything else is
             // xNAUT's own.
             let result = match name.split_once("__") {
@@ -2325,6 +2363,13 @@ pub async fn run_turn_streaming(
             // something happen" is: it is a plugin call that did not error.
             let worked = result.get("ok").and_then(Value::as_bool) == Some(true)
                 || (name.contains("__") && result.get("error").is_none());
+            if let Some((app, request_id)) = stream_to {
+                let _ = tauri::Emitter::emit(app, "chat://tool", json!({
+                    "requestId": request_id, "callId": id, "name": name,
+                    "status": if worked { "completed" } else { "failed" },
+                    "error": result.get("error").and_then(Value::as_str),
+                }));
+            }
             if worked {
                 performed.push(format!("{name} {}", args));
                 if surface.is_none() {
@@ -2454,6 +2499,50 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn gateway_error_in_http_200_is_not_an_empty_answer() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for body in [
+            r#"{"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}"#,
+            "data: {\"error\":{\"message\":\"Reasoning is mandatory for this endpoint and cannot be disabled.\"}}\n\n",
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let body = body.to_owned();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 4096];
+                socket.read(&mut request).await.unwrap();
+                let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                // Fragment the body to cover JSON errors without a final newline.
+                for chunk in reply.as_bytes().chunks(17) { socket.write_all(chunk).await.unwrap(); }
+            });
+            let response = reqwest::get(format!("http://{addr}")).await.unwrap();
+            let error = read_round(response, None).await.err().expect("reject hidden error");
+            assert!(reasoning_override_rejected(&error));
+            assert!(error.contains("cannot be disabled"));
+            server.await.unwrap();
+        }
+        assert!(!reasoning_override_rejected("invalid API key"));
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the configured NautGate account for a read-only ticket lookup"]
+    async fn live_nautgate_retrieves_requested_voice_tickets() {
+        let settings = crate::settings::load_or_default();
+        let provider = settings.llm_providers.iter().find(|p| p.name == "nautgate").expect("NautGate configured");
+        let llm = crate::settings::LlmSettings {
+            endpoint: provider.endpoint.clone(), api_key: provider.api_key.clone(),
+            model: "auto".into(), ..Default::default()
+        };
+        let outcome = run_turn(&llm, "auto", vec![json!({
+            "role": "user", "content": "Read current details for XNAUT-277 and XNAUT-445 using list_tickets with exact id, once per ticket. Return both IDs, their status and title. Read only; do not change anything."
+        })], None, &[], "xfusion:voice-ticket-smoke").await.expect("live read-only tool turn");
+        assert!(outcome.performed.iter().any(|p| p.contains("XNAUT-277")), "277 actually retrieved");
+        assert!(outcome.performed.iter().any(|p| p.contains("XNAUT-445")), "445 actually retrieved");
+        assert!(outcome.text.contains("XNAUT-277") && outcome.text.contains("XNAUT-445"), "answer includes both tickets");
+    }
 
     /// The tool loop streams now, and streaming plus tools is exactly the
     /// combination routes disagree about. This asks a real OpenAI-compatible
@@ -3057,4 +3146,3 @@ mod tests {
         }
     }
 }
-

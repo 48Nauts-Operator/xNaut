@@ -6,6 +6,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>xNAUT uses the microphone only when you press the dictate button, to turn speech into text on this machine.</string>
+  <string>xNAUT uses the microphone for dictation and voice conversations. Public voice sends audio to your configured voice provider, including in speech-to-text mode.</string>
 </dict>
 </plist>

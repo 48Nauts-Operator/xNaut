@@ -121,6 +121,7 @@ pub struct LiveSession {
     /// True once assistant audio has played and nothing has stopped it. The
     /// energy heuristic needs to know whether there is anything to interrupt.
     output_active: bool,
+    transcription_only: bool,
 }
 
 impl LiveSession {
@@ -135,7 +136,13 @@ impl LiveSession {
             context: ConversationContext::default(),
             model,
             output_active: false,
+            transcription_only: false,
         }
+    }
+
+    /// Select a transcription-only session before `open()`.
+    pub fn set_transcription_only(&mut self, enabled: bool) {
+        self.transcription_only = enabled;
     }
 
     /// Seeds the session from a saved conversation. Call before `open()`.
@@ -149,7 +156,9 @@ impl LiveSession {
     pub fn open(&mut self) -> Vec<SessionAction> {
         vec![SessionAction::Send(ClientEvent::SessionStart {
             model: self.model.clone(),
-            instructions: VOICE_INSTRUCTIONS.to_string(),
+            instructions: if self.transcription_only {
+                "Transcribe the user's speech only. Do not answer, speak, delegate tasks or take actions.".into()
+            } else { VOICE_INSTRUCTIONS.to_string() },
         })]
     }
 
@@ -166,6 +175,15 @@ impl LiveSession {
     pub fn handle(&mut self, event: ServerEvent, now: f64) -> Vec<SessionAction> {
         if self.phase == Phase::Ended {
             return Vec::new();
+        }
+        if self.transcription_only {
+            match event {
+                ServerEvent::InputTranscriptDelta { text } => return vec![SessionAction::Caption(Caption {
+                    turn: None, role: Role::User, text,
+                })],
+                ServerEvent::SessionStarted | ServerEvent::SessionClosed | ServerEvent::Error { .. } => {},
+                _ => return Vec::new(),
+            }
         }
         match event {
             ServerEvent::SessionStarted => {
@@ -324,7 +342,7 @@ impl LiveSession {
     /// Typed input during a voice conversation. It is a user request like any
     /// other, so it enters the same turn ledger rather than a side channel.
     pub fn send_text(&mut self, text: &str) -> Vec<SessionAction> {
-        if self.phase == Phase::Ended || text.trim().is_empty() {
+        if self.transcription_only || self.phase == Phase::Ended || text.trim().is_empty() {
             return Vec::new();
         }
         let turn = self.ledger.push_user(text);
@@ -384,6 +402,22 @@ mod tests {
             model: "claude-opus-5".into(),
             permission: "project-write".into(),
         }
+    }
+
+    #[test]
+    fn transcription_only_cannot_speak_commit_or_dispatch() {
+        let mut session = LiveSession::new(binding(), "gpt-live-1".into());
+        session.set_transcription_only(true);
+        session.handle(ServerEvent::SessionStarted, 0.0);
+        let actions = session.handle(ServerEvent::InputTranscriptDelta { text: "A draft.".into() }, 1.0);
+        assert!(matches!(&actions[..], [SessionAction::Caption(Caption { role: Role::User, text, .. })] if text == "A draft."));
+        for event in [
+            ServerEvent::OutputAudioDelta { pcm: vec![1, 0, 2, 0] },
+            ServerEvent::OutputTranscriptDelta { text: "An unwanted answer".into() },
+            ServerEvent::DelegationCreated { id: "do-not-run".into() },
+        ] { assert!(session.handle(event, 2.0).is_empty()); }
+        assert!(session.send_text("Do not dispatch").is_empty());
+        assert!(session.close("done").iter().all(|a| !matches!(a, SessionAction::Commit(_) | SessionAction::Dispatch(_) | SessionAction::Play { .. })));
     }
 
     fn ready() -> LiveSession {

@@ -63,6 +63,7 @@ async function boot(page, { ready = true, history = null } = {}) {
 
 async function start(page) {
   await page.getByRole('button', { name: 'Voice conversation with Chat composer' }).click();
+  await page.getByRole('menuitem', { name: 'STS · Speech to Speech', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.liveSessionId)).not.toBeNull();
   await page.evaluate(() => window.emitLive({ kind: 'ready', restored: false }));
 }
@@ -285,7 +286,124 @@ test('a failure to open reports the reason and starts no other provider', async 
       : invoke(name, args);
   });
   await page.getByRole('button', { name: 'Voice conversation with Chat composer' }).click();
+  await page.getByRole('menuitem', { name: 'STS · Speech to Speech', exact: true }).click();
   await expect(page.locator('.voice-live-overlay')).toHaveCount(0);
   expect(await page.evaluate(() => window.calls.some(c =>
     ['voice_start', 'voice_local_open', 'chat_send_tools'].includes(c.name)))).toBe(false);
+});
+
+test('one mic opens STS and STT, without legacy Talk or a third voice control', async ({ page }) => {
+  await boot(page);
+  await expect(page.locator('.chatp-dictate')).toHaveCount(1);
+  await expect(page.locator('.voice-conversation-button')).toHaveCount(0);
+  await expect(page.locator('.voice-live-button')).toHaveCount(1);
+  await expect(page.locator('.voice-live-button svg')).toHaveCount(1);
+  await page.locator('.voice-live-button').click();
+  await expect(page.getByRole('menuitem', { name: 'STS · Speech to Speech', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'STT · Speech to Text', exact: true })).toBeVisible();
+});
+
+test('STT streams into the draft, preserves edits, and never automatically dispatches', async ({ page }) => {
+  await boot(page);
+  await page.locator('.chatp-input').fill('Existing draft.');
+  await page.locator('.voice-live-button').click();
+  await page.getByRole('menuitem', { name: 'STT · Speech to Text', exact: true }).click();
+  await page.evaluate(() => {
+    window.emitLive({ kind: 'ready' });
+    window.emitLive({ kind: 'caption', role: 'user', text: 'Hello ' });
+    window.emitLive({ kind: 'caption', role: 'user', text: 'world.' });
+    window.emitLive({ kind: 'caption', role: 'assistant', text: 'Must not appear.' });
+    window.emitLive({ kind: 'dispatch', turn: 0, context: 'Must not run.' });
+  });
+  await expect(page.locator('.chatp-input')).toHaveValue('Existing draft. Hello world.');
+  expect(await page.evaluate(() => window.calls.filter(c => c.name === 'chat_send_tools').length)).toBe(0);
+  expect(await page.evaluate(() => window.calls.find(c => c.name === 'voice_live_open').args.transcriptionOnly)).toBe(true);
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.calls.filter(c => c.name === 'chat_send_tools').length)).toBe(1);
+});
+
+test('live spoken text is visible and saved in chat; user commit does not duplicate it', async ({ page }) => {
+  await boot(page);
+  await start(page);
+  await page.evaluate(() => {
+    window.emitLive({ kind: 'caption', role: 'user', text: 'Show ticket ' });
+    window.emitLive({ kind: 'caption', role: 'user', text: '445.' });
+  });
+  await expect(page.locator('.chatp-msg-user')).toHaveText('Show ticket 445.');
+  await page.evaluate(() => window.emitLive({ kind: 'commit', role: 'user', text: 'Show ticket 445.', turn: 0 }));
+  await expect(page.locator('.chatp-msg-user')).toHaveCount(1);
+  await page.evaluate(() => window.emitLive({ kind: 'caption', role: 'assistant', text: 'I am checking that ticket.' }));
+  await expect(page.locator('.chatp-msg-assistant')).toContainText('I am checking that ticket.');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('xnaut-chat-history:voice-live')).at(-1).content)).toBe('I am checking that ticket.');
+  await expect(page.locator('.chatp-pane > .voice-live-inline')).toHaveCount(1);
+  await expect(page.locator('.voice-live-inline')).toHaveCSS('position', 'static');
+});
+
+test('composer copy preserves the draft', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.copied = text; } } }));
+  await page.locator('.chatp-input').fill('Copy these words.');
+  await page.getByRole('button', { name: 'Copy draft', exact: true }).click();
+  expect(await page.evaluate(() => window.copied)).toBe('Copy these words.');
+  await expect(page.locator('.chatp-input')).toHaveValue('Copy these words.');
+});
+
+test('voice lookup exposes tool progress and the complete streamed answer in chat', async ({ page }) => {
+  await boot(page);
+  await start(page);
+  await page.evaluate(() => {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = async (name, args) => {
+      if (name !== 'chat_send_tools') return invoke(name, args);
+      window.listeners['chat://tool']({ payload: { requestId: args.requestId, callId: 'lookup', name: 'list_tickets', status: 'running' } });
+      window.listeners['chat://chunk']({ payload: { requestId: args.requestId, delta: 'Ticket details are loading.' } });
+      return new Promise(resolve => { window.resolveLookup = resolve; });
+    };
+    window.emitLive({ kind: 'commit', role: 'user', text: 'Look up 445.', turn: 0 });
+    window.emitLive({ kind: 'dispatch', turn: 0, epoch: 0 });
+  });
+  await expect(page.getByLabel('Actions')).toContainText('list_tickets: running');
+  await expect(page.locator('.chatp-msg-assistant')).toContainText('Ticket details are loading.');
+  await page.evaluate(() => window.resolveLookup('XNAUT-445 is in the inbox.'));
+  await expect(page.locator('.chatp-msg-assistant')).toContainText('XNAUT-445 is in the inbox.');
+});
+
+test('voice status docks in the right pane and reflects actual playback and backend work', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => {
+    const host = document.createElement('aside'); host.id = 'right-voice'; document.body.append(host);
+    const view = window.__xnautRightPaneQueue.find(item => item.key === 'voice').view;
+    window.xnautRightPaneShow = () => { view.mount(host); return true; };
+  });
+  await start(page);
+  const status = page.locator('#right-voice .voice-live-docked');
+  await expect(status).toHaveCount(1);
+  await page.evaluate(() => window.emitLive({ kind: 'playback', speaking: true }));
+  await expect(status).toHaveAttribute('data-state', 'speaking');
+  await expect(status).toContainText('Speaking');
+  await page.evaluate(() => {
+    window.emitLive({ kind: 'playback', speaking: false });
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = (name, args) => name === 'chat_send_tools' ? new Promise(() => {}) : invoke(name, args);
+    window.emitLive({ kind: 'dispatch', turn: 0, epoch: 0 });
+  });
+  await expect(status).toHaveAttribute('data-state', 'thinking');
+  await expect(status).toContainText('Thinking');
+});
+
+test('switching STS to STT closes the old stream and ignores its late events', async ({ page }) => {
+  await boot(page);
+  await start(page);
+  await page.evaluate(() => { window.oldListener = window.listeners[`voice-live://${window.liveSessionId}`]; });
+  await page.locator('.voice-live-button').click();
+  await page.getByRole('menuitem', { name: 'STT · Speech to Text', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.calls.filter(c => c.name === 'voice_live_open').length)).toBe(2);
+  await page.evaluate(() => {
+    window.oldListener({ payload: { kind: 'caption', role: 'user', text: 'stale words' } });
+    window.oldListener({ payload: { kind: 'dispatch', turn: 3, epoch: 0 } });
+    window.emitLive({ kind: 'caption', role: 'user', text: 'new draft' });
+  });
+  await expect(page.locator('.chatp-input')).toHaveValue('new draft');
+  expect(await page.evaluate(() => window.calls.filter(c => c.name === 'chat_send_tools').length)).toBe(0);
+  expect(await page.evaluate(() => window.calls.filter(c => c.name === 'voice_live_close').length)).toBe(1);
 });

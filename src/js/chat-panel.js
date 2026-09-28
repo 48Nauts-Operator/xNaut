@@ -1501,14 +1501,14 @@
       { role: 'system', content: entry.systemPrompt },
       {
         role: 'system',
-        content: 'This turn arrived by voice and will be spoken back. Answer in plain'
-          + ' prose, briefly, with no Markdown, no code blocks and no tool JSON.'
+        content: 'This turn arrived by voice. Show the complete answer in chat; a separate voice layer speaks it.'
+          + ' Use the available tools for live facts and actions. Do not output tool JSON as prose.'
           + ' Never claim an action succeeded before its result.',
       },
     ];
     // The pane's own history is the record; the session's rendered context is
     // the same facts, so sending both would say everything twice.
-    messages.push(...entry.history.slice(-30).map((m) => ({ role: m.role, content: m.content })));
+    messages.push(...entry.history.filter((m) => !m.voiceTranscript).slice(-30).map((m) => ({ role: m.role, content: m.content })));
     const payload = {
       requestId: newRequestId(),
       chatKey: entry.chatKey || 'default',
@@ -1517,7 +1517,21 @@
     if (entry.modelOverride) payload.model = entry.modelOverride;
     if (entry.providerOverride) payload.provider = entry.providerOverride;
     if (entry.reasoningEffort) payload.reasoningEffort = entry.reasoningEffort;
-    const reply = String(await invoke('chat_send_tools', payload) || '').trim();
+    const row = appendMessage(entry, 'assistant', 'Working…');
+    const pending = { row, body: row.querySelector('.chatp-body'), text: '' };
+    entry.voiceRequests ||= new Map();
+    entry.voiceAnswerRows ||= new Map();
+    entry.voiceRequests.set(payload.requestId, pending);
+    entry.voiceAnswerRows.set(request.turn, row);
+    let reply;
+    try {
+      reply = String(await invoke('chat_send_tools', payload) || '').trim();
+      if (!reply) throw new Error('The model returned no answer. No successful lookup was confirmed.');
+      renderAssistantMarkdown(pending.body, reply);
+    } catch (error) {
+      pending.body.textContent = String(error?.message || error);
+      throw error;
+    } finally { entry.voiceRequests.delete(payload.requestId); }
     // Structured payloads are not speech. Voice turns take the prose answer;
     // an action envelope is reported rather than read out as JSON.
     if (/^[{[]/.test(reply)) {
@@ -1730,6 +1744,7 @@
     inputArea.className = 'chatp-input-area';
     inputArea.innerHTML = `
       <textarea class="chatp-input" rows="1" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button class="btn-icon chatp-copy-draft" title="Copy draft" aria-label="Copy draft">${ICON_COPY}</button>
       <button class="btn-icon chatp-dictate" title="Dictate message" aria-label="Dictate message">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="5" y="2" width="6" height="8" rx="3"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V15M5.5 15h5"/></svg>
       </button>
@@ -1965,10 +1980,35 @@
 
     sub('chat://chunk', (ev) => {
       const p = ev.payload || {};
+      const voice = entry.voiceRequests?.get(p.requestId);
+      if (voice) {
+        voice.text += p.delta || '';
+        renderAssistantMarkdown(voice.body, voice.text);
+        scrollToBottom(entry);
+        return;
+      }
       if (!entry.activeRequestId || p.requestId !== entry.activeRequestId || !entry.liveBody) return;
       entry.liveText += p.delta || '';
       if (entry.expectingVaultAction) return;
       entry.liveBody.innerHTML = renderMarkdownLite(entry.liveText);
+      scrollToBottom(entry);
+    });
+
+    sub('chat://tool', (ev) => {
+      const p = ev.payload || {};
+      const row = entry.voiceRequests?.get(p.requestId)?.row
+        || (entry.activeRequestId === p.requestId ? entry.liveRow : null);
+      if (!row) return;
+      let events = row.querySelector('.chatp-tool-events');
+      if (!events) {
+        events = document.createElement('div');
+        events.className = 'chatp-tool-events';
+        events.setAttribute('aria-label', 'Actions');
+        row.prepend(events);
+      }
+      let line = [...events.children].find((el) => el.dataset.callId === p.callId);
+      if (!line) { line = document.createElement('div'); line.dataset.callId = p.callId; events.append(line); }
+      line.textContent = `${p.name}: ${p.status}${p.error ? ` — ${p.error}` : ''}`;
       scrollToBottom(entry);
     });
 
@@ -2000,16 +2040,16 @@
       }
     });
     entry.sendBtn.onclick = () => sendMessage(entry).catch((err) => console.error('[chat-panel] send failed', err));
-    // Dictation runs in the backend (XNAUT-187) and is shared with the Agent
-    // Space composer; see voice-dictate.js. window.SpeechRecognition does not
-    // exist in WKWebView, so the old call here was a silent no-op: the button
-    // did nothing, forever, with no error. Grep before you call a window.* global.
-    window.xnautAttachDictation(entry.dictateBtn, (text) => {
-      window.xnautDictationAppend(entry.inputEl, text, autoGrow);
-    }, 'Chat composer');
-    // XNAUT-416 V1: the continuous public route. Started once, it holds the
-    // whole conversation; the push-to-talk adapter below stays for the private
-    // local prototype (V2) and for machines with no public voice profile.
+    const copyDraft = inputArea.querySelector('.chatp-copy-draft');
+    copyDraft.onclick = async () => {
+      try {
+        await copyText(entry.inputEl.value);
+        copyDraft.innerHTML = ICON_CHECK;
+        setTimeout(() => { copyDraft.innerHTML = ICON_COPY; }, 1200);
+      } catch (_) { copyDraft.title = 'Could not copy draft'; }
+    };
+    // One microphone owns the continuous route. Silent produces a draft;
+    // the old per-utterance Talk adapter is not mounted on the public surface.
     // Guarded, but noisily: an undefined global here means voice-live.js did
     // not load, which is a load-order bug. Losing the button is survivable;
     // taking the whole composer down with it is not.
@@ -2018,6 +2058,7 @@
     }
     entry.liveVoice = window.xnautAttachLiveVoice?.(entry.dictateBtn, {
       label: 'Chat composer',
+      statusHost: pane,
       connected: () => entry.pane.isConnected,
       binding: () => ({
         conversationId: entry.chatKey || 'default',
@@ -2032,23 +2073,45 @@
       // Oldest first. Reopening a saved conversation replays these into the
       // voice session's backend context; they are never re-executed.
       history: () => entry.history
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .filter((m) => !m.voiceTranscript && (m.role === 'user' || m.role === 'assistant'))
         .slice(-60)
         .map((m) => ({ role: m.role, text: String(m.content || '') })),
-      onCommit: (role, text) => {
-        entry.history.push({ role, content: text });
+      onCommit: (role, text, turn) => {
+        const caption = entry.voiceCaption;
+        const answerRow = role === 'assistant' ? entry.voiceAnswerRows?.get(turn) : null;
+        if (answerRow) {
+          entry.history.push({ role, content: text });
+          renderAssistantMarkdown(answerRow.querySelector('.chatp-body'), text);
+          entry.voiceAnswerRows.delete(turn);
+        } else if (caption && caption.message.role === role) {
+          caption.message.content = text;
+          delete caption.message.voiceTranscript;
+          caption.row.querySelector('.chatp-body').textContent = text;
+          entry.voiceCaption = null;
+        } else {
+          entry.history.push({ role, content: text });
+          appendMessage(entry, role, text);
+        }
         saveChatHistory(entry);
-        appendMessage(entry, role, text);
+        scrollToBottom(entry);
+      },
+      onCaption: (role, text) => {
+        if (!text) return;
+        if (!entry.voiceCaption || entry.voiceCaption.message.role !== role) {
+          const message = { role, content: '', voiceTranscript: true };
+          entry.history.push(message);
+          entry.voiceCaption = { message, row: appendMessage(entry, role, '') };
+        }
+        entry.voiceCaption.message.content += text;
+        entry.voiceCaption.row.querySelector('.chatp-body').textContent = entry.voiceCaption.message.content;
+        saveChatHistory(entry);
         scrollToBottom(entry);
       },
       dispatch: (request) => dispatchVoiceTurn(entry, request),
-    });
-    entry.voiceAdapter = window.xnautAttachVoiceConversation(entry.dictateBtn, {
-      label: 'Chat composer', connected: () => entry.pane.isConnected,
-      insert: (text) => window.xnautDictationAppend(entry.inputEl, text, autoGrow),
-      submit: () => {
-        if (entry.busy) throw new Error('The agent is busy. Your words are in the composer; send them when ready.');
-        return sendMessage(entry);
+      onTranscriptDelta: (text, first) => {
+        if (first && entry.inputEl.value && !/\s$/.test(entry.inputEl.value) && !/^\s/.test(text)) entry.inputEl.value += ' ';
+        entry.inputEl.value += text;
+        autoGrow(entry.inputEl);
       },
     });
     const closeBtn = bar.querySelector('.chatp-close');

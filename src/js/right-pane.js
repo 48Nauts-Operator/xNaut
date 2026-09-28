@@ -23,7 +23,7 @@
   }
 
   const ICONS = {
-    agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 13c.5-2.7 2-4 4.5-4s4 1.3 4.5 4"/><path d="M12.5 3.5l1-1M3.5 3.5l-1-1"/></svg>',
+    voice: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><rect x="5" y="2" width="6" height="8" rx="3"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V15M5.5 15h5"/></svg>',
     flowwatch: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16" stroke-width="1.3"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.2"/><path d="M8 2v1.8M8 12.2V14M2 8h1.8M12.2 8H14"/></svg>',
     files: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7.5A.5.5 0 0 1 3.5 14V2a.5.5 0 0 1 .5-.5z"/><path d="M9 1.5v3h3"/></svg>',
     chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="16" height="16"><path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z"/></svg>',
@@ -50,6 +50,7 @@
   const VIEW_ORDER = [
     { key: 'workspace', title: 'Workspace' },
     { key: 'agent', title: 'Agent' },
+    { key: 'voice', title: 'Voice' },
     { key: 'files', title: 'Files' },
     { key: 'search', title: 'Search' },
     { key: 'git', title: 'Git' },
