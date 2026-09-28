@@ -5,10 +5,14 @@ All notable changes to xNAUT are documented in this file.
 ## [1.27.2] - 2026-09-27
 
 ### Added
+- The project page has a Sessions band: the sessions running in a project are listed on it, and Open a new session starts one there. (XNAUT-86)
 - The project workspace has a front door. A Projects icon sits first on the rail, and the same project switcher that Delivery had is on the Code tab, so a project opens in one click from either place. (XNAUT-435)
 - A Wiki tab in the Build run pane. A URL bar and the docs page rendered as reading content only, with the pages you opened remembered per project so a reference is one click away next time. (XNAUT-438)
 - The file, diff and git panes in a build root at the slice the agent is working in, so what you see is the codebase the agent sees. (XNAUT-106)
 - A number the workspace header cannot read says why: not a git repository, no checkout on this machine, no commits yet, the ticket store could not be read. A bare dash gave no way to tell a bug from an empty repository. (XNAUT-341)
+
+### Changed
+- The standalone Projects panel is gone. Its nine tabs are the tabs of a project's workspace; the top-bar button and the sidebar open that workspace, and a new project is created with name, path and remote, with the rest in its Settings tab. (XNAUT-342)
 
 ### Fixed
 - A sign-off parked on the owner stays on the board. The sweep re-offered every green build every three minutes, the rail replaced the parked card each time and the replacement refused itself on the receipt it had just written; four tickets produced 4,905 receipt commits in one day and no card lived long enough to be answered. A parked job is now reused for the same build, and staleness is judged on scope, not on the revision counter. (XNAUT-431)
