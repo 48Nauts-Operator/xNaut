@@ -103,3 +103,27 @@ saved Chat using coordinate-based console automation sent JavaScript to the
 wrong input. That automation was stopped; the user does not need to execute
 the accidentally pasted line. Tool progress currently represents live activity;
 separate durable action-history reconstruction is outside this patch.
+
+## Follow-up: macOS menu click regression
+
+Owner reported STS and STT selections did nothing. Reproduced both failures in
+Playwright WebKit before changing code: STS never invoked voice_live_open, and
+STT never opened a session or populated the draft. The previous Chromium-only
+suite missed native macOS pointer/focus ordering.
+
+WebKit blurs the focused menu item when a button is clicked; relatedTarget is
+outside the menu, so focusout hid the menu before click could activate a mode.
+Preventing the menu item's primary pointer-down default preserves focus until
+click; keyboard activation remains on the existing click handler.
+
+Both previously failing WebKit tests pass after the fix. The full voice-live
+suite passed in Chromium and WebKit: **42/42**. Repeat with:
+
+```sh
+npx playwright install chromium webkit
+XNAUT_TEST_PORT=4296 npx playwright test --config=playwright.voice.config.mjs
+```
+
+These browser tests mock native voice commands; they prove the selected mode
+reaches session startup, not microphone/audio acceptance. Native bundle rebuilt
+for the operator to try the corrected menu.

@@ -207,6 +207,12 @@
       if (event.key === 'Escape') { hideMenu(); button.focus(); }
     });
     wrap.addEventListener('focusout', (event) => { if (!wrap.contains(event.relatedTarget)) hideMenu(); });
+    // macOS WebKit does not focus buttons on pointer-down: it blurs the
+    // focused menu item to body first. Keep focus until click so focusout
+    // cannot hide the menu and swallow the chosen mode before it runs.
+    menu.addEventListener('pointerdown', (event) => {
+      if (event.button === 0 && event.target.closest('[data-mode]')) event.preventDefault();
+    });
     let changing = false;
     menu.onclick = async (event) => {
       const mode = event.target.closest('[data-mode]')?.dataset.mode;
