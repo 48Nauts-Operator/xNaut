@@ -364,6 +364,13 @@ if [ "${ATTACH:-0}" != "0" ]; then
     # layout it reads instead of assumes.
     local_toml="$(dirname "$APP_BIN")"
     for _ in 1 2 3 4 5; do
+      # A bundled candidate is deeper than target/debug. Read its actual
+      # bundle version instead of mislabelling an attached .app as bare dev.
+      if [ -f "$local_toml/Info.plist" ]; then
+        bundle_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$local_toml/Info.plist" 2>/dev/null)
+        [ -n "$bundle_version" ] && APP_VER="$bundle_version-dev"
+        break
+      fi
       [ -f "$local_toml/Cargo.toml" ] && break
       local_toml="$local_toml/.."
     done
