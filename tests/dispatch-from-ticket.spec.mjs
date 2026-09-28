@@ -17,10 +17,12 @@ test('dispatching a ticket launches its owner and names the branch', async ({ pa
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE', section: 'work' });
+    window.xnautCreateProjectManagementPanel('pm-test', host, {});
   }, OK);
 
   const pane = page.locator('#pm-test-host .pmw');
+  await pane.locator('[data-project]:not([data-project=""])').first().click();
+  await pane.locator('[data-project-section="work"]').first().click();
   await pane.locator('[data-id="SMOKE-1"]').first().click();
 
   const dispatch = pane.locator('.pmw-dispatch');

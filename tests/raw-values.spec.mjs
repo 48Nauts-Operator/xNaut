@@ -14,7 +14,7 @@ import { test, expect } from '@playwright/test';
 const SURFACES = [
   'Toggle projects sidebar', 'Toggle project pane', 'Command snippets',
   'Open new browser tab', 'Open new markdown tab', 'Open new diff tab',
-  'Open project workspace', 'Open worktree manager', 'More actions',
+  'Open Projects (tasks & plan)', 'Open worktree manager', 'More actions',
   'Help and keyboard shortcuts',
 ];
 

@@ -1,4 +1,4 @@
-// XNAUT-87: a project surface reports state, it never invents it.
+// XNAUT-87: the project overview reports state, it never invents it.
 //
 // The bug these cover is one line —
 //   const stage = stages.some((i) => i[0] === project.stage) ? project.stage : stages[0][0]
@@ -12,14 +12,6 @@
 // original ternary collapsed all of them to the same wrong answer: no stage
 // field, an empty one, a stage key that is not in any table, and a stage that
 // belongs to a DIFFERENT flow than the project's own.
-//
-// XNAUT-342 moved where these are asked. The Overview tab was the original
-// reader and is gone: its Active work table is the Work tab, its Current stage
-// band the NAUT-Flow tab, its Primary artifact band the Vault tab and its
-// Contributors band the Project details entry of the three-dot menu. So the
-// stage the hero badges, the Artifacts page and the NAUT-Flow rail are where
-// the fabrication would now show, and the bands are asserted ABSENT rather than
-// honest — a band that came back would be a second reader of the same stage.
 import { test, expect } from '@playwright/test';
 
 const OK = {
@@ -33,13 +25,12 @@ const BASE = {
   source_path: '/tmp/smoke', flow_type: 'standard', status: 'active', tickets: [],
 };
 
-// Mounts one section of the panel for one project shape, the way the workspace
-// mounts it: for a named project, at a named section. Both project commands are
-// stubbed because the panel's first load calls import_existing and a later
-// refresh calls list — a fixture that answers only one of them tests a
+// Opens the workspace on the overview for one project shape. Both project
+// commands are stubbed: the panel's first load calls import_existing, and a
+// later refresh calls list — a fixture that answers only one of them tests a
 // different project than the one it set up.
-async function section(page, key, project) {
-  await page.evaluate(async ([status, record, sectionKey]) => {
+async function overview(page, project) {
+  const pane = await page.evaluate(async ([status, record]) => {
     window.__xnautStub.pm_module_status = status;
     window.__xnautStub.pm_project_import_existing = [record];
     window.__xnautStub.pm_project_list = [record];
@@ -47,13 +38,14 @@ async function section(page, key, project) {
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE', section: sectionKey });
-  }, [OK, { ...BASE, ...project }, key]);
-  const pane = page.locator('#pm-test-host .pmw');
-  // Wait for the SECTION to have painted rather than for the pane element to
-  // exist. Every section draws the project hero except NAUT-Flow, which fills
-  // the pane with its stage rail and centre instead.
-  await expect(pane.locator(key === 'nautflow' ? '.pmw-nf-rail' : '.pmw-project-hero')).toBeVisible();
+    window.xnautCreateProjectManagementPanel('pm-test', host, {});
+    return true;
+  }, [OK, { ...BASE, ...project }]).then(() => page.locator('#pm-test-host .pmw'));
+
+  const card = pane.locator('[data-project]:not([data-project=""])').first();
+  await expect(card, 'no project in the sidebar to open').toHaveCount(1);
+  await card.click();
+  await expect(pane.locator('.pmw-project-nav')).toBeVisible();
   return pane;
 }
 
@@ -69,15 +61,14 @@ const NOT_IN_A_FLOW = [
 
 for (const [label, project] of NOT_IN_A_FLOW) {
   test(`a project with ${label} shows no stage at all`, async ({ page }) => {
-    const pane = await section(page, 'details', project);
+    const pane = await overview(page, project);
 
     await expect(pane.locator('.pmw-stage-badge'),
       'the hero still badges a stage the project is not in').toHaveCount(0);
-    // The bands the Overview tab used to draw. They are gone with that tab, and
-    // a project with no stage is exactly the case where one coming back would
-    // fabricate a position again.
     await expect(pane.locator('.pmw-stage-band'),
       'a Current stage band was rendered for a project with no stage').toHaveCount(0);
+    // The primary artifact IS the current stage's document, so a project with
+    // no stage must not be offered one to open.
     await expect(pane.locator('.pmw-open-overview-artifact'),
       'the page offers to open a stage document that does not exist').toHaveCount(0);
     await expect(pane.getByText('Primary artifact')).toHaveCount(0);
@@ -85,79 +76,48 @@ for (const [label, project] of NOT_IN_A_FLOW) {
 }
 
 test('a project genuinely in a flow still shows its stage', async ({ page }) => {
-  const pane = await section(page, 'details', { stage: 'build', owner: 'Builder' });
+  const pane = await overview(page, { stage: 'build', owner: 'Builder' });
 
-  // The badge is the stage, read from the project rather than defaulted.
   await expect(pane.locator('.pmw-stage-badge')).toHaveText('build');
-  // And Project details names the stage in words as well, so a wrong stage
-  // cannot pass by rendering the right key.
-  await expect(pane.locator('.pmw-project-page')).toContainText('build');
+  const band = pane.locator('.pmw-stage-band');
+  await expect(band, 'the Current stage band vanished for a project that has one').toHaveCount(1);
+  // The label and the position both come from the stage table, so a wrong
+  // stage cannot pass by rendering the right word.
+  await expect(band).toContainText('Build');
+  await expect(band).toContainText('of');
+  await expect(pane.locator('.pmw-open-overview-artifact')).toHaveCount(1);
 });
 
-test('the NAUT-Flow tab names the stage and its position, both read from the project', async ({ page }) => {
-  const pane = await section(page, 'nautflow', { stage: 'build' });
+test('the overview shows no hardcoded quality gate or readiness bar', async ({ page }) => {
+  const pane = await overview(page, { stage: 'build' });
 
-  // The label and the position both come from the stage table.
-  await expect(pane.locator('.pmw-nf-rail-count')).toHaveText('12 / 15');
-  await expect(pane.locator('.pmw-nf-center')).toContainText('Build');
-});
-
-test('no project surface shows a hardcoded quality gate or readiness bar', async ({ page }) => {
   // Both read as measurements and neither was ever computed from anything:
   // the gate was three checkboxes that nothing ticked, the bar was the stage
-  // index wearing a percentage. Asked of every section that draws a page.
-  for (const key of ['details', 'artifacts', 'settings', 'nautflow']) {
-    const pane = await section(page, key, { stage: 'build' });
-    await expect(pane.getByText('Quality gate'), `${key} shows a quality gate`).toHaveCount(0);
-    await expect(pane.getByText('Ticket readiness'), `${key} shows a readiness bar`).toHaveCount(0);
-    await expect(pane.locator('.pmw-gate-item, .pmw-readiness')).toHaveCount(0);
-  }
+  // index wearing a percentage.
+  await expect(pane.getByText('Quality gate')).toHaveCount(0);
+  await expect(pane.getByText('Ticket readiness')).toHaveCount(0);
+  await expect(pane.locator('.pmw-gate-item, .pmw-readiness')).toHaveCount(0);
 });
 
-// The Contributors band was the Overview's, and the checklist of 2026-09-22 puts
-// it in Project details (XNAUT-342). "Unassigned" there is the honest answer for
-// a project with no owner, where the band's answer was a contributor row for a
-// project that had no contributors.
-test('an unowned project says Unassigned rather than inventing a contributor', async ({ page }) => {
-  const pane = await section(page, 'details', { stage: 'build', owner: '' });
+test('an unowned project lists no contributors', async ({ page }) => {
+  const pane = await overview(page, { stage: 'build', owner: '' });
 
-  await expect(pane.locator('.pmw-contributor-row'),
-    'the deleted Contributors band came back').toHaveCount(0);
-  await expect(pane.locator('.pmw-project-page')).toContainText('Unassigned');
+  await expect(pane.getByText('Contributors'),
+    'an unowned project still got a Contributors band').toHaveCount(0);
+  await expect(pane.getByText('Unassigned', { exact: true }).locator('..').locator('.pmw-contributor-avatar')).toHaveCount(0);
 });
 
-test('an owned project names its owner in Project details', async ({ page }) => {
-  const pane = await section(page, 'details', { stage: 'build', owner: 'Andre' });
+test('an owned project lists its owner as the contributor', async ({ page }) => {
+  const pane = await overview(page, { stage: 'build', owner: 'Andre' });
 
-  await expect(pane.locator('.pmw-project-page')).toContainText('Andre');
-  await expect(pane.locator('.pmw-project-page')).not.toContainText('Unassigned');
-});
-
-// The health card's Started had no home once the Overview tab went, so the
-// checklist puts it here beside budget, rate and flow (XNAUT-342). It is
-// created_at, a stored field: a project without one says so instead of showing
-// today's date or a dash that could mean anything.
-test('Project details carries Started, and says when it was never recorded', async ({ page }) => {
-  let pane = await section(page, 'details', { stage: 'build', created_at: '2026-04-17T09:30:00Z' });
-  await expect(pane.locator('[data-project-started]')).toHaveText('2026-04-17');
-
-  pane = await section(page, 'details', { stage: 'build' });
-  await expect(pane.locator('[data-project-started]')).toHaveText('Not recorded');
-});
-
-test('Project details carries the budget, rate and flow the health card showed', async ({ page }) => {
-  const pane = await section(page, 'details', {
-    stage: 'build', budget_chf: 24000, hourly_rate_chf: 180, flow_type: 'feature',
-  });
-
-  const page_ = pane.locator('.pmw-project-page');
-  await expect(page_).toContainText('24,000');
-  await expect(page_).toContainText('180');
-  await expect(page_).toContainText('Feature');
+  const row = pane.locator('.pmw-contributor-row');
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('Andre');
 });
 
 test('the Artifacts tab offers no current document when there is no stage', async ({ page }) => {
-  const pane = await section(page, 'artifacts', { stage: '' });
+  const pane = await overview(page, { stage: '' });
+  await pane.locator('[data-project-section="artifacts"]').click();
 
   await expect(pane.locator('.pmw-open-stage-artifacts'),
     '"Open current document" is offered for a project with no current stage').toHaveCount(0);
@@ -169,7 +129,8 @@ test('the Artifacts tab offers no current document when there is no stage', asyn
 // project is standing on it — that is the same fabrication one tab across, and
 // with imports no longer stamped with a stage it is now the common case.
 test('the NAUT-Flow rail says "Not started" instead of putting an unstaged project on stage 1', async ({ page }) => {
-  const pane = await section(page, 'nautflow', { stage: '' });
+  const pane = await overview(page, { stage: '' });
+  await pane.locator('[data-project-section="nautflow"]').click();
 
   await expect(pane.locator('.pmw-nf-rail-count')).toHaveText('Not started');
   await expect(pane.locator('.pmw-vstage-current'),
@@ -178,26 +139,13 @@ test('the NAUT-Flow rail says "Not started" instead of putting an unstaged proje
 });
 
 test('the NAUT-Flow rail shows the real position once the project is in a flow', async ({ page }) => {
-  const pane = await section(page, 'nautflow', { stage: 'prd' });
+  const pane = await overview(page, { stage: 'prd' });
+  await pane.locator('[data-project-section="nautflow"]').click();
 
   // 'prd' is the fourth STANDARD stage, of fifteen.
   await expect(pane.locator('.pmw-nf-rail-count')).toHaveText('4 / 15');
   await expect(pane.locator('.pmw-vstage-current')).toHaveCount(1);
   await expect(pane.locator('.pmw-vstage-done')).toHaveCount(3);
-});
-
-// The removal itself, asserted where it would be undone: the Overview, Docs and
-// Delivery sections do not exist, so asking for one is a stale call site and the
-// panel says so instead of falling through to the page it used to draw.
-test('a section this surface no longer has names itself instead of rendering Overview', async ({ page }) => {
-  for (const gone of ['overview', 'docs', 'delivery']) {
-    const pane = await section(page, gone, { stage: 'build' });
-    await expect(pane.locator('.pmw-empty.pmw-error'),
-      `the ${gone} section still rendered something`).toContainText(`There is no “${gone}” section`);
-    await expect(pane.locator('.pmw-overview-layout')).toHaveCount(0);
-    await expect(pane.locator('.pmw-active-work-table')).toHaveCount(0);
-    await expect(pane.locator('.pmw-project-docs')).toHaveCount(0);
-  }
 });
 
 test.beforeEach(async ({ page }) => {

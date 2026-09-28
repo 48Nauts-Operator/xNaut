@@ -93,17 +93,12 @@ test('the rail is seven named icons with no labels, and drops no destination', a
 
   // The rows the rail replaced are destinations, not rows: each one is still
   // one click away and still calls what it always called.
-  //
-  // 'Projects' is NOT among them any more (XNAUT-342). It opened the standalone
-  // Projects panel, which is gone: the tree below this menu is the project list
-  // and a row of it opens that project's workspace, where all nine of the
-  // panel's surfaces are tabs and three-dot entries.
   await page.getByRole('button', { name: 'More surfaces', exact: true }).click();
   const items = await page.locator('.sbar-menu-item').allTextContents();
   // "Manage projects", not "Projects": the rail icon of that name opens a
   // project's workspace and this opens the board that lists them, so calling
   // both Projects made the rail ambiguous (XNAUT-435).
-  expect(items).toEqual(['Agent Space', 'Skills', 'Plugins', 'Tasks', 'Delivery', 'Memory', 'Vault']);
+  expect(items).toEqual(['Agent Space', 'Skills', 'Plugins', 'Tasks', 'Manage projects', 'Delivery', 'Memory', 'Vault']);
 
   expect(await errors(page)).toEqual([]);
 });
@@ -157,7 +152,7 @@ test('the Projects rail icon unfolds a collapsed sidebar on its way in', async (
   expect(await errors(page)).toEqual([]);
 });
 
-// Listing the seven is not the same as reaching them. Two of them are opened
+// Listing the eight is not the same as reaching them. Two of them are opened
 // here for real, because these two were opened by clicking a nav row and the
 // nav row is what this change removed: if either has become unreachable, that
 // is a bug in this change and not a nav preference.

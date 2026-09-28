@@ -50,11 +50,8 @@ window.xnautAttachTasksTab = (opts) =>
     window.xnautAttachPanelTab('Vault', 'xnautCreateVaultPane', opts || {});
   window.xnautAttachAgentsTab = (opts) =>
     window.xnautAttachSingletonPanelTab('Agent Space', 'xnautCreateAgentSpacePanel', opts || {});
-  // No xnautAttachProjectManagementTab: that global attached the standalone
-  // Projects panel as a tab of its own, and it is gone with the panel
-  // (XNAUT-342). The project-management panel still exists as a COMPONENT —
-  // the workspace mounts it per section, for one project, through
-  // xnautCreateProjectManagementPanel — but nothing gives it a tab any more.
+  window.xnautAttachProjectManagementTab = (opts) =>
+    window.xnautAttachPanelTab('Projects', 'xnautCreateProjectManagementPanel', opts || {});
   window.xnautAttachLoopsTab = (opts) =>
     window.xnautAttachPanelTab('Loops', 'xnautCreateLoopsPanel', opts || {});
 
@@ -92,11 +89,14 @@ window.xnautAttachTasksTab = (opts) =>
         home();
         window.xnautAttachAutomationsTab();
         break;
-      // No 'pm' key. It opened the standalone Projects panel, which is gone
-      // (XNAUT-342): its nine surfaces are tabs and three-dot entries of a
-      // project's workspace, reached by choosing that project in the sidebar.
-      // A caller still asking for it gets the warning below rather than a
-      // silent no-op, because that is how a stale call site gets noticed.
+      case 'pm':
+        // The BMAD project-management panel is the current PM. The old card-view
+        // fallback (xnautAttachPmTab / pm-panel.js) is retired — it was gated on
+        // pm_module_status().enabled, which defaults false, so fresh installs
+        // silently showed a month-old view. Always open the real PM now.
+        home();
+        window.xnautAttachProjectManagementTab();
+        break;
       case 'delivery':
         home();
         window.xnautAttachDeliveryTab();

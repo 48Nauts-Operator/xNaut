@@ -7532,38 +7532,10 @@ function setupEventListeners() {
   // Top bar buttons
   _on('btn-new-tab', 'onclick', (e) => showNewTabMenu(e.currentTarget));
 
-  // The project workspace. This button opened the standalone Projects panel,
-  // which is gone (XNAUT-342); the workspace carries all nine of its surfaces,
-  // so the button points there instead of being deleted with it.
-  //
-  // Which project: the one in scope, else the first the control repository
-  // knows. `xnautActiveProjectKey` is a FUNCTION (app.js:3896) and returns null
-  // at Home — calling it as a value is the trap CLAUDE.md names, so it is
-  // called, and every global below is checked before it is used.
-  _on('btn-projects', 'onclick', async () => {
-    if (typeof window.xnautOpenWorkspace !== 'function') {
-      console.error('[app] xnautOpenWorkspace is not loaded, so the workspace cannot open');
-      return;
-    }
-    let key = typeof window.xnautActiveProjectKey === 'function' ? window.xnautActiveProjectKey() : null;
-    if (!key) {
-      try {
-        const projects = (await invoke('pm_project_list')) || [];
-        key = projects.length ? (projects[0].key || projects[0].name) : '';
-      } catch (e) {
-        console.error('[app] the project list could not be read:', e);
-        key = '';
-      }
-    }
-    if (!key) {
-      // No project to open is a real answer, not a reason to open an empty
-      // workspace: say where one is made.
-      if (typeof window.xnautToast === 'function') {
-        window.xnautToast('No projects yet — create one with the plus beside Projects in the sidebar.');
-      }
-      return;
-    }
-    window.xnautOpenWorkspace({ project: key });
+  // Projects (tasks + plan) launcher — opens the unified Projects panel.
+  _on('btn-projects', 'onclick', () => {
+    if (typeof window.xnautSidebarNavigate === 'function') window.xnautSidebarNavigate('pm');
+    else if (typeof window.xnautAttachPmTab === 'function') window.xnautAttachPmTab();
   });
 
   // 3-dot menu (uses [hidden] attribute + .menu-item class — hover styling via CSS)

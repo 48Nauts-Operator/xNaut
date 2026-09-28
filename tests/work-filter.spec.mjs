@@ -28,9 +28,11 @@ async function openWorkList(page) {
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE', section: 'work' });
+    window.xnautCreateProjectManagementPanel('pm-test', host, {});
   }, TICKETS);
   const pane = page.locator('#pm-test-host .pmw');
+  await pane.locator('[data-project]:not([data-project=""])').first().click();
+  await pane.locator('[data-project-section="work"]').click();
   await pane.locator('[data-view="list"]').click();
   await expect(pane.locator('table.pmw-list tbody tr')).toHaveCount(3);
   return pane;

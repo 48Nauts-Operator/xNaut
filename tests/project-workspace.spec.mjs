@@ -1,24 +1,124 @@
 // smoke.feature: "A project workspace opens and shows its tabs".
 //
+// UNTESTED on every run so far. The Given was read as unmet because Project
+// Management is switched off on the test machines, but that is a fact about
+// those machines rather than about the app: pm-setup.spec.mjs already mounts a
+// configured module through the same stub, and the workspace is one click past
+// it.
+//
 // The Then that matters is the second one. "The workspace shows its tabs" is
 // nearly free; "each tab I open renders content belonging to that tab" is the
 // one that catches a tab wired to nothing, which is the failure that actually
-// ships. So every tab and every three-dot entry is opened and checked for
-// content of its own, not merely for the strip being present.
-//
-// These three used to mount the Projects panel standalone and drive ITS nav,
-// because that panel had one. It does not (XNAUT-342): the panel is a surface
-// of one project now and the tab strip belongs to the workspace, so the same
-// three questions are asked of the workspace, which is the thing that answers
-// them in the app.
+// ships. So each of the eight sections is opened and checked for content of its
+// own, not merely for the nav being present.
 import { test, expect } from '@playwright/test';
+
+const SECTIONS = [
+  'overview', 'nautflow', 'docs', 'designer',
+  'artifacts', 'work', 'delivery', 'settings',
+];
+
+const OK = {
+  enabled: true, configured: true, valid: true, repo_path: '/tmp/smoke-control',
+  remote_url: '', git_repository: true, project_count: 1, ticket_count: 0,
+  error: '', warning: '', branch: 'main', last_commit: '', dirty: false, ahead: 0, behind: 0,
+};
+
+async function mount(page) {
+  await page.evaluate((s) => {
+    window.__xnautStub.pm_module_status = s;
+    document.querySelectorAll('#pm-test-host').forEach((n) => n.remove());
+    const host = document.createElement('div');
+    host.id = 'pm-test-host';
+    document.body.appendChild(host);
+    window.xnautCreateProjectManagementPanel('pm-test', host, {});
+  }, OK);
+  return page.locator('#pm-test-host .pmw');
+}
+
+test.beforeEach(async ({ page }) => {
+  page.on('dialog', (d) => d.dismiss().catch(() => {}));
+  await page.goto('/index.html?stub=1');
+  await page.waitForFunction(() => typeof window.xnautCreateProjectManagementPanel === 'function');
+});
+
+test('opening a project shows the workspace tabs', async ({ page }) => {
+  const pane = await mount(page);
+
+  // The stub ships exactly one project; the sidebar also carries an "ALL"
+  // pseudo-project with an empty key, which is not one.
+  const project = pane.locator('[data-project]:not([data-project=""])').first();
+  await expect(project, 'no project in the sidebar to open').toHaveCount(1);
+  await project.click();
+
+  const nav = pane.locator('.pmw-project-nav');
+  await expect(nav).toBeVisible();
+  for (const section of SECTIONS) {
+    await expect(nav.locator(`[data-project-section="${section}"]`),
+      `the workspace is missing its ${section} tab`).toHaveCount(1);
+  }
+});
+
+test('every workspace tab renders content of its own', async ({ page }) => {
+  const pane = await mount(page);
+  await pane.locator('[data-project]:not([data-project=""])').first().click();
+  await expect(pane.locator('.pmw-project-nav')).toBeVisible();
+
+  const seen = new Map();
+  const empty = [];
+
+  for (const section of SECTIONS) {
+    await pane.locator(`[data-project-section="${section}"]`).click();
+    await page.waitForTimeout(250);
+
+    // The tab must own the selection, or the nav is decorative.
+    await expect(pane.locator(`[data-project-section="${section}"].active`),
+      `${section} did not become the active tab`).toHaveCount(1);
+
+    const body = await pane.locator('.pmw-content').innerText();
+    if (!body.trim()) empty.push(section);
+    seen.set(section, body.trim());
+  }
+
+  expect(empty, `tabs that rendered nothing at all: ${empty.join(', ')}`).toEqual([]);
+
+  // "Content belonging to that tab" means the tabs are not all painting the
+  // same thing. A nav that switches class but not content would pass every
+  // assertion above.
+  const distinct = new Set(seen.values());
+  expect(distinct.size,
+    `eight tabs produced only ${distinct.size} distinct view(s); the nav may be switching nothing`)
+    .toBeGreaterThan(1);
+});
+
+test('no workspace tab shows a raw object or an error string', async ({ page }) => {
+  const pane = await mount(page);
+  await pane.locator('[data-project]:not([data-project=""])').first().click();
+
+  const bad = [];
+  for (const section of SECTIONS) {
+    await pane.locator(`[data-project-section="${section}"]`).click();
+    await page.waitForTimeout(250);
+    const body = await pane.locator('.pmw-content').innerText();
+    if (/\[object \w+\]/.test(body)) bad.push(`${section}: [object Object]`);
+    if (/(^|[\s:>(])undefined([\s.,)<]|$)/.test(body)) bad.push(`${section}: undefined`);
+    if (/(^|[\s:>(])NaN([\s.,)<]|$)/.test(body)) bad.push(`${section}: NaN`);
+  }
+
+  expect(bad, `raw values in the workspace:\n  ${bad.join('\n  ')}`).toEqual([]);
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // XNAUT-336: the project workspace, code first, surfaces as tabs.
 //
-// The Projects panel is mounted FOR a project and nothing else (XNAUT-342). It
-// renders no project rail, no dropdown and no tab nav; the sections it owns are
-// the workspace's tabs and its three-dot sheet.
+// Everything above mounts the Projects panel on its own, with no project in the
+// argument, which is how the sidebar's More menu still opens it: it keeps its
+// project rail, its dropdown and its eight-tab nav, because with no project
+// given there is nothing else here to pick one with.
+//
+// Below is the same panel folded into the workspace (XNAUT-342). Handed a
+// project it renders none of those three, and the sections it owns are the
+// workspace's tabs and its three-dot sheet instead.
 //
 // The failures worth catching here are the silent ones. A tree that renders
 // nothing looks the same as a project with no checkout; a file printed without
@@ -517,59 +617,6 @@ test('a failing ticket store explains the ticket count and leaves git alone', as
   await expect(head.locator('[data-fact="tickets"]')).toHaveAttribute('title', 'the ticket store could not be read');
   await expect(head.locator('[data-fact="changes"]')).toHaveText('3');
   await expect(head.locator('[data-fact="lastcommit"]')).toHaveText('1h ago');
-});
-
-// The three questions the standalone panel's nav used to be asked, asked of the
-// workspace instead (XNAUT-342). Every tab and every three-dot entry is opened,
-// and the assertion is about CONTENT: a strip that switches the active class and
-// paints the same body would satisfy every structural check and be broken.
-const WORKSPACE_TABS = ['code', 'work', 'delivery', 'nautflow', 'vault', 'memory'];
-
-/** Open every tab and every menu entry; hand back key -> rendered text. */
-async function readEverySurface(page) {
-  const seen = new Map();
-  for (const tab of WORKSPACE_TABS) {
-    await page.locator(`.wsp-tabs button[data-wsp-tab="${tab}"]`).click();
-    await page.waitForTimeout(400);
-    await expect(page.locator(`.wsp-tabs button[data-wsp-tab="${tab}"]`),
-      `${tab} did not become the active tab`).toHaveClass(/active/);
-    const body = tab === 'code' ? page.locator('.wsp-code') : page.locator('.wsp-surface');
-    seen.set(tab, (await body.innerText()).trim());
-  }
-  for (const [key, label] of MENU) {
-    await page.locator('.wsp-dots').click();
-    await page.locator(`.wsp-menu .wsp-menu-item[data-wsp-menu="${key}"]`).click();
-    await page.waitForTimeout(400);
-    seen.set(label, (await page.locator('.wsp-sheet-body').innerText()).trim());
-  }
-  return seen;
-}
-
-test('every workspace surface renders content of its own', async ({ page }) => {
-  await openWorkspace(page);
-  const seen = await readEverySurface(page);
-
-  const empty = [...seen].filter(([, body]) => !body).map(([key]) => key);
-  expect(empty, `surfaces that rendered nothing at all: ${empty.join(', ')}`).toEqual([]);
-
-  // Not all painting the same thing. Ten surfaces that produced one view would
-  // mean the strip switches nothing.
-  const distinct = new Set(seen.values());
-  expect(distinct.size,
-    `${seen.size} surfaces produced only ${distinct.size} distinct view(s)`).toBe(seen.size);
-});
-
-test('no workspace surface shows a raw object, undefined or NaN', async ({ page }) => {
-  await openWorkspace(page);
-  const seen = await readEverySurface(page);
-
-  const bad = [];
-  for (const [key, body] of seen) {
-    if (/\[object \w+\]/.test(body)) bad.push(`${key}: [object Object]`);
-    if (/(^|[\s:>(])undefined([\s.,)<]|$)/.test(body)) bad.push(`${key}: undefined`);
-    if (/(^|[\s:>(])NaN([\s.,)<]|$)/.test(body)) bad.push(`${key}: NaN`);
-  }
-  expect(bad, `raw values in the workspace:\n  ${bad.join('\n  ')}`).toEqual([]);
 });
 
 test('no folded surface carries the panel project selector, rail or tab row', async ({ page }) => {

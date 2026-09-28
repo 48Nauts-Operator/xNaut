@@ -32,10 +32,12 @@ test('two fast clicks start one persona run, not two', async ({ page }) => {
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE', section: 'nautflow' });
+    window.xnautCreateProjectManagementPanel('pm-test', host, {});
   });
 
   const pane = page.locator('#pm-test-host .pmw');
+  await pane.locator('[data-project]:not([data-project=""])').first().click();
+  await pane.locator('[data-project-section="nautflow"]').click();
   await pane.locator('[data-flow-stage="idea"]').first().click();
   const ask = pane.locator('.pmw-ask-agent');
   await expect(ask).toBeVisible();

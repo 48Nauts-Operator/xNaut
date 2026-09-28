@@ -64,9 +64,11 @@ async function openNautFlow(page, stub) {
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE', section: 'nautflow' });
+    window.xnautCreateProjectManagementPanel('pm-test', host, {});
   }, stub);
   const pane = page.locator('#pm-test-host .pmw');
+  await pane.locator('[data-project]:not([data-project=""])').first().click();
+  await pane.locator('[data-project-section="nautflow"]').click();
   return pane;
 }
 

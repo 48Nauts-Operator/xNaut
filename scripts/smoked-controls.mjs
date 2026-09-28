@@ -20,7 +20,7 @@ export const SMOKED = [
   'Projects',
   'Toggle projects sidebar', 'Toggle project pane', 'Command snippets',
   'Open new browser tab', 'Open new markdown tab', 'Open new diff tab',
-  'Open project workspace', 'Open worktree manager', 'More actions',
+  'Open Projects (tasks & plan)', 'Open worktree manager', 'More actions',
   'Help and keyboard shortcuts', 'Refresh usage',
   'xNAUT settings', 'AI settings', 'Tasks Mode settings', 'Appearance settings',
   'Keyboard Shortcuts settings', 'Mobile settings', 'Nautify settings',
