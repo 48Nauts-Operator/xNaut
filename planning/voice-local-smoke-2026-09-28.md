@@ -127,3 +127,30 @@ XNAUT_TEST_PORT=4296 npx playwright test --config=playwright.voice.config.mjs
 These browser tests mock native voice commands; they prove the selected mode
 reaches session startup, not microphone/audio acceptance. Native bundle rebuilt
 for the operator to try the corrected menu.
+
+## Follow-up: Agent Space parity and discoverable Chat
+
+Owner screenshot showed that Agent Space still mounted the legacy dictation and
+local Talk adapters. Earlier composer work had only changed the regular Chat
+surface. Replaced both Agent Space adapters with the shared continuous public
+voice controller and its single STS/STT microphone menu/right-pane status.
+
+Spoken user turns and voice captions persist in the selected agent's thread.
+Delegated work uses its existing agent_chat_turn path and profile, saving the
+full answer; voice commit does not duplicate it. Spoken commentary is visible
+but excluded from authoritative backend history. STT appends to the draft with
+no automatic send. Switching agents closes the previous microphone. Existing
+build-request/workspace confirmation behavior is preserved.
+
+Added **+ → New Chat** to the app's create menu. The prior test conversation
+was opened using an internal function; the regular Chat had no entry in this
+menu. New Chat now creates a normal independently keyed conversation without
+developer-console commands.
+
+Verification: four new full-app UI scenarios passed in both Chromium and
+WebKit (8/8): public menu entry, Agent Space STS/persistence/context replay and
+right-pane playback state, STT plus agent-switch cleanup, and spoken build
+confirmation. All 16 existing Agent Space tests passed; modified Agent Space
+JavaScript lint, app syntax and diff checks passed. Native debug bundle rebuilt
+for the operator. These tests mock the native command boundary; real audio on
+the Agent Space surface still needs hands-on acceptance.

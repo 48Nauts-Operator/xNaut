@@ -1134,12 +1134,9 @@
     // The mic used to exist only in the chat pane, so dictation was invisible
     // in the composer he actually types into (XNAUT-187).
     const dictate = pane.querySelector('[data-dictate]');
-    let voiceAdapter = null;
-    if (dictate && window.xnautAttachDictation) {
-      window.xnautAttachDictation(dictate, (text) => {
-        window.xnautDictationAppend(composer, text);
-      }, `${profile.display_name || profile.handle} · Agent Space`);
-    }
+    let liveVoice = null;
+    let voiceCaptionId = null;
+    const voiceReplyTurns = new Set();
     const terminalButton = pane.querySelector('[data-terminal]');
     const showTerminal = (nextSessionId) => {
       sessionId = nextSessionId || sessionId;
@@ -1676,36 +1673,46 @@
     // Anthropic lane rejected the whole request as a prefill (XNAUT-217).
     const PLACEHOLDERS = new Set(['Working…', 'Thinking…']);
     const chatHistory = () => (thread.messages || [])
-      .filter((message) => message.kind !== 'action' && message.text && !PLACEHOLDERS.has(message.text))
+      .filter((message) => message.kind !== 'action' && !message.voiceTranscript && message.text && !PLACEHOLDERS.has(message.text))
       .slice(-16)
       .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: String(message.text) }));
 
-    const submit = async (buildTask, buildPath) => {
-      const text = buildTask || composer.value.trim();
+    const submit = async (buildTask, buildPath, voiceRequest) => {
+      const text = buildTask || voiceRequest?.text || composer.value.trim();
+      if (!buildTask && !voiceRequest && liveVoice?.isActive()) {
+        if (text) { await liveVoice.send(text); composer.value = ''; grow(); }
+        return;
+      }
       if (!text) return;
       // The guard is for a second click on Send, NOT for the internal handoff
       // from a chat turn into a build: that call arrives with send already
       // disabled and would otherwise return silently, which looks exactly
       // like a dead button.
-      if (!buildTask && send.disabled) return;
+      if (!buildTask && send.disabled) {
+        if (voiceRequest) throw new Error('The agent is still working on the previous request.');
+        return;
+      }
       send.disabled = true;
 
       if (!buildTask) {
         const userMessageId = `m-${Date.now()}`;
-        const voiceTurn = voiceAdapter?.beginTurn(userMessageId);
-        const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
-        thread = updateThread(profile.handle, thread.id, (next) => {
-          next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
-          next.messages.push({ id: userMessageId, role: 'user', text, at: nowIso() });
-          return next;
-        });
-        saveSharedMessage({ id: userMessageId, role: 'user', text, at: nowIso() });
-        composer.value = ''; grow();
+        if (!voiceRequest) {
+          const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
+          thread = updateThread(profile.handle, thread.id, (next) => {
+            next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
+            next.messages.push({ id: userMessageId, role: 'user', text, at: nowIso() });
+            return next;
+          });
+          saveSharedMessage({ id: userMessageId, role: 'user', text, at: nowIso() });
+          composer.value = ''; grow();
+        }
         const replyId = `a-${Date.now()}`;
         thread = updateThread(profile.handle, thread.id, (next) => {
           next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso() });
           return next;
         });
+        if (voiceRequest) voiceReplyTurns.add(voiceRequest.turn);
+        let handedToBuild = false;
         paintMessages();
         try {
           // The Settings page still writes provider credentials to the legacy
@@ -1753,8 +1760,9 @@
             // ("now add sound") is the interrogation this flow exists to end.
             if (thread.workspace) {
               paintMessages();
+              handedToBuild = true;
               await submit(text, thread.workspace);
-              return;
+              return summary || 'That needs a coding session.';
             }
             thread = updateThread(profile.handle, thread.id, (next) => {
               const message = next.messages.find((item) => item.id === replyId);
@@ -1764,14 +1772,15 @@
             paintMessages();
           } else {
             updateAgentMessage(replyId, reply || 'No answer came back.');
-            voiceAdapter?.reply(voiceTurn, reply);
+            if (!reply) throw new Error('The agent returned no answer.');
           }
+          return reply.startsWith('BUILD-REQUEST') ? reply.split('\n').slice(1).join('\n').trim() || 'That needs a coding session.' : reply;
         } catch (error) {
           updateAgentMessage(replyId, `Could not answer: ${String(error)}`);
+          if (voiceRequest) throw error;
         } finally {
-          voiceAdapter?.finishTurn(voiceTurn);
+          if (!handedToBuild) send.disabled = false;
         }
-        send.disabled = false;
         return;
       }
 
@@ -1847,15 +1856,62 @@
     // "[object PointerEvent]" and, to its credit, refused to act on it.
     // Enter went through submit() with no arguments and worked, which is why
     // this looked intermittent rather than broken.
-    if (dictate) voiceAdapter = window.xnautAttachVoiceConversation(dictate, {
+    if (dictate) liveVoice = window.xnautAttachLiveVoice?.(dictate, {
       label: `${profile.display_name || profile.handle} · Agent Space`,
+      statusHost: pane,
       connected: () => dictate.isConnected,
-      insert: (text) => window.xnautDictationAppend(composer, text),
-      submit: () => {
-        if (send.disabled) throw new Error('The agent is busy. Your words are in the composer; send them when ready.');
-        return submit();
+      binding: () => ({
+        conversationId: thread.id, agent: profile.handle,
+        project: thread.workspace || profile.default_project || '',
+        provider: profile.provider || '', model: profile.chat_model || profile.model || '',
+        permission: 'agent-chat',
+      }),
+      history: () => chatHistory().map((m) => ({ role: m.role, text: m.content })),
+      onCaption: (role, text) => {
+        if (!text) return;
+        const asRole = role === 'user' ? 'user' : 'agent';
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          let message = next.messages.find((m) => m.id === voiceCaptionId);
+          if (!message || message.role !== asRole) {
+            voiceCaptionId = `voice-${crypto.randomUUID()}`;
+            message = { id: voiceCaptionId, role: asRole, text: '', voiceTranscript: true, at: nowIso() };
+            next.messages.push(message);
+          }
+          message.text += text;
+          return next;
+        });
+        paintMessages();
+      },
+      onCommit: (role, text, turn) => {
+        // submit already saved the full agent answer. Spoken commentary is
+        // visible too, but must not become a second backend answer/context.
+        if (role === 'assistant' && voiceReplyTurns.delete(turn)) { voiceCaptionId = null; return; }
+        const id = voiceCaptionId || `voice-${crypto.randomUUID()}`;
+        const asRole = role === 'user' ? 'user' : 'agent';
+        thread = updateThread(profile.handle, thread.id, (next) => {
+          let message = next.messages.find((m) => m.id === id && m.role === asRole);
+          if (!message) { message = { id: `voice-${crypto.randomUUID()}`, role: asRole, at: nowIso() }; next.messages.push(message); }
+          message.text = text;
+          delete message.voiceTranscript;
+          if (role === 'user' && next.messages.filter((m) => m.role === 'user').length === 1) next.title = text.replace(/\s+/g, ' ').slice(0, 48);
+          saveSharedMessage({ ...message, role: role === 'user' ? 'user' : 'assistant', agent: profile.handle });
+          return next;
+        });
+        voiceCaptionId = null;
+        paintMessages();
+      },
+      onTranscriptDelta: (text, first) => {
+        if (first && composer.value && !/\s$/.test(composer.value) && !/^\s/.test(text)) composer.value += ' ';
+        composer.value += text;
+        grow();
+      },
+      dispatch: (request) => {
+        const text = [...thread.messages].reverse().find((m) => m.role === 'user' && !m.voiceTranscript)?.text;
+        if (!text) throw new Error('No completed voice transcript to send.');
+        return submit(null, null, { text, turn: request.turn });
       },
     });
+    paneCleanups.push(() => { void liveVoice?.end(); });
     send.onclick = () => submit();
     composer.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
