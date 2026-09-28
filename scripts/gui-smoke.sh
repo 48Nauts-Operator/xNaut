@@ -631,7 +631,7 @@ if [ -n "$APP_PID" ]; then
     # nothing is now a failure instead of a shrug.
     for pair in \
       "AI settings|AI settings pane" \
-      "Voice settings|Voice settings pane" \
+      "Voice settings|voice settings pane" \
       "Tasks Mode settings|Tasks Mode settings pane" \
       "Appearance settings|Appearance settings pane" \
       "Keyboard Shortcuts settings|Keyboard Shortcuts settings pane" \
