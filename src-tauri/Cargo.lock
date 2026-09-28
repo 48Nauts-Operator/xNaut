@@ -6536,7 +6536,7 @@ dependencies = [
 
 [[package]]
 name = "xnaut"
-version = "1.28.0"
+version = "1.28.1"
 dependencies = [
  "anyhow",
  "axum",

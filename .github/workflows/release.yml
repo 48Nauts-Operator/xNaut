@@ -147,6 +147,29 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: cargo tauri build --target ${{ matrix.target }}
 
+      - name: Verify signed microphone permission (macOS)
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, plistlib, subprocess
+          folder = pathlib.Path('target') / os.environ['RELEASE_TARGET'] / 'release/bundle/macos'
+          apps = list(folder.glob('*.app'))
+          assert len(apps) == 1, f'Expected one app bundle, found {apps}'
+          app = apps[0]
+          subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+          signed = subprocess.run(['codesign', '-d', '--entitlements', ':-', str(app)],
+                                  check=True, capture_output=True)
+          entitlements = plistlib.loads(signed.stdout)
+          assert entitlements.get('com.apple.security.device.audio-input') is True, \
+              'Signed app is missing microphone access under Hardened Runtime'
+          info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+          assert info.get('NSMicrophoneUsageDescription'), 'Missing microphone consent description'
+          print(f'Verified native microphone entitlement and consent description: {app.name}')
+          PY
+
       # Tauri notarizes the .app but NOT the .dmg wrapper, so a downloaded DMG
       # still trips Gatekeeper ("cannot check for malicious software"). Notarize
       # + staple the DMG itself. Uses the same Apple secrets; no-op if unset.

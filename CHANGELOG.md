@@ -2,7 +2,9 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.28.0] - 2026-09-28
+## [1.28.1] - 2026-09-28
+
+The initial 1.28.0 build was withdrawn before installer publication to add the microphone entitlement required by hardened macOS signing.
 
 ### Added
 - Continuous public voice conversations in Chat and Agent Space, following Bucki's conversation pattern: switch the microphone on, speak naturally, interrupt, and continue without a send button for each turn. Your selected agent handles the work. (XNAUT-416)
@@ -13,6 +15,7 @@ All notable changes to xNAUT are documented in this file.
 - New Chat is available from the + menu.
 
 ### Fixed
+- Signed macOS bundles declare the audio-input entitlement required for native microphone capture.
 - Voice menu choices work reliably in macOS WebKit, and Agent Space uses the same continuous voice controls as Chat.
 - Agent acknowledgements no longer hide pending work behind a speaking animation.
 - Ticket lookups resolve an exact ticket ID before applying list limits. Provider errors returned as JSON are surfaced instead of appearing as empty agent replies, including a bounded retry for incompatible reasoning settings.
