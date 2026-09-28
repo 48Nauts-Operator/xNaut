@@ -4,6 +4,14 @@ Date: 2026-09-16. Branch: `feat/xnaut-416-voice-conversations`, based on `dev` a
 Tickets: XNAUT-416 (epic), XNAUT-417 (probes), XNAUT-418 (coordinator), XNAUT-419 (overlay), XNAUT-420 (local bridge).
 Status: in development, not released. No ticket's full acceptance gate is complete.
 
+## Preservation checkpoint — 2026-09-28
+
+This branch is an unfinished work-in-progress backup. The user confirms that it does not yet work as designed: the current button-driven interaction does not deliver the intended natural, streaming conversation. Earlier focused test results below describe individual components, not acceptance of the overall experience. No new runtime tests were performed for this backup checkpoint.
+
+Resume in worktree `.worktrees/voice-conversations`, branch `feat/xnaut-416-voice-conversations`. Implementation commits `f6a0c7c` and `c1d46dd` preserve the coordinator, overlay, local speech companion and chat readback. The architecture and implementation plan beside this file describe the target behavior and remaining work. This voice feature belongs to xNaut.
+
+The backup covers tracked source, tests and plans. Local credentials, private Jarvis voice assets, installed model weights and generated build/cache files are external or ignored and are not part of the Git backup.
+
 ## Current increment: local speech service and chat readback (XNAUT-420)
 
 The optional [local companion and setup guide](../companions/local-voice/README.md) now implement authenticated capabilities and protocol-v1 WebSockets. They call Parakeet and supplied-text Qwen3-TTS directly, keep one model worker, bound audio/text/queues, reject browser origins, and discard buffered engine frames after cancellation. No conversational LLM or private voice asset is included.
