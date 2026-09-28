@@ -160,3 +160,20 @@ the Agent Space surface still needs hands-on acceptance.
 Owner requested red for thinking and green for speaking. Thinking now uses
 `#ff5c63`; speaking remains `#2de2a8`. This supersedes the blue thinking color
 in earlier entries. No session-state or animation timing changes.
+
+## Follow-up: thinking must match Chat during overlapping speech
+
+Owner screenshot showed Chat waiting for an agent answer while the orb stayed
+green/Speaking. The renderer gave playback priority over pending agent work.
+A spoken acknowledgement can overlap that work, masking its Thinking state.
+
+Pending delegated work now has display priority (red Thinking); once all
+requests settle, ongoing playback shows green Speaking, otherwise Listening.
+Track each outstanding dispatch rather than a single boolean so an earlier
+request finishing cannot clear the state while another is still pending.
+
+Verified the Agent Space screenshot scenario with the full app: chat placeholder
+and red CSS state during acknowledged/pending work, then green on result and
+neutral when audio drains. Also tested overlapping requests. Full public voice
+and Agent Space voice suites passed in Chromium and WebKit: 52/52. These tests
+mock the native audio/agent boundary. Native debug build passed.

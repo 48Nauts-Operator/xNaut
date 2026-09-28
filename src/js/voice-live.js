@@ -45,10 +45,13 @@
   function render(state) {
     if (!active) return;
     const { overlay } = active;
-    overlay.dataset.state = active.speaking ? 'speaking' : active.working ? 'thinking' : 'listening';
+    // A spoken acknowledgement can overlap the agent request. Keep the
+    // pending work visible, matching the chat's Thinking state, until every
+    // delegated request settles; playback becomes green after that.
+    overlay.dataset.state = active.working ? 'thinking' : active.speaking ? 'speaking' : 'listening';
     overlay.querySelector('[data-live-destination]').textContent = active.label;
-    overlay.querySelector('[data-live-status]').textContent = active.speaking ? 'Speaking…'
-      : active.working ? 'Thinking…'
+    overlay.querySelector('[data-live-status]').textContent = active.working ? 'Thinking…'
+      : active.speaking ? 'Speaking…'
       : active.silent && state === 'Listening — just talk'
         ? 'Transcribing — nothing is sent until you press Send' : state;
     overlay.querySelector('[data-live-policy]').textContent = active.silent
@@ -140,6 +143,8 @@
   /// answer, because the user will hear whatever comes back.
   async function runTurn(request, surface) {
     const session = active;
+    const pending = Symbol('voice turn');
+    session.pendingTurns.add(pending);
     session.working = true;
     render('Working…');
     let answer = '';
@@ -154,8 +159,9 @@
       answer = String(error && error.message ? error.message : error);
       failed = true;
     }
+    session.pendingTurns.delete(pending);
     if (!active || active.id !== session.id) return;
-    session.working = false;
+    session.working = session.pendingTurns.size > 0;
     render('Listening — just talk');
     try {
       await invoke('voice_live_result', {
@@ -242,7 +248,7 @@
       const overlay = createOverlay(surface);
       const session = {
         id, button, overlay, label: surface.label,
-        caption: '', captionRole: null, restored: false, working: false,
+        caption: '', captionRole: null, restored: false, working: false, pendingTurns: new Set(),
         silent, transcriptStarted: false,
         speaking: false,
         inline: !!surface.statusHost,

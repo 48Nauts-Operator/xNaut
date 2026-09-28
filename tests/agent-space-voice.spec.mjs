@@ -94,3 +94,28 @@ test('spoken build requests keep the existing workspace confirmation', async ({ 
   expect(await page.evaluate(() => window.__xnautInvokes.some(i => i.cmd === 'agent_profile_launch'))).toBe(false);
   await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'voice_live_result').length)).toBe(1);
 });
+
+test('pending Agent Space answer stays red during spoken acknowledgement, then becomes green', async ({ page }) => {
+  await openAgent(page);
+  await start(page);
+  await page.evaluate(() => {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = (name, args) => name === 'agent_chat_turn'
+      ? new Promise(resolve => { window.finishAgentAnswer = resolve; }) : invoke(name, args);
+  });
+  await emit(page, [
+    { kind: 'playback', speaking: true },
+    { kind: 'commit', role: 'user', text: 'Explain the reliability sprint.', turn: 0 },
+    { kind: 'dispatch', turn: 0, epoch: 0 },
+    { kind: 'caption', role: 'assistant', text: "I'll get the backend's take." },
+  ]);
+  await expect(page.locator('.as-message-text').filter({ hasText: /^Thinking…$/ })).toBeVisible();
+  await expect(page.locator('.voice-live-docked')).toHaveAttribute('data-state', 'thinking');
+  await expect(page.locator('.voice-orb')).toHaveCSS('--voice-color', '#ff5c63');
+  await page.evaluate(() => window.finishAgentAnswer('The sprint addresses reliability issues.'));
+  await expect(page.locator('.as-message-text').filter({ hasText: /^Thinking…$/ })).toHaveCount(0);
+  await expect(page.locator('.voice-live-docked')).toHaveAttribute('data-state', 'speaking');
+  await expect(page.locator('.voice-orb')).toHaveCSS('--voice-color', '#2de2a8');
+  await emit(page, [{ kind: 'playback', speaking: false }]);
+  await expect(page.locator('.voice-live-docked')).toHaveAttribute('data-state', 'listening');
+});

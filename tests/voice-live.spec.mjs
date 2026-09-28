@@ -382,13 +382,28 @@ test('voice status docks in the right pane and reflects actual playback and back
   await expect(status).toHaveAttribute('data-state', 'speaking');
   await expect(status).toContainText('Speaking');
   await page.evaluate(() => {
-    window.emitLive({ kind: 'playback', speaking: false });
     const invoke = window.__TAURI__.core.invoke;
-    window.__TAURI__.core.invoke = (name, args) => name === 'chat_send_tools' ? new Promise(() => {}) : invoke(name, args);
+    window.finishVoiceRequests = [];
+    window.__TAURI__.core.invoke = (name, args) => name === 'chat_send_tools'
+      ? new Promise(resolve => window.finishVoiceRequests.push(resolve)) : invoke(name, args);
     window.emitLive({ kind: 'dispatch', turn: 0, epoch: 0 });
   });
+  // An acknowledgement can still be playing when the backend starts work.
+  // Its playback flag must not mask the same Thinking state shown in chat.
   await expect(status).toHaveAttribute('data-state', 'thinking');
   await expect(status).toContainText('Thinking');
+  await page.evaluate(() => {
+    window.emitLive({ kind: 'dispatch', turn: 1, epoch: 0 });
+    window.emitLive({ kind: 'playback', speaking: true });
+    window.finishVoiceRequests[0]('First answer.');
+  });
+  await expect.poll(() => page.evaluate(() => window.calls.filter(c => c.name === 'voice_live_result').length)).toBe(1);
+  await expect(status).toHaveAttribute('data-state', 'thinking');
+  await page.evaluate(() => window.finishVoiceRequests[1]('Second answer.'));
+  await expect(status).toHaveAttribute('data-state', 'speaking');
+  await expect(status).toContainText('Speaking');
+  await page.evaluate(() => window.emitLive({ kind: 'playback', speaking: false }));
+  await expect(status).toHaveAttribute('data-state', 'listening');
 });
 
 test('switching STS to STT closes the old stream and ignores its late events', async ({ page }) => {
