@@ -240,3 +240,8 @@ Final native voice run: **91 passed, 1 opt-in account test ignored**. Full
 Chromium/WebKit UI run: **62 passed**. The account probe had already passed
 through the Settings command before the mute change. Manual checklist:
 `planning/voice-preview-acceptance.md`.
+
+Preview packaging completed successfully at the path in the manual checklist.
+`codesign --verify --deep --strict` passed. The previous Voice Test executable
+and Info.plist SHA-256 fingerprints match the pre-build snapshot. No preview
+launch, application quit, or reload was performed during this packaging.
