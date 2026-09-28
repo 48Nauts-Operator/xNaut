@@ -534,14 +534,19 @@ if [ -n "$APP_PID" ]; then
   # toggles the sidebar away. The sidebar is up on launch unless it was hidden
   # (tasks-mode-glue.js:692, `xnaut-sidebar-visible`), so this is the one point
   # in the walk where the rail is reliably on screen.
-  # The right pane's marker is its Looms tab, not the word Workspace: the
+  # The right pane's marker is its Slice diff view button, present in every
+  # view of the pane, not the word Workspace: the
   # Projects rail step above opens a project workspace in a tab of that name,
   # so Workspace stays on screen whether or not the pane toggled (run
   # 20260928-105940 read a correct toggle as NOTHING TOGGLED for that reason).
+  # The sidebar's visibility persists across launches, and the previous walk
+  # leaves it toggled off. The rail has to be on screen for the Projects step,
+  # so bring it back first; the toggle step below then hides it again.
+  "$AXUI" "$APP_PID" list -x "Projects" >/dev/null 2>&1 || click_named "Toggle projects sidebar"
   for triple in \
     "Projects|Code|" \
     "Toggle projects sidebar|~Refresh plan usage|" \
-    "Toggle project pane|~Looms|" \
+    "Toggle project pane|~Slice diff|" \
     "Command snippets|Command Snippets|" \
     "Open new browser tab|Browser|" \
     "Open new markdown tab|Markdown|" \
