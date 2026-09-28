@@ -719,7 +719,11 @@ window.xnautAttachTasksTab = (opts) =>
       invoke('settings_get').then(applyModuleVisibility).catch(() => {});
       // Mesh is the global landing page: what needs André, first. Observatory
       // remains one click away for operational detail.
-      if (typeof window.xnautOpenMesh === 'function') window.xnautOpenMesh();
+      // A user can open Chat before this delayed startup callback runs.
+      // Do not replace the panel they just chose with the landing page.
+      if (!tabsRef().some((tab) => tab.isPanel) && typeof window.xnautOpenMesh === 'function') {
+        window.xnautOpenMesh();
+      }
     }, 400);
   }
   if (document.readyState === 'loading') {

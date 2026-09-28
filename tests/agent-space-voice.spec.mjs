@@ -32,6 +32,27 @@ test('plus menu opens a usable regular Chat without console commands', async ({ 
   await expect(page.locator('.chatp-pane .voice-live-button')).toBeEnabled();
 });
 
+test('delayed startup cannot replace a Chat the user already opened', async ({ page }) => {
+  await page.addInitScript(() => {
+    const schedule = window.setTimeout.bind(window);
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 400 && new Error().stack.includes('tasks-mode-glue.js')) {
+        window.finishLandingStartup = callback;
+        return 0;
+      }
+      return schedule(callback, delay, ...args);
+    };
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.finishLandingStartup && window.xnautAttachChatTab);
+  await page.getByRole('button', { name: 'New terminal', exact: true }).click();
+  await page.locator('#new-tab-menu').getByText('New Chat', { exact: true }).click();
+  await expect(page.locator('.chatp-pane .voice-live-button')).toBeVisible();
+  await page.evaluate(() => window.finishLandingStartup());
+  await expect(page.locator('.chatp-pane .voice-live-button')).toBeVisible();
+  await expect(page.getByPlaceholder('Message… (Enter to send, Shift+Enter for newline)')).toBeEditable();
+});
+
 test('Agent Space uses one mic, streams STS through its selected agent and saves the full conversation', async ({ page }) => {
   await openAgent(page);
   await expect(page.locator('.agent-space [data-dictate]')).toHaveCount(1);

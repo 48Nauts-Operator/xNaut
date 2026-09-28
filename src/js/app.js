@@ -2428,7 +2428,9 @@ function loadSettingsSection(section) {
   if (section === 'guardrails' && typeof window.xnautRenderKillSwitches === 'function') {
     window.xnautRenderKillSwitches(document.getElementById('kill-switches-host'));
   }
-  if (section === 'voice') window.xnautRenderVoiceSettings?.(document.getElementById('voice-settings-host'));
+  if (section === 'voice' && typeof window.xnautRenderVoiceSettings === 'function') {
+    window.xnautRenderVoiceSettings(document.getElementById('voice-settings-host'));
+  }
   if (section === 'tasksmode' && typeof window.xnautRenderTasksModeSettings === 'function') {
     window.xnautRenderTasksModeSettings(document.getElementById('tasksmode-settings-host'));
   }
