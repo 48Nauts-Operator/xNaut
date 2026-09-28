@@ -189,16 +189,13 @@ pub fn voice_live_ready() -> bool {
     Config::load().is_ok()
 }
 
-/// Connects a socket to an existing session and starts the reader, writer and
-/// microphone. Shared by `voice_live_open` and `voice_live_reconnect`: the
-/// session — and therefore the conversation — outlives any one transport.
-async fn attach(
-    app: &tauri::AppHandle,
-    window_label: &str,
-    session_id: &str,
-    session: Arc<Mutex<LiveSession>>,
+/// The actual TLS/authentication path, also exercised by the opt-in account smoke test.
+async fn connect(
     config: &Config,
-) -> Result<Arc<Handle>, String> {
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+> {
     let mut request = config
         .validate()?
         .as_str()
@@ -218,7 +215,18 @@ async fn attach(
     .map_err(|_| "the voice service did not answer within 15 seconds".to_string())?
     .map_err(|_| "cannot reach the voice service; check the endpoint and key".to_string())?;
 
-    let (mut sink, mut stream) = socket.split();
+    Ok(socket)
+}
+
+/// Connects the session and starts the reader, writer and microphone.
+async fn attach(
+    app: &tauri::AppHandle,
+    window_label: &str,
+    session_id: &str,
+    session: Arc<Mutex<LiveSession>>,
+    config: &Config,
+) -> Result<Arc<Handle>, String> {
+    let (mut sink, mut stream) = connect(config).await?.split();
     let (outbound, mut pending) = mpsc::unbounded_channel::<ClientEvent>();
     let closed = Arc::new(AtomicBool::new(false));
     // A fresh transport starts at fence zero; the session is new too, because
@@ -752,6 +760,45 @@ fn resample(samples: &[i16], from_rate: u32, channels: u16) -> Vec<i16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uses the configured account for a short, billable connection. No microphone
+    /// or conversation content is sent. Run explicitly; never requires CI secrets.
+    #[tokio::test]
+    #[ignore = "requires the private voice-live.json profile and a live account"]
+    async fn live_account_accepts_session_start_over_tls() {
+        let config = Config::load().expect("private voice profile required");
+        let mut socket = connect(&config).await.expect("native TLS/auth handshake");
+        let start = ClientEvent::SessionStart {
+            model: config
+                .model
+                .clone()
+                .unwrap_or_else(|| protocol::DEFAULT_VOICE_MODEL.into()),
+            instructions: "Connection test only. Do not speak unless asked.".into(),
+        };
+        socket
+            .send(Message::Text(start.to_json().to_string()))
+            .await
+            .unwrap();
+        let accepted = tokio::time::timeout(Duration::from_secs(15), async {
+            while let Some(frame) = socket.next().await {
+                if let Message::Text(text) = frame.expect("voice service frame") {
+                    let value = serde_json::from_str(&text).expect("voice service JSON");
+                    match ServerEvent::decode(&value) {
+                        ServerEvent::SessionStarted => return true,
+                        ServerEvent::Error { .. } | ServerEvent::SessionClosed => return false,
+                        _ => {}
+                    }
+                }
+            }
+            false
+        })
+        .await;
+        let _ = socket.close(None).await;
+        assert!(
+            matches!(accepted, Ok(true)),
+            "service did not accept session.start"
+        );
+    }
 
     fn profile(endpoint: Option<&str>) -> Config {
         Config {

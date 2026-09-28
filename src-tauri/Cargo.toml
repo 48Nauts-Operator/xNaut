@@ -46,7 +46,8 @@ ring = "0.17"
 futures-util = "0.3"
 
 # WebSocket for real-time communication (if needed for session sharing)
-tokio-tungstenite = "0.21"
+# Public voice uses wss://; default tungstenite features support only ws://.
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 
 # Error handling
 anyhow = "1.0"
