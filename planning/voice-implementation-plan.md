@@ -4,21 +4,26 @@ Status: implementation started; no phase gate complete. Date: 2026-09-16.
 Progress and measured probes: [First implementation slice](voice-build-progress.md).
 Architecture: [Voice conversations](voice-architecture.md).
 
-## Delivery order
+## Current delivery order — user decision, 2026-09-28
 
-Build a useful local-service vertical slice first, then extend the same contracts to the public System default and optional cloud voice. Each phase has an observable completion gate. Do not advertise continuous streaming, offline recognition, or subscription voice where a provider has not passed its gate.
+**V1: Bucki public voice inside xNaut. V2: private Jarvis route.** This supersedes the original local-first delivery sequence. The P0–P6 sections below are retained as the earlier engineering breakdown; their numbering is not the current execution order. The existing local prototype is preserved for V2, not the V1 acceptance baseline.
 
-```text
-P0: capability probes
-  -> P1: coordinator and normalized agent events
-  -> P2: local speech bridge + one conversation (Full/Silent)
-  -> P3: agent-authored Summary + streaming agent adapters
-  -> P4: system speech + remaining Xnaut surfaces
-  -> P5: optional cloud voice
-  -> P6: public release and private setup documentation
-```
+V1 must reproduce the public Bucki conversation experience in the selected xNaut conversation:
 
-System and cloud adapters share the P1 contracts; they do not depend on installing P2's local runtime. If a capability probe fails, record the supported alternative and update the affected gate, not the rest of the product contract.
+1. Start voice once; sustain multiple spoken turns without Finish & send / Speak again for every turn.
+2. Stream microphone audio and spoken replies through the public Bucki-style session route, with turn detection and interruption. Do not substitute recording a whole utterance followed by completed-answer readback.
+3. Persist both sides of the transcript into the selected xNaut conversation, with stable identities and no duplicate turns from partial events.
+4. Reopen that conversation later and continue with its saved context after explicitly starting voice again. Restoring the text display alone does not establish context restoration to the voice/backend session.
+5. Keep task execution bound to the selected xNaut agent and permission path. Connect voice delegation and task results without starting duplicate agent turns from transcript events.
+6. Test synthetic multi-turn audio, barge-in, save/reopen/context continuity and reconnection; then verify real hardware. Public voice is explicit opt-in, and V1 requires no local model installation.
+
+Inspect Bucki's actual active public configuration before choosing the transport: its source contains distinct Live and Realtime paths. Reuse the working behavior and event contract, not an assumed interchangeable protocol. Preserve Full/Summary/Silent as requirements; do not claim a mode is available until wired and tested. No additional local summarizer is needed for V1.
+
+V2 adds the private Jarvis/local provider while preserving the same conversation, transcript and resume contract. System speech and broader field support remain later work and do not block V1. Private voice assets and credentials remain external.
+
+## Earlier engineering breakdown (historical ordering)
+
+The following phases describe the original plan and implementation probes. Apply them selectively to the V1/V2 order above. Historical local push-to-talk fallback gates do not satisfy V1 continuous-conversation acceptance.
 
 ## P0 — Resolve the implementation risks
 

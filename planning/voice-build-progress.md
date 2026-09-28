@@ -4,6 +4,14 @@ Date: 2026-09-16. Branch: `feat/xnaut-416-voice-conversations`, based on `dev` a
 Tickets: XNAUT-416 (epic), XNAUT-417 (probes), XNAUT-418 (coordinator), XNAUT-419 (overlay), XNAUT-420 (local bridge).
 Status: in development, not released. No ticket's full acceptance gate is complete.
 
+## Scope correction — 2026-09-28
+
+The user clarified the target as Bucki working inside xNaut: continuous streamed conversation, transcription, saved conversations and the ability to pick them up later. Release order is now **V1 public Bucki route, V2 private Jarvis route**. The prior local-first plan is superseded; existing local work is retained for V2. No runtime correction is implemented by this documentation change.
+
+Source review in `/Users/cand0rian/DevHub_Studio/factory/02-Development/Bucky` found public audio/transcript event handling in `OpenAIRealtimeRunner.swift`, a distinct Live/delegation contract in `GPTLiveSession.swift`, and saved conversation/artifact loading and atomic writes in `WorkspaceHistoryStore.swift` plus `BuckiManager.swift`. The user reports that conversation/resume works today. This review confirms code paths, not a fresh end-to-end run or which public transport is active on the user's machine; backend context replay still needs tracing.
+
+By comparison, xNaut's `src/js/voice-conversation.js` explicitly advertises `streamingInput: false`, waits for playback before recording, and reads completed chat answers. That implementation cannot establish parity with the requested continuous public Bucki route. See the revised implementation plan for V1 acceptance criteria.
+
 ## Preservation checkpoint — 2026-09-28
 
 This branch is an unfinished work-in-progress backup. The user confirms that it does not yet work as designed: the current button-driven interaction does not deliver the intended natural, streaming conversation. Earlier focused test results below describe individual components, not acceptance of the overall experience. No new runtime tests were performed for this backup checkpoint.

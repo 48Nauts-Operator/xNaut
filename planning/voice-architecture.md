@@ -4,6 +4,10 @@ Status: target architecture; initial implementation underway. See [build progres
 Date: 2026-09-16.
 Implementation sequence: [Voice implementation plan](voice-implementation-plan.md).
 
+## Current release scope — 2026-09-28
+
+User clarification: bring Bucki's working public continuous-conversation route into xNaut for **V1**, including transcripts saved with the conversation and resuming its context later. **V2** adds the private Jarvis route. This supersedes local-first delivery and the System-default assumption for V1 in the long-term provider table below. Public voice starts explicitly; opening a saved conversation must not activate the microphone automatically. The working Bucki experience is the reference; the current xNaut button-driven prototype is not acceptance evidence.
+
 ## Product decision
 
 Add one voice overlay that connects to the selected Xnaut conversation or editable field. Voice processing and task execution are independent. A user can switch from paid cloud voice to system speech or a private local service without changing the selected execution agent or losing the written conversation.
