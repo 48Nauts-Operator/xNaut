@@ -43,7 +43,7 @@ const TABS = [
   'Open new browser tab',
   'Open new markdown tab',
   'Open new diff tab',
-  'Open Projects (tasks & plan)',
+  'Open project workspace',
 ];
 
 // Startup work keeps landing for a few seconds; clicking into it makes the

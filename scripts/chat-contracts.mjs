@@ -60,10 +60,9 @@ expect(
 );
 
 expect(
-  'Optional Project Management workspace exposes complete ticket workflows',
+  'Project Management surfaces are mounted by the project workspace, not a panel of their own',
   /project-management-panel\.js/.test(indexHtml)
     && /xnautCreateProjectManagementPanel/.test(projectManagementPanel)
-    && /pm_project_create/.test(projectManagementPanel)
     && /pm_ticket_create/.test(projectManagementPanel)
     && /pm_ticket_update/.test(projectManagementPanel)
     && /pm_ticket_delete/.test(projectManagementPanel)
@@ -71,10 +70,25 @@ expect(
     && /pm_module_sync/.test(projectManagementPanel)
     && /pm_project_import_existing/.test(projectManagementPanel)
     && /data-drop-status/.test(projectManagementPanel)
-    && /xnautAttachProjectManagementTab/.test(glue)
-    && /case 'pm'/.test(glue)
-    && /pm_module_status/.test(glue)
-    && /label: 'Projects'/.test(read('src/js/sidebar.js')),
+    // The workspace is the only mount, and it always names a project: this
+    // panel has no standalone mode left (XNAUT-342).
+    && /xnautCreateProjectManagementPanel\(`\$\{label\}-\$\{name\}`/.test(read('src/js/workspace.js'))
+    && /pm_module_status/.test(glue),
+);
+
+// The removal half of XNAUT-342, asserted as an ABSENCE, because that is the
+// only thing a grep can prove here: every route that used to open the
+// standalone Projects panel is gone. A new one would have to re-add one of
+// these names, and this fails the moment it does.
+expect(
+  'Nothing opens the standalone Projects panel',
+  !/xnautAttachProjectManagementTab/.test(glue)
+    && !/case 'pm'/.test(glue)
+    && !/btn-projects/.test(indexHtml)
+    && !/btn-projects/.test(app)
+    && !/key: 'pm'/.test(read('src/js/sidebar.js'))
+    && !/navigate\('pm'\)/.test(read('src/js/sidebar.js'))
+    && !/xnautShowProject/.test(projectManagementPanel),
 );
 
 expect(
