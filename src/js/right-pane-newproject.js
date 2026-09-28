@@ -287,11 +287,17 @@
         checkBox.innerHTML = '';
         say('');
 
-        // Land on the project.
+        // Land on the project — in its workspace, which takes the project as an
+        // argument (XNAUT-342). This used to attach the standalone Projects
+        // panel and then call xnautShowProject a tick later to select within
+        // it; the workspace needs neither the second step nor the guessed
+        // delay, because the project is what it is opened WITH.
         if (key) {
-          if (window.xnautAttachProjectManagementTab) window.xnautAttachProjectManagementTab();
-          // The panel mounts asynchronously; give it a tick before selecting.
-          setTimeout(() => { if (window.xnautShowProject) window.xnautShowProject(key); }, 120);
+          if (typeof window.xnautOpenWorkspace === 'function') {
+            window.xnautOpenWorkspace({ project: key, tab: 'work' });
+          } else {
+            console.error('[newproject] xnautOpenWorkspace is not loaded, so the new project cannot open');
+          }
         }
       } catch (e) {
         say(String(e), true);

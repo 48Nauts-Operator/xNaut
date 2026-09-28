@@ -155,12 +155,10 @@
     { key: 'skills', label: 'Skills' },
     { key: 'plugins', label: 'Plugins' },
     { key: 'tasks', label: 'Tasks' },
-    // The Projects BOARD, which is a different destination from the rail's
-    // Projects icon: that one opens a project's workspace, this one opens the
-    // panel that lists and configures them. They were both called "Projects"
-    // for about an hour (XNAUT-435); this is the name the gear menu already
-    // gives the same `navigate('pm')` call.
-    { key: 'pm', label: 'Manage projects' },
+    // No 'pm' entry: the standalone Projects panel is gone (XNAUT-342). Its
+    // nine surfaces are tabs of a project's workspace, and the tree below is
+    // how a project is chosen — a menu entry here would be a second selector
+    // for a question this list has already answered.
     { key: 'delivery', label: 'Delivery' },
     // What xNAUT remembers (XNAUT-333). It opens its own panel rather than a
     // nav key, so the Delivery panel's Memory tab and this entry are one path.
@@ -810,8 +808,10 @@
     });
     head.querySelector('[data-head-gear]').addEventListener('click', (event) => {
       event.stopPropagation();
+      // "Manage projects" opened the standalone Projects panel and is gone with
+      // it (XNAUT-342). What is left here is about THIS list — what it shows and
+      // how fresh it is. Managing one project happens in its workspace.
       openMenu(event.clientX, event.clientY, [
-        { label: 'Manage projects', action: () => navigate('pm') },
         {
           label: state.onlyPinned ? 'Show all projects' : 'Show only pinned',
           action: () => { setOnlyPinned(!state.onlyPinned); },

@@ -21,12 +21,10 @@ async function openBuildStage(page) {
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, {});
+    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE', section: 'nautflow' });
   }, OK);
 
   const pane = page.locator('#pm-test-host .pmw');
-  await pane.locator('[data-project]:not([data-project=""])').first().click();
-  await pane.locator('[data-project-section="nautflow"]').click();
   await pane.locator('[data-flow-stage="build"]').click();
   await expect(pane.locator('.pmw-build-start')).toBeVisible();
   return pane;

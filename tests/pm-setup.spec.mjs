@@ -21,7 +21,7 @@ async function mountWith(page, status) {
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, {});
+    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE' });
   }, status);
   return page.locator('#pm-test-host .pmw');
 }
