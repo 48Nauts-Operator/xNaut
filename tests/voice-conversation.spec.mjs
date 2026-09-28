@@ -21,7 +21,7 @@ test.beforeEach(async ({ page }) => {
       } },
     };
   });
-  for (const file of ['voice-session', 'voice-overlay', 'voice-dictate', 'voice-conversation', 'chat-panel']) {
+  for (const file of ['voice-session', 'voice-overlay', 'voice-dictate', 'voice-conversation', 'voice-live', 'chat-panel']) {
     await page.addScriptTag({ path: fileURLToPath(new URL(`../src/js/${file}.js`, import.meta.url)) });
   }
   await page.evaluate(async () => {

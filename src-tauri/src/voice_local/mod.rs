@@ -1,6 +1,6 @@
 //! Optional loopback-only speech transport. Credentials never enter the webview.
 //! Wire protocol: companions/local-voice/README.md. No cloud fallback or LLM.
-mod playback;
+pub(crate) mod playback;
 
 use crate::state::AppState;
 use futures_util::{SinkExt, StreamExt};
@@ -374,9 +374,11 @@ async fn exchange(
                             if synthesis {
                                 let s = session.clone();
                                 player = Some(
-                                    playback::Playback::open(Arc::new(move || {
-                                        s.cancelled(generation)
-                                    }))
+                                    playback::Playback::open(
+                                        Arc::new(move || s.cancelled(generation)),
+                                        // The companion's negotiated rate, checked above.
+                                        16_000,
+                                    )
                                     .await?,
                                 );
                             }

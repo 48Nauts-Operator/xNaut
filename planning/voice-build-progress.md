@@ -12,6 +12,39 @@ Source review in `/Users/cand0rian/DevHub_Studio/factory/02-Development/Bucky` f
 
 By comparison, xNaut's `src/js/voice-conversation.js` explicitly advertises `streamingInput: false`, waits for playback before recording, and reads completed chat answers. That implementation cannot establish parity with the requested continuous public Bucki route. See the revised implementation plan for V1 acceptance criteria.
 
+## V1 shipped: the public continuous route — 2026-09-28
+
+The Bucki-style public conversation is implemented and merged on
+`agent/claude/xnaut-416`, from the reconciled baseline `d55221b`. One explicit
+start holds the whole exchange: the microphone streams to the provider, replies
+stream back, the user interrupts by talking, and every turn runs on the xNAUT
+agent already selected in that conversation. The *Finish & send* / *Speak again*
+prototype described below is superseded for the public route and preserved for
+V2.
+
+New `src-tauri/src/voice_live/` holds the conversation as a pure state machine
+(no I/O), with the transport, microphone and speaker outside it. Ported from
+Bucki `development` @ `629ff06`, `publicVoiceMode=gptLive`, with three
+deliberate departures recorded in the file headers: delegation goes to the
+selected xNAUT agent over NautGate rather than Bucki's forced ChatGPT Codex
+login; one committed message pair per turn rather than one per caption flush;
+and a reopened conversation replays its history into the backend context, which
+the reference does not do.
+
+Validation: `cargo test --manifest-path src-tauri/Cargo.toml` — 1427 passed, 0
+failed, 46 ignored; `XNAUT_TEST_PORT=4291 npx playwright test` — 340 passed. 88
+Rust tests and 20 Playwright tests are new. Clippy adds no warnings in the
+changed files; `git diff --check` and ESLint on changed JavaScript are clean.
+
+Still open, and stated plainly: no live-account run has happened — `gpt-live-1`
+and the Live endpoint are findings from the reference snapshot, not an
+availability claim, and this machine has no credential. Real microphone,
+speaker, echo, device-change and signed-app microphone permission checks are all
+unverified; every audio assertion is synthetic PCM. The route is wired to the
+Chat pane only. Full/Summary/Silent and agent-authored summaries remain
+XNAUT-421; broader surfaces remain XNAUT-424. Details and the manual check list:
+`.xnaut/bundles/XNAUT-416.md`.
+
 ## Preservation checkpoint — 2026-09-28
 
 This branch is an unfinished work-in-progress backup. The user confirms that it does not yet work as designed: the current button-driven interaction does not deliver the intended natural, streaming conversation. Earlier focused test results below describe individual components, not acceptance of the overall experience. No new runtime tests were performed for this backup checkpoint.

@@ -15,6 +15,11 @@ struct Pcm {
     phase: f64,
     finished: bool,
     failed: bool,
+    /// Rate the incoming samples were produced at. The local companion sends
+    /// 16 kHz; the public Live transport sends 24 kHz. Reading it from the
+    /// stream instead of assuming one of them is what keeps a Live reply from
+    /// playing back slow and deep.
+    source_rate: u32,
 }
 
 impl Pcm {
@@ -28,7 +33,7 @@ impl Pcm {
         };
         let next = self.samples.front().copied().unwrap_or(current);
         let value = (current as f64 + (next as f64 - current as f64) * self.phase) / 32768.0;
-        self.phase += 16_000.0 / output_rate as f64;
+        self.phase += self.source_rate as f64 / output_rate as f64;
         while self.phase >= 1.0 {
             self.current = self.samples.pop_front();
             self.phase -= 1.0;
@@ -48,8 +53,19 @@ pub struct Playback {
 }
 
 impl Playback {
-    pub async fn open(cancelled: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<Self, String> {
-        let pcm = Arc::new(Mutex::new(Pcm::default()));
+    /// `source_rate` is the rate of the PCM that will be pushed, not the
+    /// device rate; the renderer resamples between the two.
+    pub async fn open(
+        cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+        source_rate: u32,
+    ) -> Result<Self, String> {
+        if source_rate == 0 {
+            return Err("invalid playback source rate".into());
+        }
+        let pcm = Arc::new(Mutex::new(Pcm {
+            source_rate,
+            ..Pcm::default()
+        }));
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let source = pcm.clone();
@@ -200,9 +216,30 @@ impl Drop for Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn pcm_at(rate: u32) -> Pcm {
+        Pcm {
+            source_rate: rate,
+            ..Pcm::default()
+        }
+    }
+
+    #[test]
+    fn a_twenty_four_kilohertz_stream_plays_at_its_own_rate() {
+        // The public Live transport sends 24 kHz. Resampling it as if it were
+        // the companion's 16 kHz would stretch every reply by half again.
+        let mut pcm = pcm_at(24_000);
+        pcm.samples.extend([1000; 240]);
+        let mut frames = 0;
+        while !pcm.drained() {
+            pcm.next(48_000);
+            frames += 1;
+        }
+        assert_eq!(frames, 480, "240 samples at 24 kHz is 10 ms, not 15 ms");
+    }
+
     #[test]
     fn streaming_resampler_preserves_duration_and_drains_at_device_rate() {
-        let mut pcm = Pcm::default();
+        let mut pcm = pcm_at(16_000);
         pcm.samples.extend([1000; 160]);
         let mut frames = 0;
         while !pcm.drained() {
@@ -214,7 +251,7 @@ mod tests {
     }
     #[test]
     fn streaming_resampler_survives_underrun_without_replaying_audio() {
-        let mut pcm = Pcm::default();
+        let mut pcm = pcm_at(16_000);
         pcm.samples.push_back(1000);
         assert!(pcm.next(16_000) > 0.0);
         assert_eq!(pcm.next(16_000), 0.0);

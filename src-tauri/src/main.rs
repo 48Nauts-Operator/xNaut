@@ -111,6 +111,7 @@ mod usage;
 mod vault;
 mod vault_workflows;
 mod voice;
+mod voice_live;
 mod voice_local;
 mod delivery;
 mod vault_tools;
@@ -244,6 +245,7 @@ async fn main() {
                 let label = webview.label().to_string();
                 tauri::async_runtime::spawn(async move {
                     let state = handle.state::<state::AppState>();
+                    voice_live::release_window(state.inner(), &label).await;
                     voice_local::release_window(state.inner(), &label).await;
                     voice::release_window(state.inner(), &label).await;
                 });
@@ -281,6 +283,11 @@ async fn main() {
             voice_local::voice_local_transcribe,
             voice_local::voice_local_speak,
             voice_local::voice_local_interrupt,
+            voice_live::voice_live_ready,
+            voice_live::voice_live_open,
+            voice_live::voice_live_close,
+            voice_live::voice_live_text,
+            voice_live::voice_live_result,
             // Terminal session management
             commands::create_terminal_session,
             commands::create_command_session,
@@ -934,6 +941,7 @@ async fn main() {
                 let handle = app.clone();
                 let label = label.clone();
                 tauri::async_runtime::spawn(async move {
+                    voice_live::release_window(handle.state::<state::AppState>().inner(), &label).await;
                     voice_local::release_window(handle.state::<state::AppState>().inner(), &label).await;
                     voice::release_window(handle.state::<state::AppState>().inner(), &label).await;
                 });

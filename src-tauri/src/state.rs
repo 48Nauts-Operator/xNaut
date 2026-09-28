@@ -103,6 +103,9 @@ pub struct AppState {
     /// holding the dictate button.
     pub voice: Arc<Mutex<Option<VoiceCapture>>>,
     pub local_voice: Arc<Mutex<Option<Arc<crate::voice_local::Session>>>>,
+    /// The open public voice conversation (XNAUT-416). One at a time, because
+    /// there is one microphone; `voice` and `local_voice` share that lease.
+    pub live_voice: Arc<Mutex<Option<Arc<crate::voice_live::Handle>>>>,
 }
 
 /// Handles onto a capture running on its own thread.
@@ -135,6 +138,7 @@ impl AppState {
             terminal_scrollback: Arc::new(Mutex::new(HashMap::new())),
             voice: Arc::new(Mutex::new(None)),
             local_voice: Arc::new(Mutex::new(None)),
+            live_voice: Arc::new(Mutex::new(None)),
         }
     }
 
