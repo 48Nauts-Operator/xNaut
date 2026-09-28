@@ -52,12 +52,13 @@ async function openBuildStage(page, queue) {
     const host = document.createElement('div');
     host.id = 'pm-test-host';
     document.body.appendChild(host);
-    window.xnautCreateProjectManagementPanel('pm-test', host, {});
+    // The panel is a surface of one project now (XNAUT-342): mounted the way
+    // the workspace mounts it, with the project and the section given, since
+    // the standalone project list this used to click through is gone.
+    window.xnautCreateProjectManagementPanel('pm-test', host, { project: 'SMOKE', section: 'nautflow' });
   }, { status: OK, q: queue });
 
   const pane = page.locator('#pm-test-host .pmw');
-  await pane.locator('[data-project]:not([data-project=""])').first().click();
-  await pane.locator('[data-project-section="nautflow"]').click();
   await pane.locator('[data-flow-stage="build"]').click();
   return pane;
 }
