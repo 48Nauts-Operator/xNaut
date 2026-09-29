@@ -2,6 +2,22 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.28.2] - 2026-09-29
+
+### Fixed
+- Keep voice connected and bound to its conversation while navigating between tabs or agents. Supply recent saved context when restarting speech-to-speech; historical requests are not replayed as actions.
+- Add a quick microphone mute beside the composer mic, synchronized with the voice pane and confirmed by the audio backend.
+- Open actual running agent sessions from Observatory and Flow Watch. Identify Codex sign-in screens and check standard remote Codex login readiness before launching; custom authentication configurations retain their existing behavior.
+- Protect registered workspace bases and their containing directories from worktree cleanup, including forced deletion.
+
+### Improved
+- Split Observatory into General and Agents pages. Add 5/10/25 pagination to Sessions, Running agents, Dispatched runs and Ledger; keep cards readable while scrolling.
+- Show local GPT-Live-1 connection-cost estimates in the footer and Observatory when voice is configured. Provider-final duration replaces the running estimate. Editable speech/typing speeds estimate input time saved; this is not total productivity or account billing.
+- Display Opus usage beneath Fable when the account supplies a counter; otherwise state that it is not reported separately.
+- Select Local, exe.dev, GitVM or configured-provider Automatic in Agent Settings. NautBot can override the destination for one ticket without changing the agent's saved preference. Explicit unavailable destinations return a configuration error.
+
+Jev-based automatic compute routing and a new searchable conversation-memory database are not included. Remote execution still requires a configured environment and authentication.
+
 ## [1.28.1] - 2026-09-28
 
 The initial 1.28.0 build was withdrawn before installer publication to add the microphone entitlement required by hardened macOS signing.

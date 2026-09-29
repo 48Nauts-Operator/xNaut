@@ -2306,7 +2306,7 @@ async fn launch_on_exe_dev(
         let dir = std::path::PathBuf::from(&req.worktree_path);
         let workdir = workdir.clone();
         let session = session.clone();
-        let check_codex = cfg.detect_cmd == "codex" || cfg.launch_cmd == "codex";
+        let check_codex = uses_standard_codex_login(&cfg);
         tokio::task::spawn_blocking(move || -> Result<String, String> {
             // Each step names itself, so an unreachable VM, a failed push and
             // a failed staging are three different sentences rather than one
@@ -2448,7 +2448,7 @@ async fn launch_on_gitvm(
         let dir = std::path::PathBuf::from(&req.worktree_path);
         let session = session.clone();
         let beacon = beacon.clone();
-        let check_codex = cfg.detect_cmd == "codex" || cfg.launch_cmd == "codex";
+        let check_codex = uses_standard_codex_login(&cfg);
         tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String, bool), String> {
             // A state file left behind by a reaped sandbox makes `warm-up`
             // refuse, which would wedge this worktree forever. The CLI cannot
@@ -2630,6 +2630,13 @@ fn start_beacon(dir: &std::path::Path, cfg: &crate::beacon::BeaconConfig) -> Res
 /// answers, not the environment's. An environment decides only WHERE the line
 /// runs. Two copies of this would be two places for a runtime to be launched
 /// differently, which is the duplication this ticket exists to remove.
+// A bare login-status check does not describe custom provider/auth flags or
+// environment variables. Leave those user-managed launch contracts intact.
+fn uses_standard_codex_login(cfg: &crate::agents::AgentConfig) -> bool {
+    cfg.launch_cmd == "codex" && cfg.env.is_empty() && cfg.extra_args.iter().all(|arg|
+        matches!(arg.as_str(), "--dangerously-bypass-approvals-and-sandbox" | "--yolo" | "--no-daemon"))
+}
+
 fn remote_launch_command(
     profile: &AgentProfile,
     prompt: Option<String>,
@@ -4756,6 +4763,22 @@ You are a systems architect.
 mod compute_choice_tests {
     use super::*;
     use crate::sandbox::launch_env::{resolve, LaunchEnv};
+    #[test]
+    fn standard_auth_probe_does_not_reject_custom_provider_launch_contracts() {
+        let mut cfg: crate::agents::AgentConfig = serde_json::from_value(serde_json::json!({
+            "id":"codex", "label":"Codex", "detect_cmd":"codex", "launch_cmd":"codex",
+            "extra_args":["--dangerously-bypass-approvals-and-sandbox"], "expected_process":"codex",
+            "prompt_injection_mode":"argv", "env":{}
+        })).unwrap();
+        assert!(uses_standard_codex_login(&cfg));
+        cfg.env.insert("OPENAI_BASE_URL".into(), "https://example.invalid/v1".into());
+        assert!(!uses_standard_codex_login(&cfg));
+        cfg.env.clear(); cfg.extra_args.extend(["-c".into(), "model_provider=custom".into()]);
+        assert!(!uses_standard_codex_login(&cfg));
+        cfg.extra_args.clear(); cfg.launch_cmd = "custom-codex-wrapper".into();
+        assert!(!uses_standard_codex_login(&cfg));
+    }
+
     #[test]
     fn explicit_destinations_do_not_fall_back_and_legacy_sandbox_still_resolves() {
         for (key, expected) in [("local", LaunchEnv::Local), ("exe-dev", LaunchEnv::ExeDev), ("gitvm", LaunchEnv::GitVm)] {
