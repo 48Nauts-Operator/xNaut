@@ -24,6 +24,8 @@ mod flow_drift;
 mod canvas;
 mod build_log;
 mod chat;
+mod repository_read;
+mod conversation_store;
 mod codex_spend;
 mod commands;
 mod core_team;
@@ -328,6 +330,8 @@ async fn main() {
             commands::list_ssh_sessions,
             commands::get_ssh_config_hosts,
             // File Navigator + Editor
+            conversation_store::conversation_store_load,
+            conversation_store::conversation_store_put,
             commands::list_directory,
             commands::read_file,
             commands::write_file,

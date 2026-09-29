@@ -965,6 +965,10 @@ async function init() {
       }
     };
 
+    await step('conversation history', async () => {
+      await window.xnautConversationStorage?.ready();
+      window.xnautMigrateLibrarianConversations?.();
+    });
     await step('settings', loadSettings);
     await step('command history', loadCommandHistory);
     await step('ssh profiles', loadSSHProfiles);
@@ -5197,7 +5201,7 @@ let activeChatSessionId = null;
 
 function initChatSessions() {
   try {
-    const saved = localStorage.getItem('xnaut-chat-sessions');
+    const saved = (window.xnautConversationStorage || localStorage).getItem('xnaut-chat-sessions');
     if (saved) {
       chatSessions = JSON.parse(saved);
     }
@@ -5232,7 +5236,7 @@ function createNewChatSession(title = 'New Chat') {
 
 function saveChatSessions() {
   try {
-    localStorage.setItem('xnaut-chat-sessions', JSON.stringify(chatSessions));
+    (window.xnautConversationStorage || localStorage).setItem('xnaut-chat-sessions', JSON.stringify(chatSessions));
   } catch (e) {
     console.error('Failed to save chat sessions:', e);
   }

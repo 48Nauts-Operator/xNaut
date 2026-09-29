@@ -16,17 +16,17 @@
   const LIBRARIAN_MIGRATED = 'xnaut-librarian-threads-migrated';
   function migrateLibrarianConversations() {
     try {
-      if (localStorage.getItem(LIBRARIAN_MIGRATED) === '1') return;
-      const vault = localStorage.getItem('xnaut-vault:last') || 'work';
-      const archived = JSON.parse(localStorage.getItem('xnaut-vault-conversations:' + vault) || '[]');
-      const current = JSON.parse(localStorage.getItem('xnaut-chat-history:vault:' + vault) || '[]');
+      if ((window.xnautConversationStorage || localStorage).getItem(LIBRARIAN_MIGRATED) === '1') return;
+      const vault = (window.xnautConversationStorage || localStorage).getItem('xnaut-vault:last') || 'work';
+      const archived = JSON.parse((window.xnautConversationStorage || localStorage).getItem('xnaut-vault-conversations:' + vault) || '[]');
+      const current = JSON.parse((window.xnautConversationStorage || localStorage).getItem('xnaut-chat-history:vault:' + vault) || '[]');
       const conversations = (Array.isArray(archived) ? archived : []).slice();
       if (Array.isArray(current) && current.length) {
         conversations.push({ title: 'Current', messages: current, at: new Date().toISOString() });
       }
-      if (!conversations.length) { localStorage.setItem(LIBRARIAN_MIGRATED, '1'); return; }
+      if (!conversations.length) { (window.xnautConversationStorage || localStorage).setItem(LIBRARIAN_MIGRATED, '1'); return; }
 
-      const all = JSON.parse(localStorage.getItem(THREADS_KEY) || '{}');
+      const all = JSON.parse((window.xnautConversationStorage || localStorage).getItem(THREADS_KEY) || '{}');
       const existing = Array.isArray(all.librarian) ? all.librarian : [];
       const brought = conversations.map((conversation, index) => {
         const messages = (conversation.messages || conversation || [])
@@ -51,17 +51,16 @@
 
       all.librarian = existing.concat(brought.filter((thread) =>
         !existing.some((kept) => kept.id === thread.id)));
-      localStorage.setItem(THREADS_KEY, JSON.stringify(all));
-      localStorage.setItem(LIBRARIAN_MIGRATED, '1');
+      (window.xnautConversationStorage || localStorage).setItem(THREADS_KEY, JSON.stringify(all));
+      (window.xnautConversationStorage || localStorage).setItem(LIBRARIAN_MIGRATED, '1');
       console.log(`[agent-space] brought ${brought.length} Librarian conversations across`);
     } catch (error) {
       console.warn('[agent-space] Librarian migration skipped:', error);
     }
   }
-  migrateLibrarianConversations();
+  // Preserve startup migration, but wait for the durable store first.
+  window.xnautMigrateLibrarianConversations = migrateLibrarianConversations;
   const SHARED_CONTEXT_KEY = 'xnaut-portable-agent-context:v1';
-  const MAX_THREADS = 12;
-  const MAX_MESSAGES = 80;
   const panes = new Map();
 
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (character) => ({
@@ -80,7 +79,7 @@
 
   function loadSharedContext() {
     try {
-      const value = JSON.parse(localStorage.getItem(SHARED_CONTEXT_KEY) || '[]');
+      const value = JSON.parse((window.xnautConversationStorage || localStorage).getItem(SHARED_CONTEXT_KEY) || '[]');
       return Array.isArray(value) ? value : [];
     } catch (_) { return []; }
   }
@@ -88,7 +87,7 @@
   function saveSharedMessage(message) {
     const current = loadSharedContext();
     const next = current.filter((item) => item.id !== message.id).concat(message).slice(-40);
-    try { localStorage.setItem(SHARED_CONTEXT_KEY, JSON.stringify(next)); } catch (_) {}
+    try { (window.xnautConversationStorage || localStorage).setItem(SHARED_CONTEXT_KEY, JSON.stringify(next)); } catch (_) {}
   }
 
   function sharedContextText() {
@@ -197,13 +196,13 @@
 
   function loadThreads() {
     try {
-      const value = JSON.parse(localStorage.getItem(THREADS_KEY) || '{}');
+      const value = JSON.parse((window.xnautConversationStorage || localStorage).getItem(THREADS_KEY) || '{}');
       return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     } catch (_) { return {}; }
   }
 
   function saveThreads(value) {
-    try { localStorage.setItem(THREADS_KEY, JSON.stringify(value)); } catch (_) { /* quota */ }
+    try { (window.xnautConversationStorage || localStorage).setItem(THREADS_KEY, JSON.stringify(value)); } catch (_) { /* quota */ }
     window.dispatchEvent(new CustomEvent('xnaut:agent-threads-changed'));
   }
 
@@ -224,8 +223,7 @@
     const all = loadThreads();
     const current = Array.isArray(all[handle]) ? all[handle] : [];
     const next = [thread, ...current.filter((item) => item.id !== thread.id)]
-      .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))
-      .slice(0, MAX_THREADS);
+      .sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
     all[handle] = next;
     saveThreads(all);
     return thread;
@@ -247,7 +245,7 @@
     const found = allThreadsFor(handle).find((item) => item.id === id) || newThread(handle, 'New thread');
     const next = updater({ ...found, messages: Array.isArray(found.messages) ? found.messages.slice() : [] }) || found;
     next.updated_at = nowIso();
-    next.messages = next.messages.slice(-MAX_MESSAGES);
+    // Persist the complete transcript; chatHistory bounds model context separately.
     return writeThread(handle, next);
   }
 
@@ -277,12 +275,12 @@
   // Threads stay collapsed until asked for: an agent with a dozen threads
   // otherwise buries every other agent in the list.
   function threadsOpen(handle) {
-    try { return localStorage.getItem('xnaut-as-threads-open:' + handle) === '1'; } catch (_) { return false; }
+    try { return (window.xnautConversationStorage || localStorage).getItem('xnaut-as-threads-open:' + handle) === '1'; } catch (_) { return false; }
   }
   function toggleThreads(handle) {
     try {
-      if (threadsOpen(handle)) localStorage.removeItem('xnaut-as-threads-open:' + handle);
-      else localStorage.setItem('xnaut-as-threads-open:' + handle, '1');
+      if (threadsOpen(handle)) (window.xnautConversationStorage || localStorage).removeItem('xnaut-as-threads-open:' + handle);
+      else (window.xnautConversationStorage || localStorage).setItem('xnaut-as-threads-open:' + handle, '1');
     } catch (_) {}
   }
 
@@ -615,7 +613,7 @@
       const archived = selected ? archivedThreadsFor(profile.handle) : [];
       const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
       const note = libraryNotes[profile.handle] || '';
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"${note ? ` title="${esc(note)}"` : ''}><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}${note ? ' <span class="asl-note" aria-label="Store note">·</span>' : ''}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? `<div class="asl-threads">${threads.slice(0,8).map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = localStorage.getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.slice(0,5).map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"${note ? ` title="${esc(note)}"` : ''}><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}${note ? ' <span class="asl-note" aria-label="Store note">·</span>' : ''}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? `<div class="asl-threads">${threads.map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = (window.xnautConversationStorage || localStorage).getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -726,8 +724,8 @@
       if (event.target.closest('[data-archived-clear]')) return;
       const key = 'xnaut-as-archived-open:' + selected.handle;
       try {
-        if (localStorage.getItem(key) === '1') localStorage.removeItem(key);
-        else localStorage.setItem(key, '1');
+        if ((window.xnautConversationStorage || localStorage).getItem(key) === '1') (window.xnautConversationStorage || localStorage).removeItem(key);
+        else (window.xnautConversationStorage || localStorage).setItem(key, '1');
       } catch (_) {}
       window.xnautOpenAgentSpace(selected.handle, selectedThreadId);
     };
@@ -1545,8 +1543,8 @@
     // he shut — the card in the thread is how it comes back. Remembered per
     // agent, so it survives switching away and back.
     const dismissKey = `xnaut-as-split-dismissed:${profile.handle}`;
-    const dismissed = () => { try { return localStorage.getItem(dismissKey) === '1'; } catch (_) { return false; } };
-    const setDismissed = (value) => { try { localStorage.setItem(dismissKey, value ? '1' : '0'); } catch (_) {} };
+    const dismissed = () => { try { return (window.xnautConversationStorage || localStorage).getItem(dismissKey) === '1'; } catch (_) { return false; } };
+    const setDismissed = (value) => { try { (window.xnautConversationStorage || localStorage).setItem(dismissKey, value ? '1' : '0'); } catch (_) {} };
     const closeSplit = () => {
       setDismissed(true);
       if (canvasPane && canvasPane.dispose) canvasPane.dispose();
@@ -2337,6 +2335,8 @@
   }
 
   async function createAgentSpacePanel(tabId, parent, options) {
+    await window.xnautConversationStorage?.ready();
+    migrateLibrarianConversations();
     ensureStyles();
     const label = `agent-space-${tabId}`;
     const pane = document.createElement('section');
@@ -2395,10 +2395,10 @@
   // than resetting to the top of the list.
   const ACTIVE_KEY = 'xnaut-as-active-handle';
   function rememberActive(handle) {
-    try { if (handle) localStorage.setItem(ACTIVE_KEY, handle); } catch (_) {}
+    try { if (handle) (window.xnautConversationStorage || localStorage).setItem(ACTIVE_KEY, handle); } catch (_) {}
   }
   function lastActive() {
-    try { return localStorage.getItem(ACTIVE_KEY) || ''; } catch (_) { return ''; }
+    try { return (window.xnautConversationStorage || localStorage).getItem(ACTIVE_KEY) || ''; } catch (_) { return ''; }
   }
   window.xnautOpenAgentSpace = (handle, threadId, newThreadRequested) => {
     if (window.xnautHomeContext) window.xnautHomeContext();

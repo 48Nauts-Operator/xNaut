@@ -47,18 +47,17 @@
     return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   }
 
-  // ----------------------------------------------- persistent history (localStorage)
-  // Keyed by project path for project/plan chats, else 'default'. Survives tab
-  // close and app restart. Capped to keep storage bounded.
+  // Durable history uses a shared native store with a browser cache.
+  // Keyed by project path or conversation ID; model context is bounded separately.
   const HIST_PREFIX = 'xnaut-chat-history:';
   function loadChatHistory(key) {
-    try { return JSON.parse(localStorage.getItem(HIST_PREFIX + key)) || []; } catch (_) { return []; }
+    try { return JSON.parse((window.xnautConversationStorage || localStorage).getItem(HIST_PREFIX + key)) || []; } catch (_) { return []; }
   }
   function saveChatHistory(entry) {
     if (!entry || !entry.chatKey) return;
     try {
-      const clipped = entry.history.slice(-200);
-      localStorage.setItem(HIST_PREFIX + entry.chatKey, JSON.stringify(clipped));
+      const clipped = entry.history.slice();
+      (window.xnautConversationStorage || localStorage).setItem(HIST_PREFIX + entry.chatKey, JSON.stringify(clipped));
       document.dispatchEvent(new CustomEvent('xnaut:chat-history-changed', {
         detail: { chatKey: entry.chatKey, history: clipped },
       }));
@@ -71,8 +70,8 @@
 
   function persistChatHistory(chatKey, history) {
     const key = chatKey || 'default';
-    const clipped = (Array.isArray(history) ? history : []).slice(-200);
-    localStorage.setItem(HIST_PREFIX + key, JSON.stringify(clipped));
+    const clipped = (Array.isArray(history) ? history : []).slice();
+    (window.xnautConversationStorage || localStorage).setItem(HIST_PREFIX + key, JSON.stringify(clipped));
     document.dispatchEvent(new CustomEvent('xnaut:chat-history-changed', {
       detail: { chatKey: key, history: clipped },
     }));
@@ -1694,6 +1693,7 @@
    * stores in tab.terminals[]: { kind: 'chat', label, pane }.
    */
   async function createChatPane(tabId, parentContainer, opts) {
+    await window.xnautConversationStorage?.ready();
     opts = opts || {};
     injectStyles();
     const label = nextLabel();
@@ -1789,6 +1789,7 @@
     // Stable key for persisted history: project path for project/plan chats,
     // an explicit opts.chatKey, else the shared 'default' chat.
     entry.chatKey = opts.chatKey || (opts.projectContext && opts.projectContext.path) || 'default';
+    if (opts.title) (window.xnautConversationStorage || localStorage).setItem('xnaut-chat-title:' + entry.chatKey, JSON.stringify(opts.title));
 
     // --- header data: settings + agents + engram status (best effort) ---
     try {
@@ -1817,7 +1818,7 @@
     // Per-conversation selection never changes other chats or the CLI runtime.
     const modelPreferenceKey = `xnaut-chat-model:${entry.chatKey}`;
     if (!opts.modelOverride && !opts.providerOverride) {
-      try { const saved = JSON.parse(localStorage.getItem(modelPreferenceKey) || 'null');
+      try { const saved = JSON.parse((window.xnautConversationStorage || localStorage).getItem(modelPreferenceKey) || 'null');
         if (saved) { entry.providerOverride = String(saved.provider || ''); entry.modelOverride = String(saved.model || ''); }
       } catch (_) {}
     }
@@ -1825,7 +1826,7 @@
       get: () => ({provider: entry.providerOverride, model: entry.modelOverride}),
       onChange: ({provider,model}) => {
         entry.providerOverride=provider; entry.modelOverride=model;
-        try { localStorage.setItem(`xnaut-chat-model:${entry.chatKey}`, JSON.stringify({provider,model})); } catch (_) {}
+        try { (window.xnautConversationStorage || localStorage).setItem(`xnaut-chat-model:${entry.chatKey}`, JSON.stringify({provider,model})); } catch (_) {}
         const label = bar.querySelector('.chatp-model');
         if (label) label.textContent = model || entry.settings.llm?.model || '';
       },
@@ -1941,6 +1942,29 @@
       }
     }
     hydrateFromKey();
+    const historyPicker = document.createElement('select');
+    historyPicker.setAttribute('aria-label','Open saved chat');
+    historyPicker.style.cssText = 'max-width:220px;background:var(--bg-secondary,#222);color:inherit;border:1px solid #444;border-radius:5px;padding:4px';
+    const refreshHistory = () => {
+      historyPicker.replaceChildren(new Option('History…',''));
+      const storage = window.xnautConversationStorage;
+      const keys = storage?.keys() || Object.keys(localStorage);
+      for (const key of keys.filter(key => key.startsWith(HIST_PREFIX))) {
+        const id = key.slice(HIST_PREFIX.length);
+        const messages = loadChatHistory(id);
+        if (!messages.length) continue;
+        let title; try { title = JSON.parse((storage || localStorage).getItem('xnaut-chat-title:' + id)); } catch (_) {}
+        title = title || messages.find(m => m.role === 'user')?.display || messages.find(m => m.role === 'user')?.content || id;
+        historyPicker.add(new Option(String(title).replace(/\s+/g,' ').slice(0,75),id));
+      }
+    };
+    historyPicker.addEventListener('focus',refreshHistory);
+    historyPicker.addEventListener('change',() => {
+      const id = historyPicker.value;
+      if (id) window.xnautAttachChatTab?.({chatKey:id,title:historyPicker.selectedOptions[0].textContent});
+      historyPicker.value = '';
+    });
+    refreshHistory(); bar.insertBefore(historyPicker,bar.querySelector('.chatp-spacer'));
 
     // Re-point the conversation at a different persisted key (e.g. the vault
     // switching to another project). Save what's on screen, then show that
@@ -1961,7 +1985,7 @@
       entry.voiceAdapter?.end();
       if (entry.busy) return;
       entry.history = [];
-      try { localStorage.removeItem(HIST_PREFIX + entry.chatKey); } catch (_) { /* quota/private mode */ }
+      try { (window.xnautConversationStorage || localStorage).removeItem(HIST_PREFIX + entry.chatKey); } catch (_) { /* quota/private mode */ }
       entry.listEl.innerHTML = '';
     };
 

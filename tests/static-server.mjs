@@ -253,6 +253,18 @@ const STUB_JS = `
     core: { invoke: (cmd, args) => {
       window.__xnautInvokes.push({ cmd, args });
       if (cmd === 'settings_set' && args?.settings) BY.settings_get = args.settings;
+      if (cmd === 'conversation_store_load' && !Object.prototype.hasOwnProperty.call(BY, cmd)) {
+        const records = JSON.parse(localStorage.getItem('__fixture_conversations') || '{}');
+        for (const [key,value] of Object.entries(args.legacy || {})) if (!(key in records)) records[key]={value,revision:1};
+        localStorage.setItem('__fixture_conversations',JSON.stringify(records)); return Promise.resolve(records);
+      }
+      if (cmd === 'conversation_store_put' && !Object.prototype.hasOwnProperty.call(BY, cmd)) {
+        const records=JSON.parse(localStorage.getItem('__fixture_conversations') || '{}');
+        if ((records[args.key]?.revision || 0)!==args.revision) return Promise.reject('Conversation changed in another window');
+        const next={value:args.value,revision:args.revision+1};records[args.key]=next;
+        localStorage.setItem('__fixture_conversations',JSON.stringify(records));return Promise.resolve(next);
+      }
+
       const has = Object.prototype.hasOwnProperty.call(BY, cmd);
       const value = has ? BY[cmd] : null;
       // A stub of { __reject: "why" } fails the command instead of answering it.
