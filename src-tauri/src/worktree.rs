@@ -222,6 +222,7 @@ pub fn remove_worktree(
     worktree_path: &Path,
     opts: &RemoveWorktreeOptions,
 ) -> Result<(), String> {
+    crate::worktree_protection::assert_removable(worktree_path)?;
     // Capture the branch name before removal so we know what to delete after.
     let before = list_worktrees(repo)?;
     let target = before

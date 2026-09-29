@@ -151,6 +151,7 @@
       + diskBlock(disk)
       + `<span class="uf-spacer"></span>`
       + `<button class="uf-refresh" title="Refresh usage" aria-label="Refresh usage">↻</button>`;
+    window.xnautVoiceCost?.mountFooter(footer);
     wireRefresh(footer);
   }
 

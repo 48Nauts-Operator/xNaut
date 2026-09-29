@@ -168,6 +168,7 @@
       '.fw-empty { color: var(--text-dim, #a1a1a1); font-size:12.5px; padding:14px 6px; }',
       '.fw-row { border:1px solid var(--border, rgba(255,255,255,.07)); border-radius:8px; overflow:hidden; }',
       '.fw-head { display:flex; align-items:center; gap:8px; padding:8px 10px; cursor:pointer; user-select:none; background:transparent; border:none; width:100%; text-align:left; color:inherit; font:inherit; }',
+      '.fw-open-session { background:transparent; color:var(--amber,#f5b840); border:1px solid var(--border,#333); border-radius:5px; padding:3px 7px; font:inherit; font-size:11px; cursor:pointer; }',
       '.fw-head:hover { background: rgba(255,255,255,.04); }',
       '.fw-dot { width:8px; height:8px; border-radius:50%; flex:0 0 8px; }',
       '.fw-label { font-size:12.5px; font-weight:600; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }',
@@ -210,6 +211,10 @@
     if (!bytes || !bytes.length) return;
     feed(row.screen, bytes);
     row.out.textContent = screenText(row.screen, MAX_LINES);
+    const compact = row.out.textContent.replace(/\s+/g, '').toLowerCase();
+    row.authBlocked = compact.includes('signinwithdevicecode') || compact.includes('provideyourownapikey');
+    row.el.querySelector('.fw-status').textContent = row.authBlocked ? 'sign-in required' : row.meta.status || '';
+    row.el.querySelector('.fw-dot').style.background = STATUS_COLOR[row.authBlocked ? 'blocked' : row.meta.status] || STATUS_COLOR.idle;
     if (row.autoscroll) row.out.scrollTop = row.out.scrollHeight;
   }
 
@@ -284,7 +289,8 @@
         '<span class="fw-status">' + escapeText(meta.status || '') + '</span>' +
         '<span class="fw-caret">▸</span>' +
         '</button>' +
-        '<pre class="fw-out"></pre>';
+        '<div style="padding:4px 10px"><button type="button" class="fw-open-session">Open session ↗</button></div><pre class="fw-out"></pre>';
+      el.querySelector('.fw-open-session').onclick = () => window.xnautOpenAgentSession?.(sid, meta.label || meta.agent_id || 'Agent terminal');
       const out = el.querySelector('.fw-out');
       row = { el, out, open: false, unlisten: null, autoscroll: true, screen: makeScreen(), meta };
       el.querySelector('.fw-head').addEventListener('click', () => {
@@ -294,8 +300,8 @@
       });
       rows.set(sid, row);
     } else {
-      row.el.querySelector('.fw-dot').style.background = STATUS_COLOR[meta.status] || STATUS_COLOR.idle;
-      row.el.querySelector('.fw-status').textContent = meta.status || '';
+      row.el.querySelector('.fw-dot').style.background = STATUS_COLOR[row.authBlocked ? 'blocked' : meta.status] || STATUS_COLOR.idle;
+      row.el.querySelector('.fw-status').textContent = row.authBlocked ? 'sign-in required' : meta.status || '';
       row.el.querySelector('.fw-label').textContent = meta.label || meta.agent_id || sid;
     }
     return row;

@@ -106,6 +106,7 @@ test('Refresh refetches the usage cards, and Kill no longer throws', async ({ pa
 
   // refresh() was called by Stop-all and every Kill button but never defined,
   // so both threw ReferenceError. Any such throw lands in __xnautErrors.
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await page.locator('[data-stopall]').click();
   await expect.poll(() => page.evaluate(() => window.__xnautErrors || [])).toEqual([]);
 });

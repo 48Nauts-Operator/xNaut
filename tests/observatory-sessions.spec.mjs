@@ -93,6 +93,7 @@ const WORLD = {
 
 test('rows group under their project, with a count on each header', async ({ page }) => {
   await openObservatory(page, WORLD);
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(page.locator('.obs-grp').first()).toBeVisible();
 
   // CompanyManager has two sessions, xNaut one, Other Thing one, and one row
@@ -108,6 +109,7 @@ test('rows group under their project, with a count on each header', async ({ pag
 
 test('a dispatched run groups by its registry row, not by its name', async ({ page }) => {
   await openObservatory(page, WORLD);
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(page.locator('.obs-grp').first()).toBeVisible();
 
   // The registry was actually asked, by its own command and not by reading its
@@ -137,6 +139,7 @@ test('a dispatched run groups by its registry row, not by its name', async ({ pa
 
 test('a build row groups by its working directory', async ({ page }) => {
   await openObservatory(page, WORLD);
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(page.locator('.obs-grp').first()).toBeVisible();
 
   // The row's zellij name is derived from the worktree's last path segment
@@ -150,6 +153,7 @@ test('a build row groups by its working directory', async ({ page }) => {
 
 test('a hand-started cx-<project> session groups by the name match', async ({ page }) => {
   await openObservatory(page, WORLD);
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(page.locator('.obs-grp').first()).toBeVisible();
 
   // No registry row, no cwd: the session name is all there is. Both spellings of
@@ -170,6 +174,7 @@ test('a hand-started cx-<project> session groups by the name match', async ({ pa
 
 test('a row matching none of the three lands in No project, sorted last', async ({ page }) => {
   await openObservatory(page, WORLD);
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(page.locator('.obs-grp').first()).toBeVisible();
 
   const heads = await groups(page);
@@ -181,6 +186,7 @@ test('a row matching none of the three lands in No project, sorted last', async 
 
 test('a group collapses and its rows go with it', async ({ page }) => {
   await openObservatory(page, WORLD);
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await expect(page.locator('.obs-row')).toHaveCount(5);
 
   const head = page.locator('.obs-grp', { hasText: 'CompanyManager' });

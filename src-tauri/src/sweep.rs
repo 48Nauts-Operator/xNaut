@@ -795,6 +795,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 app.clone(),
                 ticket.clone(),
                 project,
+                None,
             )
             .await
             {

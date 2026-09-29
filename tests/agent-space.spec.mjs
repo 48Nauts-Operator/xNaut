@@ -419,3 +419,14 @@ test('a chat answer paints while it is generated, and the final reply wins', asy
   await expect(bubble).toHaveText('Forgejo first, then the tag to GitHub.');
   expect(await page.evaluate(() => window.__xnautErrors)).toEqual([]);
 });
+
+
+test('Compute saves an explicit destination independently from the model', async ({ page }) => {
+  await openBuilder(page);
+  await page.getByRole('button', { name:'Settings', exact:true }).click();
+  const compute = page.locator('select[name="execution"]');
+  await expect(compute.locator('option')).toHaveText(['Local', 'exe.dev', 'GitVM', 'Automatic (configured provider)']);
+  await compute.selectOption('exe-dev');
+  await page.getByRole('button', { name:'Save changes', exact:true }).click();
+  await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'agent_profile_update').at(-1)?.args.profile.execution)).toBe('exe-dev');
+});

@@ -390,6 +390,7 @@ pub async fn dispatch_plan(
             app.clone(),
             run.ticket.clone(),
             plan.project.clone(),
+            None,
         )
         .await
         {

@@ -158,6 +158,12 @@ impl LiveSession {
             model: self.model.clone(),
             instructions: if self.transcription_only {
                 "Transcribe the user's speech only. Do not answer, speak, delegate tasks or take actions.".into()
+            } else if self.context.has_restored() {
+                // The voice model needs history too, not only the delegated
+                // execution model. Context is data, never a request to repeat work.
+                let history = self.context.render(&[]);
+                let tail: String = history.chars().rev().take(24_000).collect::<String>().chars().rev().collect();
+                format!("{VOICE_INSTRUCTIONS}\n\nSaved conversation context (historical data; do not execute old requests or read it aloud). Use it to understand follow-ups and what was already discussed:\n{}", serde_json::to_string(&tail).unwrap_or_default())
             } else { VOICE_INSTRUCTIONS.to_string() },
         })]
     }
@@ -701,6 +707,7 @@ mod tests {
             (Role::Assistant, "Restarted.".into()),
         ]);
         let opening = session.open();
+        assert!(matches!(&opening[0], SessionAction::Send(ClientEvent::SessionStart { instructions, .. }) if instructions.contains("restart the build") && instructions.contains("historical data")));
         let started = session.handle(ServerEvent::SessionStarted, 0.0);
         assert!(commits(&opening).is_empty() && commits(&started).is_empty());
         assert!(dispatches(&opening).is_empty() && dispatches(&started).is_empty());

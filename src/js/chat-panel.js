@@ -2059,6 +2059,7 @@
     entry.liveVoice = window.xnautAttachLiveVoice?.(entry.dictateBtn, {
       label: 'Chat composer',
       statusHost: pane,
+      retainOnNavigation: true,
       connected: () => entry.pane.isConnected,
       binding: () => ({
         conversationId: entry.chatKey || 'default',

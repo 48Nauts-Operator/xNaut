@@ -182,7 +182,7 @@ pub fn parse_usage(value: &Value) -> MaxUsage {
             .and_then(Value::as_str)
             .map(String::from)
     };
-    let per_model = value
+    let mut per_model: Vec<ModelUsage> = value
         .get("limits")
         .and_then(Value::as_array)
         .map(|limits| {
@@ -196,7 +196,7 @@ pub fn parse_usage(value: &Value) -> MaxUsage {
                         .to_string();
                     Some(ModelUsage {
                         name,
-                        percent: limit.get("percent").and_then(Value::as_f64).unwrap_or(0.0),
+                        percent: limit.get("percent").and_then(Value::as_f64)?,
                         resets_at: limit
                             .get("resets_at")
                             .and_then(Value::as_str)
@@ -206,6 +206,15 @@ pub fn parse_usage(value: &Value) -> MaxUsage {
                 .collect()
         })
         .unwrap_or_default();
+    // Older account responses use named buckets. Prefer scoped limits when
+    // both shapes are returned, and never manufacture 0% from null/absent data.
+    for (bucket, name) in [("seven_day_opus", "Opus"), ("seven_day_sonnet", "Sonnet")] {
+        if !per_model.iter().any(|m| m.name.to_lowercase().contains(&name.to_lowercase())) {
+            if let Some(percent) = value.pointer(&format!("/{bucket}/utilization")).and_then(Value::as_f64) {
+                per_model.push(ModelUsage { name: name.into(), percent, resets_at: resets(bucket) });
+            }
+        }
+    }
     let severity = value
         .get("limits")
         .and_then(Value::as_array)
@@ -374,6 +383,17 @@ pub fn codex_usage() -> Result<CodexUsage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opus_legacy_bucket_falls_back_without_duplicate_or_invented_zero() {
+        let value = serde_json::json!({"seven_day_opus":{"utilization":42,"resets_at":"later"}});
+        let usage = parse_usage(&value);
+        assert_eq!(usage.per_model[0].name, "Opus"); assert_eq!(usage.per_model[0].percent, 42.0);
+        let value = serde_json::json!({"seven_day_opus":{"utilization":42},"limits":[{"kind":"weekly_scoped","scope":{"model":{"display_name":"Opus"}},"percent":13}]});
+        let usage = parse_usage(&value);
+        assert_eq!(usage.per_model.len(),1); assert_eq!(usage.per_model[0].percent,13.0);
+        assert!(parse_usage(&serde_json::json!({"seven_day_opus":null})).per_model.is_empty());
+    }
 
     #[test]
     fn parses_the_verified_response_shape() {

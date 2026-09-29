@@ -2637,6 +2637,13 @@ pub mod exe {
         )
     }
 
+    pub fn codex_auth_ready() -> Result<(), String> {
+        let out = ssh(&vm_host(), "bash -lc 'timeout 15s codex login status >/dev/null 2>&1'")?;
+        if out.status.success() { Ok(()) } else {
+            Err("Codex authentication is unavailable on exe.dev (nautbox-verify). Open its terminal and configure Codex authentication before dispatching; no agent was started.".into())
+        }
+    }
+
     fn vm_host() -> String {
         format!("{VM}.exe.xyz")
     }

@@ -25,6 +25,7 @@ mod gate;
 mod microphone;
 mod protocol;
 pub mod settings;
+pub mod usage;
 pub(crate) mod session;
 pub(crate) mod turn;
 
@@ -164,9 +165,12 @@ pub struct Handle {
     /// The speaker, opened lazily and rebuilt after every interruption so one
     /// generation's audio can never be mixed into the next one's.
     renderer: Renderer,
+    usage: Mutex<usage::Meter>,
+    transport_stop: tokio::sync::watch::Sender<bool>,
 }
 
 enum Outbound {
+    Close,
     Event(ClientEvent),
     Microphone { epoch: u64, pcm: Vec<u8> },
 }
@@ -253,6 +257,8 @@ async fn attach(
         closed: closed.clone(),
         generation,
         renderer: Arc::new(Mutex::new(None)),
+        usage: Mutex::new(usage::Meter::new(session_id, config.model.as_deref().unwrap_or("gpt-live-1"))),
+        transport_stop: tokio::sync::watch::channel(false).0,
     });
     let opening = session.lock().await.open();
     for action in opening {
@@ -264,27 +270,32 @@ async fn attach(
     {
         let closed = closed.clone();
         let microphone = handle.microphone.clone();
+        let mut stopped = handle.transport_stop.subscribe();
         tauri::async_runtime::spawn(async move {
-            while let Some(event) = pending.recv().await {
-                if closed.load(Ordering::Acquire) {
-                    break;
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = stopped.changed() => break,
+                    event = pending.recv() => match event { Some(event) => event, None => break },
+                };
+                if matches!(event, Outbound::Close) {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), sink.send(Message::Text(serde_json::json!({"type":"session.close"}).to_string()))).await;
+                    continue;
                 }
+                if closed.load(Ordering::Acquire) { continue; }
                 let event = match event {
+                    Outbound::Close => unreachable!(),
                     Outbound::Event(event) => event,
                     Outbound::Microphone { epoch, pcm } => {
                         if !microphone.accepts(epoch) { continue; }
                         ClientEvent::InputAudioAppend { pcm }
                     }
                 };
-                if sink
-                    .send(Message::Text(event.to_json().to_string()))
-                    .await
-                    .is_err()
-                {
+                if !matches!(tokio::time::timeout(Duration::from_secs(5), sink.send(Message::Text(event.to_json().to_string()))).await, Ok(Ok(()))) {
                     break;
                 }
             }
-            let _ = sink.close().await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), sink.close()).await;
         });
     }
 
@@ -293,8 +304,14 @@ async fn attach(
         let app = app.clone();
         let handle = handle.clone();
         tauri::async_runtime::spawn(async move {
+            let mut stopped = handle.transport_stop.subscribe();
             loop {
-                let message = match tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await {
+                let next = tokio::select! {
+                    biased;
+                    _ = stopped.changed() => break,
+                    next = tokio::time::timeout(IDLE_TIMEOUT, stream.next()) => next,
+                };
+                let message = match next {
                     Err(_) => {
                         finish(&app, &handle, "The voice session timed out.").await;
                         break;
@@ -321,6 +338,16 @@ async fn attach(
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
                     continue;
                 };
+                handle.usage.lock().await.observe(&value);
+                if matches!(value["type"].as_str(), Some("session.started" | "session.usage.updated" | "session.closed")) {
+                    usage::checkpoint(&handle, false).await;
+                }
+                // Ending the UI stops speech immediately, but the reader remains
+                // alive for the provider's final cumulative billable duration.
+                if handle.is_closed() {
+                    if value["type"] == "session.closed" { break; }
+                    continue;
+                }
                 let event = ServerEvent::decode(&value);
                 let (actions, became_ready, restored) = {
                     let mut session = handle.session.lock().await;
@@ -346,11 +373,17 @@ async fn attach(
                     break;
                 }
             }
+            usage::checkpoint(&handle, true).await;
+            let _ = handle.transport_stop.send(true);
             release(&app, &handle).await;
         });
     }
 
-    spawn_capture(app.clone(), handle.clone())?;
+    if let Err(error) = spawn_capture(app.clone(), handle.clone()) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { finish(&app, &handle, "Microphone could not start.").await; });
+        return Err(error);
+    }
     {
         let app = app.clone();
         let handle = handle.clone();
@@ -540,7 +573,20 @@ pub async fn release_window(state: &AppState, window: &str) {
         handle.closed.store(true, Ordering::Release);
         let mut session = handle.session.lock().await;
         session.close("The window closed.");
+        drop(session);
+        request_transport_close(&handle);
+        usage::checkpoint(&handle, false).await;
     }
+}
+
+// Bounded graceful shutdown. A missing final report stays explicitly estimated.
+fn request_transport_close(handle: &Arc<Handle>) {
+    let _ = handle.outbound.send(Outbound::Close);
+    let stop = handle.transport_stop.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let _ = stop.send(true);
+    });
 }
 
 async fn finish(app: &tauri::AppHandle, handle: &Arc<Handle>, reason: &str) {
@@ -554,6 +600,8 @@ async fn finish(app: &tauri::AppHandle, handle: &Arc<Handle>, reason: &str) {
     for action in actions {
         perform(app, handle, action).await;
     }
+    request_transport_close(handle);
+    usage::checkpoint(handle, false).await;
     release(app, handle).await;
 }
 

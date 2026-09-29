@@ -678,6 +678,7 @@ async fn cold_launch(app: &AppHandle, handle: &str, message: &str) -> Result<Str
             // like a conversation, without the conversation harness (XNAUT-242).
             durable: Some(true),
             runtime_id: None,
+            environment: None,
         },
     )
     .await?;

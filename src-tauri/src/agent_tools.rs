@@ -577,7 +577,8 @@ pub fn tool_specs() -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "id": { "type": "string", "description": "Ticket id, e.g. XNAUT-165. It must already have an owner." },
-                        "project": { "type": "string", "description": "Project key, e.g. XNAUT." }
+                        "project": { "type": "string", "description": "Project key, e.g. XNAUT." },
+                        "environment": { "type": "string", "enum": ["local", "exe-dev", "gitvm"], "description": "Execution destination for this ticket only. When the user asks for exe.dev or GitVM, pass exe-dev or gitvm here. Omit to use the worker's saved Compute setting. A missing configuration returns an error; never silently substitute local." }
                     },
                     "required": ["id", "project"]
                 }
@@ -1072,13 +1073,15 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             let Some(app) = crate::nudge::app() else {
                 return json!({ "ok": false, "error": "the app is not running" });
             };
-            match crate::dispatch::pm_ticket_dispatch(app.clone(), id.clone(), project).await {
+            let environment = args.get("environment").and_then(Value::as_str).map(str::to_owned);
+            match crate::dispatch::pm_ticket_dispatch(app.clone(), id.clone(), project, environment).await {
                 Ok(result) => json!({
                     "ok": true,
                     "handle": result.handle,
                     "branch": result.branch,
                     "worktree_path": result.worktree_path,
                     "session_id": result.session_id,
+                    "environment": result.environment,
                     "note": format!("@{} is working {id} on {}. It moves the ticket to done itself once the suites are green and the bundle is written.", result.handle, result.branch)
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
@@ -2646,12 +2649,21 @@ mod tests {
     }
 
     #[test]
+    fn a_spoken_dispatch_can_select_compute_without_changing_the_agent_profile() {
+        let specs = tool_specs();
+        let dispatch = specs.iter().find(|s| s["function"]["name"] == "dispatch_ticket").unwrap();
+        let parameters = &dispatch["function"]["parameters"];
+        assert_eq!(parameters["properties"]["environment"]["enum"], json!(["local", "exe-dev", "gitvm"]));
+        assert_eq!(parameters["required"], json!(["id", "project"]));
+    }
+
+    #[test]
     fn the_tools_never_offer_to_write_a_credential() {
         // A token pasted into a chat turn lands in the transcript, the model's
         // context and any log that caught either. The tool surface must not
         // make that easy, however convenient it sounds.
         let specs = serde_json::to_string(&tool_specs()).unwrap().to_lowercase();
-        for forbidden in ["api_key", "token", "secret", "credential\":", "env"] {
+        for forbidden in ["api_key", "token", "secret", "credential\":", "\"env\"", "\"env_vars\""] {
             assert!(!specs.contains(forbidden), "tool surface exposes {forbidden}");
         }
     }

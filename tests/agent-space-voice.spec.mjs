@@ -91,7 +91,7 @@ test('Agent Space uses one mic, streams STS through its selected agent and saves
   }
 });
 
-test('Agent Space STT keeps a draft and switching agent closes its microphone', async ({ page }) => {
+test('Agent Space STT stays pinned to its draft when browsing another agent', async ({ page }) => {
   await openAgent(page);
   await page.getByLabel('Message @nautbot').fill('Draft.');
   await start(page, 'STT · Speech to Text');
@@ -100,7 +100,9 @@ test('Agent Space STT keeps a draft and switching agent closes its microphone', 
   expect(await page.evaluate(() => window.__xnautInvokes.some(i => i.cmd === 'agent_chat_turn'))).toBe(false);
   await page.locator('.asl-agent', { hasText: 'Builder' }).first().click();
   await expect(page.getByLabel('Message @builder')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'voice_live_close').length)).toBe(1);
+  expect(await page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'voice_live_close').length)).toBe(0);
+  await page.evaluate(() => window.xnautOpenAgentSpace('nautbot'));
+  await expect(page.getByLabel('Message @nautbot')).toHaveValue('Draft. More words.');
 });
 
 test('spoken build requests keep the existing workspace confirmation', async ({ page }) => {
@@ -139,4 +141,24 @@ test('pending Agent Space answer stays red during spoken acknowledgement, then b
   await expect(page.locator('.voice-orb')).toHaveCSS('--voice-color', '#2de2a8');
   await emit(page, [{ kind: 'playback', speaking: false }]);
   await expect(page.locator('.voice-live-docked')).toHaveAttribute('data-state', 'listening');
+});
+
+
+test('voice and saved context survive Observatory navigation without another connection', async ({ page }) => {
+  await openAgent(page); await start(page);
+  await emit(page, [{kind:'commit',role:'user',text:'Remember ticket 440 and its process-group bug.',turn:0},{kind:'dispatch',turn:0,epoch:0}]);
+  await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='voice_live_result').length)).toBe(1);
+  const id = await page.evaluate(() => window.__xnautInvokes.find(i=>i.cmd==='voice_live_open').args.binding.conversationId);
+  await page.evaluate(() => window.xnautAttachObservatoryTab());
+  await expect(page.locator('.obs')).toBeVisible();
+  await emit(page, [{kind:'commit',role:'user',text:'What bug were we discussing?',turn:1},{kind:'dispatch',turn:1,epoch:0}]);
+  await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='voice_live_result').length)).toBe(2);
+  const request = await page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='agent_chat_turn').at(-1).args);
+  expect(request.messages.some(m=>m.content.includes('ticket 440'))).toBe(true);
+  await page.evaluate(() => window.xnautOpenAgentSpace('nautbot'));
+  await expect(page.getByLabel('Message @nautbot')).toBeVisible();
+  await expect(page.locator('.as-messages')).toContainText('What bug were we discussing?');
+  expect(await page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='voice_live_close').length)).toBe(0);
+  expect(await page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='voice_live_open').length)).toBe(1);
+  expect(await page.locator('[data-voice-thread]').getAttribute('data-voice-thread')).toBe(id);
 });

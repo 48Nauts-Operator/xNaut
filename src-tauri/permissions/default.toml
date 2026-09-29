@@ -761,7 +761,7 @@ commands.allow = ["voice_local_open", "voice_local_close", "voice_local_transcri
 [[permission]]
 identifier = "allow-voice-live"
 description = "Hold a public continuous voice conversation bound to one xNAUT conversation"
-commands.allow = ["voice_live_settings_get", "voice_live_settings_save", "voice_live_settings_test", "voice_live_mute", "voice_live_ready", "voice_live_open", "voice_live_close", "voice_live_text", "voice_live_result"]
+commands.allow = ["voice_live_settings_get", "voice_live_settings_save", "voice_live_settings_test", "voice_live_mute", "voice_live_ready", "voice_live_usage", "voice_live_open", "voice_live_close", "voice_live_text", "voice_live_result"]
 
 [[permission]]
 identifier = "allow-voice-model-ready"

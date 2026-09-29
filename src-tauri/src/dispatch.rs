@@ -22,6 +22,7 @@ pub struct DispatchResult {
     pub branch: String,
     pub worktree_path: String,
     pub session_id: String,
+    pub environment: String,
 }
 
 /// Every linked vault doc, inlined. An unreadable or non-`work:` reference is
@@ -200,6 +201,7 @@ pub async fn pm_ticket_dispatch(
     app: tauri::AppHandle,
     ticket_id: String,
     project: String,
+    environment: Option<String>,
 ) -> Result<DispatchResult, String> {
     let tickets = crate::project_management::pm_ticket_list(
         app.state::<crate::state::AppState>(),
@@ -218,6 +220,13 @@ pub async fn pm_ticket_dispatch(
         .filter(|owner| !owner.is_empty())
         .ok_or("assign an owner before dispatching this ticket")?;
     let profile = crate::agent_profiles::agent_profile_get(handle.clone())?;
+    use crate::sandbox::launch_env::LaunchEnv;
+    let requested = environment.as_deref().map(|key| LaunchEnv::from_key(key)
+        .ok_or_else(|| format!("Unknown execution environment: {key}. Choose local, exe-dev or gitvm."))).transpose()?;
+    let sandboxes = crate::settings::load_or_default().sandboxes;
+    let destination = crate::sandbox::launch_env::resolve(requested.or_else(|| profile.execution.pinned_environment()), &sandboxes);
+    destination.route(&sandboxes)?;
+
     if !crate::run_control::runtime_meets_in(&crate::agents::registry_dir()?, &profile.runtime_id, &profile.model, &ticket.model_requirement)? {
         return Err(format!("@{handle} model {} does not meet ticket requirement {}", profile.model, ticket.model_requirement));
     }
@@ -305,6 +314,7 @@ pub async fn pm_ticket_dispatch(
             cols: Some(200),
             rows: Some(50),
             runtime_id: None,
+            environment: Some(destination.key().into()),
             // Dispatched work must outlive the app, like a cold wake (XNAUT-242).
             durable: Some(true),
         },
@@ -312,9 +322,10 @@ pub async fn pm_ticket_dispatch(
     .await?;
 
     let note = format!(
-        "\n\n## Dispatched {date} to @{handle}\n\n- branch `{branch}`\n- worktree `{worktree_path}`\n- session `{session}`\n",
+        "\n\n## Dispatched {date} to @{handle}\n\n- branch `{branch}`\n- worktree `{worktree_path}`\n- session `{session}`\n- environment `{environment}`\n",
         date = &chrono::Utc::now().to_rfc3339()[..10],
         session = launched.session_id,
+        environment = destination.key(),
     );
     crate::project_management::pm_ticket_update(
         app.state::<crate::state::AppState>(),
@@ -343,6 +354,7 @@ pub async fn pm_ticket_dispatch(
         branch,
         worktree_path,
         session_id: launched.session_id,
+        environment: destination.key().into(),
     })
 }
 

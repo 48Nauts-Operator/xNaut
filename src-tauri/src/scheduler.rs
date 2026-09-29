@@ -327,6 +327,7 @@ where
             // rig runs all died on restart having never been cleaned up.
             durable: Some(true),
             runtime_id: None,
+            environment: None,
         },
     })
 }

@@ -95,3 +95,10 @@
 @keyframes voice-breathe { from { opacity: .55; transform: scale(.95); } to { opacity: 1; transform: scale(1.03); } }
 @media (prefers-reduced-motion: reduce) { .voice-orb, .voice-orb span { animation: none !important; } }
 .chatp-tool-events { font-size: 12px; color: var(--text-secondary, #9da5b4); border-left: 2px solid #559bff; padding-left: 8px; margin-bottom: 8px; }
+
+/* Available at the composer even when the voice pane is not selected. */
+.voice-quick-mute { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:4px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--muted-foreground,#a1a1a1); cursor:pointer; }
+.voice-quick-mute[hidden] { display:none; }
+.voice-quick-mute:hover { background:var(--secondary,#262626); }
+.voice-quick-mute.is-muted,.voice-quick-mute.mute-error { color:#e98b83; border-color:#e98b83; }
+.voice-quick-mute:disabled { opacity:.5; cursor:wait; }

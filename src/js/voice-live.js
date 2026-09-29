@@ -21,19 +21,7 @@
     document.querySelectorAll('.voice-live-button').forEach((button) => { void refreshControls.get(button)?.(); });
   });
 
-  function createOverlay(surface) {
-    const overlay = document.createElement('section');
-    overlay.className = 'voice-live-overlay';
-    overlay.setAttribute('aria-label', 'Voice conversation');
-    overlay.innerHTML = '<strong data-live-destination></strong>'
-      + '<div class="voice-orb" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>'
-      + '<span data-live-status role="status" aria-label="Voice activity" aria-live="polite"></span>'
-      + '<span data-live-mic-status role="status" aria-label="Microphone status" aria-live="polite"></span>'
-      + '<p data-live-caption aria-live="polite"></p>'
-      + '<small data-live-policy></small>'
-      + '<div><button type="button" data-live-mute aria-pressed="false">Mute microphone</button> '
-      + '<button type="button" data-live-end>End voice</button></div>';
-    overlay.querySelector('[data-live-mute]').onclick = async () => {
+  async function toggleMute() {
       const session = active;
       if (!session || session.muting) return;
       session.muting = true;
@@ -48,7 +36,33 @@
         session.muting = false;
         if (active === session) render('Listening — just talk');
       }
-    };
+  }
+  function paintQuickMute() {
+    document.querySelectorAll('.voice-quick-mute').forEach(button => {
+      button.hidden = !active;
+      button.disabled = !!active?.muting;
+      button.setAttribute('aria-pressed', String(!!active?.muted));
+      const label = active?.muted ? 'Unmute microphone (composer)' : 'Mute microphone (composer)';
+      button.setAttribute('aria-label', label);
+      button.title = active?.muteError || `${label}${active ? ' · ' + active.label : ''}`;
+      button.classList.toggle('is-muted', !!active?.muted);
+      button.classList.toggle('mute-error', !!active?.muteError);
+    });
+  }
+
+  function createOverlay(surface) {
+    const overlay = document.createElement('section');
+    overlay.className = 'voice-live-overlay';
+    overlay.setAttribute('aria-label', 'Voice conversation');
+    overlay.innerHTML = '<strong data-live-destination></strong>'
+      + '<div class="voice-orb" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>'
+      + '<span data-live-status role="status" aria-label="Voice activity" aria-live="polite"></span>'
+      + '<span data-live-mic-status role="status" aria-label="Microphone status" aria-live="polite"></span>'
+      + '<p data-live-caption aria-live="polite"></p>'
+      + '<small data-live-policy></small>'
+      + '<div><button type="button" data-live-mute aria-pressed="false">Mute microphone</button> '
+      + '<button type="button" data-live-end>End voice</button></div>';
+    overlay.querySelector('[data-live-mute]').onclick = toggleMute;
     overlay.querySelector('[data-live-end]').onclick = () => {
       void teardown('Start a voice conversation');
     };
@@ -65,6 +79,7 @@
   }
 
   function render(state) {
+    paintQuickMute();
     if (!active) return;
     const { overlay } = active;
     // A spoken acknowledgement can overlap the agent request. Keep the
@@ -108,6 +123,7 @@
     const session = active;
     if (!session) return;
     active = null;
+    paintQuickMute();
     session.button.setAttribute('aria-pressed', 'false');
     session.button.title = reason || 'Start a voice conversation';
     session.observer?.disconnect();
@@ -230,7 +246,13 @@
     const wrap = document.createElement('span');
     wrap.className = 'voice-mic-control';
     button.replaceWith(wrap);
-    wrap.append(button, menu);
+    const quickMute = document.createElement('button');
+    quickMute.type = 'button'; quickMute.className = 'voice-quick-mute'; quickMute.hidden = true;
+    quickMute.setAttribute('aria-label', 'Mute microphone (composer)'); quickMute.setAttribute('aria-pressed', 'false');
+    quickMute.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0014 0v-2M12 19v3M8 22h8M3 3l18 18"/></svg>';
+    quickMute.onclick = toggleMute;
+    wrap.append(button, quickMute, menu);
+    paintQuickMute();
     const hideMenu = () => { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); };
     let ready = false;
     button.onclick = () => {
@@ -290,7 +312,9 @@
           handle(event, { ...surface, id }).catch((error) => console.error('[voice-live] event failed', error));
         }),
         observer: new MutationObserver(() => {
-          if (!surface.connected()) void teardown('The conversation closed.');
+          // App tabs detach their DOM during navigation; explicit dispose owns
+          // the microphone lifetime for those surfaces.
+          if (!surface.retainOnNavigation && !surface.connected()) void teardown('The conversation closed.');
         }),
       };
       active = session;

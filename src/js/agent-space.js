@@ -833,7 +833,7 @@
       // Clamped here AND in Rust: the form is one door, and swarm_plan::plan_from
       // is the one that actually bounds a batch.
       max_parallel: Math.max(1, Math.min(64, parseInt(values.max_parallel, 10) || 3)),
-      execution: values.execution === 'sandbox' ? 'sandbox' : 'local',
+      execution: ['local', 'sandbox', 'exe-dev', 'gitvm'].includes(values.execution) ? values.execution : 'local',
       role: String(values.role || 'coding-agent').trim(),
       capabilities: Array.from(new Set(existingCapabilities.concat(skills, collabs))),
       policy: values.policy || (original && original.policy) || undefined,
@@ -864,6 +864,7 @@
     const emptyExisting = recent.find((item) => !(Array.isArray(item.messages) && item.messages.length));
     let thread = options.newThread ? emptyExisting : (recent.find((item) => item.id === options.threadId) || recent[0]);
     if (!thread) thread = emptyExisting || newThread(profile.handle, 'New thread');
+    pane.dataset.voiceThread = thread.id; pane.dataset.voiceAgent = profile.handle;
     const session = sessionFor(profile, sessions);
     // The thread's harness, not the profile's: XNAUT-150 switches one
     // conversation without moving every other thread of the same agent.
@@ -1156,6 +1157,7 @@
     const turnCleanups = [];
     pane._agentSpaceCleanup = () => {
       turnCleanups.splice(0).forEach((cleanup) => { try { cleanup(); } catch (_) {} });
+      paneCleanups.splice(0).forEach((cleanup) => { try { cleanup(); } catch (_) {} });
     };
     // XNAUT-251: keep the receipt with the message it belongs to, so it
     // survives a repaint and can be read afterwards.
@@ -1527,8 +1529,7 @@
     // the way Cockpit, Claude Desktop and ChatGPT show what they just made.
     // It was in the right rail first, which is 300px of chrome meant for
     // status, not for a diagram anyone has to read.
-    activePaneCleanups.splice(0).forEach((cleanup) => { try { cleanup(); } catch (_) {} });
-    const paneCleanups = activePaneCleanups;
+    const paneCleanups = [];
     const stage = pane.querySelector('[data-stage]');
     const split = pane.querySelector('[data-split]');
     const canvasButton = pane.querySelector('[data-canvas]');
@@ -1859,6 +1860,7 @@
     if (dictate) liveVoice = window.xnautAttachLiveVoice?.(dictate, {
       label: `${profile.display_name || profile.handle} · Agent Space`,
       statusHost: pane,
+      retainOnNavigation: true,
       connected: () => dictate.isConnected,
       binding: () => ({
         conversationId: thread.id, agent: profile.handle,
@@ -2020,7 +2022,7 @@
           <label class="as-field"><span>@Handle</span><input class="as-input" name="handle" value="${esc(profile.handle)}" ${profile.handle === 'nautbot' ? 'readonly' : ''} placeholder="builder"><small class="as-help">Unique · letters, numbers, - or _</small></label></div>
         <label class="as-field"><span>Tagline</span><input class="as-input" name="tagline" maxlength="72" value="${esc(profile.tagline)}" placeholder="Turns clear product intent into working software."></label>
         <div class="as-inline"><label class="as-field"><span>Runtime</span><select class="as-input" name="runtime_id">${(runtimes || []).map((runtime) => `<option value="${esc(runtime.id)}" ${runtime.id === profile.runtime_id ? 'selected' : ''} ${runtime.available === false && runtime.id !== profile.runtime_id ? 'disabled' : ''}>${esc(runtime.label)}${runtime.available === false ? ' · unavailable' : ''}</option>`).join('')}</select></label>
-          <label class="as-field"><span>Compute</span><select class="as-input" name="execution"><option value="local" ${profile.execution !== 'sandbox' ? 'selected' : ''}>Local</option><option value="sandbox" ${profile.execution === 'sandbox' ? 'selected' : ''}>Sandbox</option></select></label></div>
+          <label class="as-field"><span>Compute</span><select class="as-input" name="execution">${[['local','Local'],['exe-dev','exe.dev'],['gitvm','GitVM'],['sandbox','Automatic (configured provider)']].map(([value,label]) => `<option value="${value}" ${(profile.execution || 'local') === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
         <div class="as-inline"><label class="as-field"><span>Provider</span><select class="as-input" name="provider">${providers.map((provider) => `<option value="${esc(provider)}" ${provider === profile.provider ? 'selected' : ''}>${esc(provider)}</option>`).join('')}</select></label>
           <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelOptions.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model && model.provider === profile.provider ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select><small class="as-help">Handed to the runtime CLI as --model.</small></label>
           <label class="as-field"><span>Chat model</span><select class="as-input" name="chat_model"><option value="">Same as Model</option>${modelOptions.map((model) => `<option value="${esc(model.id)}" ${model.id === profile.chat_model ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select><small class="as-help">Used for chat in the app. Only this one has to carry tool calls.</small></label>
@@ -2293,7 +2295,6 @@
   // Listeners and panes that belong to the thread currently on screen. Run
   // and cleared on every re-render, or each click on an agent leaves another
   // canvas listener behind.
-  let activePaneCleanups = [];
   // An agent asked for the knowledge graph. It opens as a tab, the same one
   // the menu opens, rather than a second viewer nobody maintains.
   if (window.__TAURI__ && window.__TAURI__.event) {
@@ -2331,19 +2332,44 @@
     const pane = document.createElement('section');
     pane.className = 'agent-space';
     pane.dataset.agentSpace = '1';
+    const retainedStyle = document.createElement('style'); retainedStyle.textContent = '.as-retained-view[hidden]{display:none!important}'; document.head.appendChild(retainedStyle);
     pane.style.flex = '1';
     parent.appendChild(pane);
     let current = { ...(options || {}) };
+    const views = [];
+    let paintGeneration = 0;
     const render = async () => {
-      if (typeof pane._agentSpaceCleanup === 'function') pane._agentSpaceCleanup();
-      pane.innerHTML = '<div class="as-empty">Loading agent space…</div>';
+      const generation = ++paintGeneration;
+      const requested = { ...current };
+      const threadMode = !requested.mode || requested.mode === 'thread';
+      const existing = threadMode && !requested.newThread && [...views].reverse().find(view =>
+        view.querySelector('.voice-live-button[aria-pressed="true"]') &&
+        view.dataset.voiceAgent === handleOf(requested.handle) && (!requested.threadId || view.dataset.voiceThread === requested.threadId));
+      views.forEach(view => { view.hidden = true; });
+      if (existing) { existing.hidden = false; return; }
+      const view = document.createElement('div'); view.className = 'as-retained-view';
+      view.style.cssText = 'display:flex;flex:1;min-width:0;min-height:0;width:100%;height:100%';
+      // hidden must win over the display:flex inline style.
+      view.innerHTML = '<div class="as-empty">Loading agent space…</div>';
+      pane.appendChild(view); views.push(view);
       try {
-        if (current.mode === 'new' || current.mode === 'settings') await renderProfileForm(pane, current);
-        else await renderThread(pane, current);
-      } catch (error) { pane.innerHTML = `<div class="as-empty"><h2>Agent Space could not open.</h2><p>${esc(error)}</p></div>`; }
+        if (requested.mode === 'new' || requested.mode === 'settings') await renderProfileForm(view, requested);
+        else await renderThread(view, requested);
+      } catch (error) { view.innerHTML = `<div class="as-empty"><h2>Agent Space could not open.</h2><p>${esc(error)}</p></div>`; }
+      if (generation !== paintGeneration) {
+        view.hidden = true;
+        if (!view.querySelector('.voice-live-button[aria-pressed="true"]')) { view._agentSpaceCleanup?.(); view.remove(); views.splice(views.indexOf(view), 1); }
+        return;
+      }
+      // Keep the active microphone's view alive while navigating. Inactive
+      // screens can be recreated from their saved history without retaining DOM.
+      for (const old of [...views]) {
+        if (old === view || old.querySelector('.voice-live-button[aria-pressed="true"]')) continue;
+        old._agentSpaceCleanup?.(); old.remove(); views.splice(views.indexOf(old), 1);
+      }
     };
-    const entry = { kind:'agent-space', label, pane, updateOptions(next) { current = { ...(next || {}) }; render(); }, dispose() {
-      if (typeof pane._agentSpaceCleanup === 'function') pane._agentSpaceCleanup();
+    const entry = { kind:'agent-space', label, pane, updateOptions(next) { current = { ...(next || {}) }; void render(); }, dispose() {
+      views.forEach(view => { view._agentSpaceCleanup?.(); view.remove(); });
     } };
     panes.set(label, entry);
     await render();

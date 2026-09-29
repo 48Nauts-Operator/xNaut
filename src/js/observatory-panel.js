@@ -39,7 +39,7 @@
   // ago is still on screen next to the dispatches that followed it, few enough
   // that the deck does not become a log viewer — the Agent timeline is where
   // the whole history lives.
-  const LEDGER_ROWS = 25;
+  const LEDGER_ROWS = 250;
   // How long one project-board read stays good. The board changes on human
   // timescales, and this panel repaints every 5s.
   const PROJECTS_TTL_MS = 30000;
@@ -174,7 +174,22 @@
 .obs-btn.danger { border-color:rgba(233,139,131,.4); color:#e98b83; }
 .obs-btn.danger:hover { background:rgba(233,139,131,.1); }
 .obs-btn.primary { border:0; background:var(--xnaut-yellow,#f5b840); color:#171717; font-weight:700; font-size:12.5px; padding:0 16px; }
-.obs-strip { display:flex; gap:12px; align-items:stretch; }
+.obs-strip { display:flex; flex-wrap:wrap; gap:12px; align-items:stretch; }
+.obs > * { flex-shrink:0; }
+.obs [hidden] { display:none !important; }
+.obs-page { display:flex; flex-direction:column; gap:18px; min-width:0; }
+.obs-tabs { display:flex; gap:8px; border-bottom:1px solid var(--border,#262626); padding-bottom:10px; }
+.obs-tabs [aria-selected="true"] { color:var(--xnaut-yellow,#f5b840); border-color:var(--xnaut-yellow,#f5b840); }
+.obs-pager { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10px 16px; border-top:1px solid var(--border,#262626); font-size:11px; color:var(--muted-foreground); }
+.obs-pager button:disabled { opacity:.35; cursor:default; }
+.obs-table { flex-shrink:0; }
+.obs-summary { display:flex; flex-wrap:wrap; gap:12px; }
+.obs-summary > .obs-strip { display:contents; }
+.obs-summary .obs-card { min-width:190px !important; flex:1 1 190px !important; width:auto !important; }
+.obs-thead { flex-wrap:wrap; }
+.obs-table:has([data-rows]) { overflow-x:auto; }
+.obs-cols,.obs-row { min-width:780px; }
+@media(max-width:700px) { .obs { padding:16px; } .obs-led { flex-wrap:wrap; } .obs-led .dt { flex-basis:100%; white-space:normal; } }
 .obs-card { background:var(--card,#171717); border:1px solid var(--border,#262626); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; }
 .obs-card .k { font-size:9.5px; letter-spacing:.09em; font-weight:650; color:var(--muted-foreground,#a1a1a1); text-transform:uppercase; }
 .obs-big { display:flex; align-items:baseline; gap:6px; }
@@ -189,7 +204,7 @@
 .obs-mrow .nm { width:62px; flex-shrink:0; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--foreground); }
 .obs-mrow .pc { width:34px; flex-shrink:0; text-align:right; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--muted-foreground); }
 .obs-mrow .obs-bar { flex:1 1 auto; }
-.obs-table { background:var(--card,#171717); border:1px solid var(--border,#262626); border-radius:12px; overflow-y:auto; display:flex; flex-direction:column; }
+.obs-table { background:var(--card,#171717); border:1px solid var(--border,#262626); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
 .obs-thead { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--border,#262626); }
 .obs-thead .k { font-size:10px; letter-spacing:.09em; font-weight:650; color:var(--muted-foreground); text-transform:uppercase; }
 .obs-thead .n { font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--xnaut-yellow,#f5b840); }
@@ -319,6 +334,67 @@
         <div data-ledger-list></div>
       </div>`;
     parentContainer.appendChild(pane);
+    // One scroll surface per page; cards never shrink to fit the viewport.
+    const tabs = document.createElement('nav');
+    tabs.className = 'obs-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Observatory pages');
+    const summary = document.createElement("div"); summary.className = "obs-summary";
+    const strip = pane.querySelector("[data-strip]"); strip.before(summary); summary.appendChild(strip);
+    window.xnautVoiceCost?.mountCard(summary);
+    const sections = {
+      general: [summary, pane.querySelector('[data-sessions]'), pane.querySelector('[data-ledger-list]').closest('.obs-table')],
+      agents: [pane.querySelector('[data-rows]').closest('.obs-table'), pane.querySelector('[data-swarm-pills]').closest('.obs-table')],
+    };
+    pane.querySelector('.obs-head').after(tabs);
+    Object.entries(sections).forEach(([key, cards]) => {
+      const page = document.createElement('section'); page.className = 'obs-page'; page.dataset.page = key;
+      page.id = `${tabId}-obs-${key}`; page.setAttribute('role', 'tabpanel'); page.hidden = key !== 'general';
+      const button = document.createElement('button'); button.className = 'obs-btn'; button.type = 'button';
+      button.textContent = key === 'general' ? 'General' : 'Agents'; button.dataset.pageTab = key;
+      button.id = `${page.id}-tab`; button.setAttribute('role', 'tab'); button.setAttribute('aria-controls', page.id);
+      button.setAttribute('aria-selected', String(!page.hidden)); button.tabIndex = page.hidden ? -1 : 0;
+      page.setAttribute('aria-labelledby', button.id);
+      button.onclick = () => {
+        pane.querySelectorAll('[data-page]').forEach(el => { el.hidden = el.dataset.page !== key; });
+        tabs.querySelectorAll('button').forEach(el => { const active = el === button; el.setAttribute('aria-selected', String(active)); el.tabIndex = active ? 0 : -1; });
+        pane.querySelector('[data-stopall]').hidden = key !== 'agents';
+        pane.scrollTop = 0;
+      };
+      button.onkeydown = event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault(); const buttons = [...tabs.querySelectorAll('button')];
+        const next = event.key === 'Home' ? buttons[0] : event.key === 'End' ? buttons.at(-1) : buttons.find(el => el !== button);
+        next.click(); next.focus();
+      };
+      tabs.appendChild(button); cards.forEach(card => page.appendChild(card)); pane.appendChild(page);
+    });
+    pane.querySelector('[data-stopall]').hidden = true;
+    const pagers = new Map();
+    function paginate(key, selector, rowSelector) {
+      const host = pane.querySelector(selector); if (!host) return;
+      let state = pagers.get(key);
+      if (!state) {
+        const bar = document.createElement('div'); bar.className = 'obs-pager'; bar.dataset.pager = key;
+        bar.innerHTML = `<label>Rows <select class="obs-select" aria-label="${key} rows per page"><option>5</option><option>10</option><option>25</option></select></label><span data-page-count aria-live="polite"></span><button class="obs-btn" data-prev aria-label="Previous ${key} page">Previous</button><button class="obs-btn" data-next aria-label="Next ${key} page">Next</button>`;
+        host.closest('.obs-table').appendChild(bar);
+        state = { page: 0, size: 5, bar }; pagers.set(key, state);
+        bar.querySelector('select').onchange = e => { state.size = Number(e.target.value); state.page = 0; paginate(key, selector, rowSelector); };
+        bar.querySelector('[data-prev]').onclick = () => { state.page--; paginate(key, selector, rowSelector); };
+        bar.querySelector('[data-next]').onclick = () => { state.page++; paginate(key, selector, rowSelector); };
+      }
+      const rows = [...host.querySelectorAll(rowSelector)];
+      const pages = Math.max(1, Math.ceil(rows.length / state.size)); state.page = Math.max(0, Math.min(state.page, pages - 1));
+      rows.forEach((row, i) => { row.hidden = i < state.page * state.size || i >= (state.page + 1) * state.size; });
+      host.querySelectorAll('.obs-grp').forEach(group => {
+        let next = group.nextElementSibling, visible = false, hasRows = false;
+        while (next && !next.matches('.obs-grp')) { hasRows = true; if (!next.hidden) visible = true; next = next.nextElementSibling; }
+        group.hidden = hasRows && !visible;
+      });
+      host.querySelectorAll('.obs-pill-group').forEach(group => { group.hidden = ![...group.querySelectorAll('.obs-pill')].some(row => !row.hidden); });
+      state.bar.querySelector('[data-page-count]').textContent = rows.length ? `${state.page * state.size + 1}–${Math.min(rows.length, (state.page + 1) * state.size)} of ${rows.length} · Page ${state.page + 1}/${pages}` : '0 items';
+      state.bar.querySelector('[data-prev]').disabled = state.page === 0;
+      state.bar.querySelector('[data-next]').disabled = state.page >= pages - 1;
+    }
+
 
     pane.querySelector('[data-stopall]').onclick = async () => {
       if (window.xnautBuild && window.xnautBuild.stopAll) await window.xnautBuild.stopAll();
@@ -438,7 +514,11 @@
         budgetCritNotified = true;
         if (window.xnautNotify) window.xnautNotify('MAX plan budget critical', 'Only ' + left + '% of the week left.');
       }
-      const models = (c && c.per_model || []).map((m) => `
+      const reported = [...(c && c.per_model || [])];
+      if (!reported.some(m => /opus/i.test(m.name))) reported.push({ name: 'Opus', percent: null });
+      const rank = name => /fable/i.test(name) ? 0 : /opus/i.test(name) ? 1 : 2;
+      reported.sort((a, b) => rank(a.name) - rank(b.name));
+      const models = reported.map((m) => m.percent == null ? `<div class="obs-mrow" title="This account does not report a separate weekly Opus allowance. Shared plan usage is shown above."><span class="nm">${esc(m.name)}</span><span class="obs-hint">Not reported separately</span></div>` : `
         <div class="obs-mrow"><span class="nm">${esc(m.name)}</span>
         <span class="obs-bar"><i class="cyan" style="width:${Math.min(100, Math.round(m.percent))}%"></i></span>
         <span class="pc">${Math.round(m.percent)}%</span></div>`).join('');
@@ -456,8 +536,7 @@
               : why(lastCErr, 'no plan data yet')}
         </div>
         <div class="obs-card" style="flex:1 1 auto;min-width:0">
-          <span class="k">Per model · weekly</span>${models
-            || why(lastCErr, c ? 'no per-model limits on this plan' : 'no plan data yet')}
+          <span class="k">Per model · weekly</span>${!(c && c.per_model?.length) ? why(lastCErr, c ? 'no per-model limits on this plan' : 'no plan data yet') : ''}${models}
         </div>
         ${spendCard(c)}
         <div class="obs-card" style="width:200px;flex:0 0 auto">
@@ -719,7 +798,7 @@
         sel.dataset.filled = '1';
         const want = preferredProject(projects);
         if (want) sel.value = want.key;
-        sel.onchange = () => renderSessions();
+        sel.onchange = () => { if (pagers.has("Sessions")) pagers.get("Sessions").page = 0; renderSessions(); };
       }
       const project = projects.find((p) => p.key === (sel && sel.value)) || projects[0] || null;
       if (!project) {
@@ -782,6 +861,7 @@
           </div>`).join('')
         : '<div class="obs-empty">No session for this project yet. Opening one always starts it inside zellij, so it outlives the app.</div>') + opener;
 
+      paginate('Sessions', '[data-sess-list]', '.obs-sess-row');
       list.querySelectorAll('[data-sess-attach]').forEach((b) => {
         b.onclick = () => {
           const name = b.dataset.sessAttach;
@@ -910,6 +990,7 @@
       // must be in hand before a row can be told which project it belongs to.
       await Promise.all([loadProjects(), loadRegistry()]);
       const rows = [];
+      const profiles = await invoke('agent_profile_list').catch(() => []) || [];
       try {
         const sessions = (await invoke('agent_sessions_list')) || [];
         sessions.forEach((s) => {
@@ -925,10 +1006,11 @@
           const sess = s.zellij_session
             || (typeof s.session_id === 'string' && s.session_id.startsWith('xnaut-') ? s.session_id : undefined);
           const adopted = !!sess;
-          rows.push({ kind: 'terminal', id: s.session_id, sess,
+          const profile = profiles.find(p => p.handle === s.agent_id);
+          rows.push({ kind: 'terminal', id: s.session_id, sid: s.session_id, sess,
             title: (s.agent_id || 'agent') + ' · ' + (s.label || 'terminal'),
-            sub: adopted ? 'adopted zellij session' : 'Interactive terminal session',
-            model: s.agent_id || '—', cmd: adopted ? attachCmd(s.session_id) : runnerCmd(s.agent_id),
+            sub: s.remote_env ? `Remote session · ${s.remote_env}` : adopted ? 'adopted zellij session' : 'Interactive terminal session',
+            model: profile?.model || '—', cmd: adopted ? attachCmd(s.session_id) : '',
             started: s.started_at_ms, status: s.status || 'working' });
         });
       } catch (_) {}
@@ -1008,6 +1090,7 @@
         </button>`;
         return open ? head + g.items.map(({ r, i }) => rowHtml(r, i)).join('') : head;
       }).join('');
+      paginate('Running agents', '[data-rows]', '.obs-row');
       host.querySelectorAll('[data-grp]').forEach((b) => {
         b.onclick = () => {
           const key = b.dataset.grp;
@@ -1029,7 +1112,7 @@
           const label = String(r.title).split(' · ')[0];
           if (r.wt && window.xnautOpenBuildShell) window.xnautOpenBuildShell(r.wt, label); // re-attach the persistent session
           else if (r.zellij && window.xnautOpenZellijSession) window.xnautOpenZellijSession(r.sess); // zellij attach in a new tab
-          else if (r.sid && window.xnautAttachAgentTab) window.xnautAttachAgentTab(r.sid, label);
+          else if (r.sid && window.xnautOpenAgentSession) window.xnautOpenAgentSession(r.sid, label);
         };
       });
       // sandbox CPU (best effort, per row with a cwd)
@@ -1087,8 +1170,8 @@
       if (counts) counts.innerHTML = `<span class="run">${n('running')} running</span><span class="ok">${n('done')} done</span>${n('failed') ? `<span class="bad">${n('failed')} failed</span>` : ''}`;
       // Grouped by project, because "which project is this swarm on" is the
       // question the band exists to answer.
-      pills.innerHTML = projects.map((key) => {
-        const mine = dispatched.filter((r) => r.project === key);
+      pills.innerHTML = [...new Set(dispatched.map(r => r.project || ''))].map((key) => {
+        const mine = dispatched.filter((r) => (r.project || '') === key);
         const items = mine.map((r) => {
           const band = bandFor(r.state);
           const cls = band === 'retired' ? '' : band;
@@ -1154,7 +1237,7 @@
 
     // Budget is an external rate-limited API — poll it gently (60s); the
     // agents table + swarm are local and stay on the fast 5s tick.
-    async function refreshFast() { await loadRows(); await renderSwarm(); await renderLedger(); }
+    async function refreshFast() { await loadRows(); await renderSwarm(); await renderLedger(); paginate('Running agents', '[data-rows]', '.obs-row'); paginate('Dispatched runs', '[data-swarm-pills]', '.obs-pill'); paginate('Ledger', '[data-ledger-list]', '.obs-led'); }
     // `refresh` was called by Stop-all and by every Kill button but never
     // existed, so both threw ReferenceError and the table never repainted
     // (XNAUT-257). It refetches usage too, because the refresh a person wants

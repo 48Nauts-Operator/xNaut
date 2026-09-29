@@ -663,6 +663,7 @@ pub(crate) fn used_percent(blocks: u64, bavail: u64) -> u8 {
 /// tree that parses `git worktree list --porcelain`. This module deliberately
 /// does not become a second one.
 pub fn scan(repo: &Path, mainline: Option<&str>) -> Result<Report, String> {
+    let registrations = crate::worktree_protection::registered()?;
     let worktrees = crate::worktree::list_worktrees(repo)?;
     let mainline = resolve_mainline(repo, mainline);
     let repo_real = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
@@ -689,7 +690,8 @@ pub fn scan(repo: &Path, mainline: Option<&str>) -> Result<Report, String> {
             writer: crate::writer_lease::live_holder(&path).map(|h| h.handle),
         };
 
-        let verdict = verdict_for_worktree(&facts, mainline.as_deref());
+        let verdict = crate::worktree_protection::reason(&path, &registrations)
+            .map(Verdict::Keep).unwrap_or_else(|| verdict_for_worktree(&facts, mainline.as_deref()));
         let offered = verdict.offered();
         // An offered worktree takes its cache with it, so no separate row and
         // no separate number. A kept one gets a cache row of its own, and then

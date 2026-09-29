@@ -96,6 +96,21 @@ pub enum AgentExecution {
     #[default]
     Local,
     Sandbox,
+    #[serde(rename = "exe-dev")]
+    ExeDev,
+    #[serde(rename = "gitvm")]
+    GitVm,
+}
+impl AgentExecution {
+    pub(crate) fn pinned_environment(self) -> Option<crate::sandbox::launch_env::LaunchEnv> {
+        use crate::sandbox::launch_env::LaunchEnv;
+        match self {
+            Self::Local => Some(LaunchEnv::Local),
+            Self::Sandbox => None,
+            Self::ExeDev => Some(LaunchEnv::ExeDev),
+            Self::GitVm => Some(LaunchEnv::GitVm),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -184,6 +199,9 @@ pub struct LaunchAgentProfileRequest {
     /// must not change which harness every other thread of that agent uses.
     #[serde(default)]
     pub runtime_id: Option<String>,
+    /// One launch only; never rewrites the worker's saved Compute preference.
+    #[serde(default)]
+    pub environment: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -1949,10 +1967,9 @@ pub async fn agent_profile_launch(
     // exe.dev VM, tmux inside a GitVM sandbox. The only refusal left is the
     // honest one — resolved somewhere that is not configured.
     use crate::sandbox::launch_env::{LaunchEnv, LaunchRoute};
-    let pinned = match profile.execution {
-        AgentExecution::Local => Some(LaunchEnv::Local),
-        AgentExecution::Sandbox => None,
-    };
+    let pinned = req.environment.as_deref().map(|key| LaunchEnv::from_key(key)
+        .ok_or_else(|| format!("Unknown execution environment: {key}. Choose local, exe-dev or gitvm."))).transpose()?
+        .or_else(|| profile.execution.pinned_environment());
     let sandboxes = crate::settings::load_or_default().sandboxes;
     let env = crate::sandbox::launch_env::resolve(pinned, &sandboxes);
     let route = env
@@ -2289,11 +2306,13 @@ async fn launch_on_exe_dev(
         let dir = std::path::PathBuf::from(&req.worktree_path);
         let workdir = workdir.clone();
         let session = session.clone();
+        let check_codex = cfg.detect_cmd == "codex" || cfg.launch_cmd == "codex";
         tokio::task::spawn_blocking(move || -> Result<String, String> {
             // Each step names itself, so an unreachable VM, a failed push and
             // a failed staging are three different sentences rather than one
             // shrug.
             exe::ensure()?;
+            if check_codex { exe::codex_auth_ready()?; }
             exe::push_to(&dir, &workdir)?;
             exe::stage_script_in(&workdir, &session, &script)
         })
@@ -2429,6 +2448,7 @@ async fn launch_on_gitvm(
         let dir = std::path::PathBuf::from(&req.worktree_path);
         let session = session.clone();
         let beacon = beacon.clone();
+        let check_codex = cfg.detect_cmd == "codex" || cfg.launch_cmd == "codex";
         tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String, bool), String> {
             // A state file left behind by a reaped sandbox makes `warm-up`
             // refuse, which would wedge this worktree forever. The CLI cannot
@@ -2440,6 +2460,10 @@ async fn launch_on_gitvm(
             // failed sync and a failed staging read as three different
             // sentences rather than one shrug.
             cli::warm_up(&dir)?;
+            if check_codex {
+                let auth = cli::run(&dir, "timeout 15s codex login status >/dev/null 2>&1")?;
+                if !auth.status.success() { return Err("Codex authentication is unavailable in GitVM; configure or sync authentication before dispatching. No agent was started.".into()); }
+            }
             cli::push(&dir)?;
             let guest = cli::guest(&dir)?;
             let staged = cli::stage_script(&dir, &session, &script)?;
@@ -2671,10 +2695,13 @@ async fn remote_adoption_target(
             .into_iter()
             .find(|profile| profile.handle == handle)
     };
-    let pinned = match profile.as_ref().map(|p| p.execution) {
-        Some(AgentExecution::Local) => Some(LaunchEnv::Local),
-        _ => None,
-    };
+    let recorded = crate::sandbox::launch_env::live::load();
+    let candidates: Vec<_> = recorded.environments.iter().filter(|entry| entry.handle == handle
+        && worktree.is_none_or(|path| entry.dir == path)).collect();
+    if let Some(entry) = candidates.iter().max_by_key(|entry| entry.last_used_ms) {
+        if let Some(env) = LaunchEnv::from_key(&entry.env) { return Ok(env); }
+    }
+    let pinned = profile.as_ref().and_then(|p| p.execution.pinned_environment());
     let sandboxes = crate::settings::load_or_default().sandboxes;
     let env = crate::sandbox::launch_env::resolve(pinned, &sandboxes);
     if matches!(env, LaunchEnv::GitVm) && worktree.is_none() {
@@ -4722,5 +4749,22 @@ You are a systems architect.
                 .unwrap_err()
                 .contains("not the filesystem root or your home folder"));
         }
+    }
+}
+
+#[cfg(test)]
+mod compute_choice_tests {
+    use super::*;
+    use crate::sandbox::launch_env::{resolve, LaunchEnv};
+    #[test]
+    fn explicit_destinations_do_not_fall_back_and_legacy_sandbox_still_resolves() {
+        for (key, expected) in [("local", LaunchEnv::Local), ("exe-dev", LaunchEnv::ExeDev), ("gitvm", LaunchEnv::GitVm)] {
+            let choice: AgentExecution = serde_json::from_str(&format!("\"{key}\"")).unwrap();
+            assert_eq!(resolve(choice.pinned_environment(), &[]), expected);
+            assert_eq!(serde_json::to_value(choice).unwrap(), key);
+            if key != "local" { assert!(expected.route(&[]).is_err()); }
+        }
+        let automatic: AgentExecution = serde_json::from_str("\"sandbox\"").unwrap();
+        assert_eq!(automatic.pinned_environment(), None);
     }
 }

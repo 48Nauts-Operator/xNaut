@@ -257,15 +257,16 @@ test('closing the pane releases a running conversation', async ({ page }) => {
   await expect(page.locator('.voice-live-overlay')).toHaveCount(0);
 });
 
-test('a pane torn out of the DOM releases its conversation too', async ({ page }) => {
-  await boot(page);
-  await start(page);
-  // Not every surface closes through destroyChatPane; a detached composer must
-  // not leave the microphone and a billable socket running.
+test('detaching a chat for navigation keeps voice until the conversation is explicitly closed', async ({ page }) => {
+  await boot(page); await start(page);
   await page.evaluate(() => window.chatEntry.pane.remove());
-  await expect.poll(() => page.evaluate(() =>
-    window.calls.some(c => c.name === 'voice_live_close'))).toBe(true);
-  await expect(page.locator('.voice-live-overlay')).toHaveCount(0);
+  // Allow the mutation observer to run, as it does during app tab navigation.
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => window.calls.some(c => c.name === 'voice_live_close'))).toBe(false);
+  await page.evaluate(() => document.querySelector('#chat').appendChild(window.chatEntry.pane));
+  await expect(page.locator('.voice-live-button')).toHaveAttribute('aria-pressed','true');
+  await page.evaluate(() => window.xnautDestroyChatPane(window.chatEntry.pane.dataset.chatLabel));
+  await expect.poll(() => page.evaluate(() => window.calls.some(c => c.name === 'voice_live_close'))).toBe(true);
 });
 
 test('without a voice profile the control explains itself instead of failing on click', async ({ page }) => {
@@ -463,4 +464,26 @@ test('a rejected mute never falsely claims the microphone is muted', async ({ pa
   await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
   await expect(page.locator('[data-live-mic-status]')).toContainText('Microphone unchanged: Session is unavailable');
   await expect(page.getByRole('button', { name: 'Mute microphone', exact: true })).toHaveAttribute('aria-pressed', 'false');
+});
+
+
+test('composer mute stays available with the voice pane hidden and shares its confirmed state', async ({ page }) => {
+  await boot(page);
+  await expect(page.locator('.voice-quick-mute')).toBeHidden();
+  await start(page);
+  await page.evaluate(() => {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = (name, args) => name === 'voice_live_mute' ? Promise.resolve(args.muted) : invoke(name, args);
+    document.querySelector('.voice-live-overlay').hidden = true;
+  });
+  const quick = page.locator('.voice-quick-mute');
+  await expect(quick).toBeVisible();
+  await quick.click();
+  await expect(quick).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-live-mute]')).toHaveAttribute('aria-pressed', 'true');
+  await page.evaluate(() => { document.querySelector('.voice-live-overlay').hidden = false; });
+  await page.locator('[data-live-mute]').click();
+  await expect(quick).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('[data-live-end]').click();
+  await expect(quick).toBeHidden();
 });

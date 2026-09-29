@@ -121,6 +121,7 @@ mod wiki;
 mod workspace;
 mod writer_lease;
 mod worktree;
+mod worktree_protection;
 mod zellij;
 
 use state::AppState;
@@ -288,6 +289,7 @@ async fn main() {
             voice_live::settings::voice_live_settings_get,
             voice_live::settings::voice_live_settings_save,
             voice_live::settings::voice_live_settings_test,
+            voice_live::usage::voice_live_usage,
             voice_live::voice_live_open,
             voice_live::voice_live_close,
             voice_live::voice_live_text,
