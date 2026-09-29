@@ -2771,17 +2771,42 @@ pub async fn agent_remote_attach(
     state: tauri::State<'_, crate::state::AppState>,
     handle: String,
     worktree_path: Option<String>,
+    session_name: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<Option<String>, String> {
     use crate::sandbox::launch_env::LaunchEnv;
     let handle = normalize_handle(&handle);
     validate_handle(&handle)?;
-    let env = remote_adoption_target(&handle, worktree_path.as_deref()).await?;
+    // An adopted row names one specific remote run. Resolve its recorded
+    // environment instead of silently opening this agent's newest run.
+    let meta = {
+        let sessions = state.agent_sessions.lock().await;
+        session_name.as_ref().and_then(|name| sessions.get(name)).cloned()
+    };
+    let mut worktree_path = worktree_path;
+    let env = if let Some(meta) = meta {
+        if meta.agent_id != handle { return Err("session belongs to a different agent".into()); }
+        let key = meta.remote_env.as_deref().ok_or("this session is not remote")?;
+        if worktree_path.is_none() {
+            let recorded = crate::sandbox::launch_env::live::load();
+            let dirs: std::collections::BTreeSet<_> = recorded.environments.iter()
+                .filter(|entry| entry.handle == handle && entry.env == key)
+                .map(|entry| entry.dir.clone()).collect();
+            if key == "gitvm" && dirs.len() != 1 {
+                return Err("remote session needs an unambiguous GitVM workspace".into());
+            }
+            worktree_path = dirs.into_iter().next();
+        }
+        LaunchEnv::from_key(key).ok_or("unknown remote environment")?
+    } else {
+        remote_adoption_target(&handle, worktree_path.as_deref()).await?
+    };
     let live = remote_sessions(env, handle.clone(), worktree_path.clone()).await?;
-    // The newest run, matching what the local attach picks.
-    let Some(session) = live.into_iter().next_back() else {
-        return Ok(None);
+    let session = match session_name {
+        Some(name) if live.contains(&name) => name,
+        Some(_) => return Err("That remote session is no longer running. Refresh the agent list.".into()),
+        None => match live.into_iter().next_back() { Some(name) => name, None => return Ok(None) },
     };
     let attach = {
         let session = session.clone();

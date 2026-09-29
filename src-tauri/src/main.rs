@@ -69,6 +69,7 @@ mod sweep;
 mod run_control;
 mod run_signals;
 mod jury;
+mod jev_usage;
 mod jury_runtime;
 mod jury_signoff;
 #[cfg(test)]
@@ -290,6 +291,7 @@ async fn main() {
             voice_live::settings::voice_live_settings_save,
             voice_live::settings::voice_live_settings_test,
             voice_live::usage::voice_live_usage,
+            jev_usage::jev_usage,
             voice_live::voice_live_open,
             voice_live::voice_live_close,
             voice_live::voice_live_text,

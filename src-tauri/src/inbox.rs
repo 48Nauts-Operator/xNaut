@@ -694,11 +694,36 @@ fn collect(project: Option<&str>, status: Option<&str>) -> Vec<InboxItem> {
         _ => all_projects(),
     };
     let mut items: Vec<InboxItem> = projects.iter().flat_map(|p| read_items(p)).collect();
+    // The authoritative job can have been retired by another app or an older
+    // build. Repair only its exact ask, never every card for the same ticket.
+    if let Ok(root) = crate::jury_runtime::store() {
+        for item in &mut items {
+            let Some(id) = item.context.get("jury_id") else { continue };
+            let Ok(job) = crate::jury::read_job(&root, id) else { continue };
+            item.context.insert("jury_gate".into(), match job.gate {
+                crate::jury::Gate::Plan => "plan", crate::jury::Gate::Signoff => "signoff",
+                crate::jury::Gate::Poc => "poc",
+            }.into());
+            item.context.insert("jury_state".into(), job.state.clone());
+            if retired_jury_ask(item, &job.id, &job.state) {
+                if record_status(&item.id, "archived").is_ok() { item.status = "archived".into(); }
+            }
+        }
+    }
     if let Some(status) = status.filter(|s| !s.trim().is_empty()) {
         items.retain(|item| item.status == status);
     }
     items.sort_by(|a, b| b.at.cmp(&a.at));
     items
+}
+
+/// A retired job cannot still ask the owner for authority. Missing jobs and
+/// in-flight reviews remain visible: absence is not evidence of retirement.
+fn retired_jury_ask(item: &InboxItem, job_id: &str, state: &str) -> bool {
+    item.is_open() && matches!(item.kind.as_str(), "approve" | "ask")
+        && item.context.get("jury_id").map(String::as_str) == Some(job_id)
+        && matches!(state, "superseded" | "settled" | "owner_settled"
+            | "owner_changes_requested" | "integrated" | "revoked" | "reverted")
 }
 
 // ---- Tauri commands (the Mesh UI) ---------------------------------------
@@ -959,6 +984,21 @@ mod tests {
     /// /v1/inbox/wait/:id fallback is unreachable. NautBot reported exactly
     /// this failure. The number matters less than staying under the
     /// timeouts our own callers use, so pin the ceiling.
+    #[test]
+    fn retired_reviews_archive_only_their_own_open_asks() {
+        let mut item = fold_items(&created("old", "approve")).remove(0);
+        item.context.insert("jury_id".into(), "old-job".into());
+        assert!(retired_jury_ask(&item, "old-job", "superseded"));
+        assert!(!retired_jury_ask(&item, "new-job", "superseded"));
+        for state in ["requested", "reviewing", "owner_required", "owner_signed"] {
+            assert!(!retired_jury_ask(&item, "old-job", state));
+        }
+        item.kind = "notify".into();
+        assert!(!retired_jury_ask(&item, "old-job", "integrated"));
+        item.kind = "approve".into(); item.status = "archived".into();
+        assert!(!retired_jury_ask(&item, "old-job", "superseded"));
+    }
+
     #[test]
     fn the_first_ask_response_beats_a_normal_client_timeout() {
         assert!(

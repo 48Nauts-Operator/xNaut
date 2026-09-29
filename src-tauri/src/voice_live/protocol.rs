@@ -198,13 +198,14 @@ impl ClientEvent {
                 "delegation_id": delegation_id,
                 "content": content,
             }),
+            // Client delegation has no provider Responses conversation to
+            // receive response.item.create. Session context is the Live route.
+            // https://developers.openai.com/api/docs/guides/live-conversations
             ClientEvent::UserText { text } => serde_json::json!({
-                "type": "response.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{ "type": "input_text", "text": text }],
-                },
+                "type": "session.thinking.append",
+                "event_id": uuid::Uuid::new_v4().to_string(),
+                "delegation_id": null,
+                "content": format!("User typed this message (the application is sending it to the backend): {}", serde_json::to_string(text).unwrap()),
             }),
             ClientEvent::InputAudioAppend { pcm } => {
                 use base64::engine::general_purpose::STANDARD;
@@ -244,6 +245,15 @@ pub fn commentary_chunks(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn keyboard_context_uses_live_not_a_responses_item() {
+        let event = ClientEvent::UserText { text: "Correction: 445".into() }.to_json();
+        assert_eq!(event["type"], "session.thinking.append");
+        assert!(event["delegation_id"].is_null());
+        assert!(event["event_id"].is_string());
+        assert!(event["content"].as_str().unwrap().contains("Correction: 445"));
+    }
 
     #[test]
     fn audio_deltas_arrive_decoded() {

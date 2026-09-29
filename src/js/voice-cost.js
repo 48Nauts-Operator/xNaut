@@ -53,9 +53,9 @@
     const card = document.createElement('div'); card.className = 'obs-card obs-voice-cost'; card.hidden = true;
     card.innerHTML = `<span class="k" data-voice-session-label>Voice · running cost</span>
       <div class="obs-big small"><b data-voice-price></b><span>USD</span></div>
-      <span class="obs-hint" data-voice-saved></span><span class="obs-hint" data-voice-month></span>
-      <span class="obs-hint" data-voice-detail></span>
+      <span class="obs-hint" data-voice-saved></span>
       <details><summary class="obs-hint" data-voice-assumptions></summary>
+        <p class="obs-hint" data-voice-month></p><p class="obs-hint" data-voice-detail></p>
         <label class="obs-hint">Speech WPM <input class="obs-select" style="width:75px" name="speech" aria-label="Speech words per minute" type="number" min="1" max="500"></label>
         <label class="obs-hint">Typing WPM <input class="obs-select" style="width:75px" name="typing" aria-label="Typing words per minute" type="number" min="1" max="500"></label>
         <p class="obs-hint">Input-time estimate from spoken words and these assumed speeds. Excludes listening, waiting and editing. $0.05/min for GPT-Live-1 includes all connected time, even muted. Backend charges are separate. Monthly totals cover sessions started this month on this device; ~ means duration is not final.</p>

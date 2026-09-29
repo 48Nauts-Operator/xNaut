@@ -183,9 +183,9 @@
 .obs-pager { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10px 16px; border-top:1px solid var(--border,#262626); font-size:11px; color:var(--muted-foreground); }
 .obs-pager button:disabled { opacity:.35; cursor:default; }
 .obs-table { flex-shrink:0; }
-.obs-summary { display:flex; flex-wrap:wrap; gap:12px; }
+.obs-summary { display:flex; flex-wrap:wrap; gap:8px; align-items:stretch; }
 .obs-summary > .obs-strip { display:contents; }
-.obs-summary .obs-card { min-width:190px !important; flex:1 1 190px !important; width:auto !important; }
+.obs-summary .obs-card { min-width:0 !important; flex:0 1 205px !important; box-sizing:border-box; max-width:100%; padding:12px; gap:6px; width:auto !important; }
 .obs-thead { flex-wrap:wrap; }
 .obs-table:has([data-rows]) { overflow-x:auto; }
 .obs-cols,.obs-row { min-width:780px; }
@@ -340,6 +340,7 @@
     const summary = document.createElement("div"); summary.className = "obs-summary";
     const strip = pane.querySelector("[data-strip]"); strip.before(summary); summary.appendChild(strip);
     window.xnautVoiceCost?.mountCard(summary);
+    window.xnautJevCost?.mountCard(summary);
     const sections = {
       general: [summary, pane.querySelector('[data-sessions]'), pane.querySelector('[data-ledger-list]').closest('.obs-table')],
       agents: [pane.querySelector('[data-rows]').closest('.obs-table'), pane.querySelector('[data-swarm-pills]').closest('.obs-table')],

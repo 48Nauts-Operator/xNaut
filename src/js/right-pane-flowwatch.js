@@ -290,7 +290,7 @@
         '<span class="fw-caret">▸</span>' +
         '</button>' +
         '<div style="padding:4px 10px"><button type="button" class="fw-open-session">Open session ↗</button></div><pre class="fw-out"></pre>';
-      el.querySelector('.fw-open-session').onclick = () => window.xnautOpenAgentSession?.(sid, meta.label || meta.agent_id || 'Agent terminal');
+      el.querySelector('.fw-open-session').onclick = () => window.xnautOpenAgentSession?.(sid, rows.get(sid)?.meta?.label || 'Agent terminal');
       const out = el.querySelector('.fw-out');
       row = { el, out, open: false, unlisten: null, autoscroll: true, screen: makeScreen(), meta };
       el.querySelector('.fw-head').addEventListener('click', () => {
@@ -346,7 +346,7 @@
         (item.context && item.context.decide_error ? '<div class="fw-ask-refused" role="alert">Refused: ' + escapeText(item.context.decide_error) + '</div>' : '') +
         '<div class="fw-ask-acts"></div>';
       const acts = el.querySelector('.fw-ask-acts');
-      if (approve && item.context && item.context.jury_id) {
+      if (approve && item.context?.jury_id && (!item.context.jury_gate || item.context.jury_gate === 'signoff')) {
         // Re-review (XNAUT-399): retire the parked job and review the same
         // green record against the ticket as it is now.
         const again = document.createElement('button');

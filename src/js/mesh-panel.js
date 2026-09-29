@@ -245,12 +245,13 @@
     // The action row is chosen by KIND — an approval is not a question and a
     // to-do is not either. Every kind keeps the reply box below it.
     function actionsMarkup(item) {
-      // Re-review (XNAUT-399) belongs on every jury card the owner can still
+      // Re-review (XNAUT-399) supports sign-off, not plan/PoC reviews.
+      // It belongs on every supported jury card the owner can still
       // act on, whatever the card's own status: an approved sign-off whose
       // integration reverted reads "approved · revocable" and used to offer
       // only Revoke (CHESSTRAINER-4, 2026-09-15). jury_rereview refuses an
       // integrated job, so the button cannot undo a landed merge.
-      const rereviewBtn = isJury(item) && item.status !== 'archived'
+      const rereviewBtn = isJury(item) && (!item.context.jury_gate || item.context.jury_gate === 'signoff') && item.status !== 'archived'
         ? `<button class="mesh-btn" data-rereview="${esc(item.context.jury_id)}" title="Retire this review and start a fresh one on the current ticket">Re-review</button>`
         : '';
       if (item.context?.revocable === "true" && item.status !== "revoked") {

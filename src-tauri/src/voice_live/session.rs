@@ -317,7 +317,7 @@ impl LiveSession {
             return Vec::new();
         };
         self.context.push(Role::Assistant, &message.text);
-        let delegation_id = self.ledger.delegation_of(turn).map(str::to_string);
+        let delegation_id = self.ledger.delegation_of(turn).filter(|id| !id.starts_with("typed:")).map(str::to_string);
         let mut actions = vec![SessionAction::Commit(message.clone())];
         actions.extend(
             commentary_chunks(&message.text)
@@ -351,17 +351,29 @@ impl LiveSession {
         if self.transcription_only || self.phase == Phase::Ended || text.trim().is_empty() {
             return Vec::new();
         }
+        // A typed correction is a new complete user message. Preserve any
+        // outstanding spoken turn, but don't append to its committed text.
+        let previous = self.ledger.abandon_open();
+        let mut actions = vec![self.stop_playback()];
+        if let Some(turn) = previous {
+            if let Some(message) = self.ledger.commit_user(turn) {
+                self.context.push(Role::User, &message.text);
+                actions.push(SessionAction::Commit(message));
+            }
+        }
         let turn = self.ledger.push_user(text);
-        vec![
-            SessionAction::Caption(Caption {
-                turn: Some(turn),
-                role: Role::User,
-                text: text.to_string(),
-            }),
-            SessionAction::Send(ClientEvent::UserText {
-                text: text.to_string(),
-            }),
-        ]
+        actions.push(SessionAction::Caption(Caption {
+            turn: Some(turn), role: Role::User, text: text.to_string(),
+        }));
+        // Bound each append to Live's 500-token context limit. Sending a
+        // Responses item here caused a provider error and closed the mic.
+        for text in commentary_chunks(text) {
+            actions.push(SessionAction::Send(ClientEvent::UserText { text }));
+        }
+        // Dispatch once through the same selected-agent path as speech. This
+        // local id is never sent to the provider as a delegation_id.
+        actions.extend(self.on_delegation(&format!("typed:{turn}")));
+        actions
     }
 
     /// Stops playback and moves the fence forward so frames already in flight
@@ -841,16 +853,24 @@ mod tests {
     }
 
     #[test]
-    fn typed_input_joins_the_same_conversation_turn() {
+    fn typed_correction_keeps_voice_and_context_alive() {
         let mut session = ready();
-        let actions = session.send_text("check the logs");
-        assert!(actions.iter().any(|a| matches!(
-            a,
-            SessionAction::Send(ClientEvent::UserText { text }) if text == "check the logs"
-        )));
-        // And it commits through the ordinary turn path.
-        let dispatched = session.handle(ServerEvent::DelegationCreated { id: "d1".into() }, 1.0);
-        assert_eq!(commits(&dispatched)[0].text, "check the logs");
+        speak(&mut session, "ticket four", 1.0);
+        let actions = session.send_text("Correction: ticket 445");
+        assert_eq!(commits(&actions).len(), 2);
+        assert_eq!(dispatches(&actions).len(), 1);
+        assert!(dispatches(&actions)[0].context.contains("Correction: ticket 445"));
+        assert!(session.handle(ServerEvent::DelegationCreated { id: "duplicate".into() }, 2.0).is_empty());
+        let (turn, epoch) = ticket(&actions);
+        let result = session.complete_delegation(turn, epoch, "Found ticket 445");
+        assert!(result.iter().any(|a| matches!(a, SessionAction::Send(ClientEvent::CommentaryAppend { delegation_id: None, .. }))));
+        assert!(session.is_ready());
+        let next = speak(&mut session, "What is its priority?", 3.0);
+        assert!(!next.is_empty());
+        let next = session.handle(ServerEvent::DelegationCreated { id: "next".into() }, 4.0);
+        assert_eq!(dispatches(&next).len(), 1);
+        assert!(dispatches(&next)[0].context.contains("Found ticket 445"));
+        assert!(actions.iter().all(|a| !matches!(a, SessionAction::Ended { .. })));
     }
 
     #[test]

@@ -4101,15 +4101,39 @@ window.xnautShowSessionInHost = async function (name) {
 // Return to an already attached identity-aware agent session. Agent Space uses
 // this for its Terminal action and the quick pane preview uses the same source
 // of truth, so neither feature creates a duplicate PTY or terminal tab.
+const agentSessionOpens = new Map();
 window.xnautOpenAgentSession = function (sessionId, label) {
-  const existing = (tabs || []).find((tab) => tab.agentSessionId === sessionId);
-  if (existing) {
-    switchTab(existing.id);
-    return true;
-  }
-  if (!sessionId || !window.xnautAttachAgentTab) return false;
-  window.xnautAttachAgentTab(sessionId, label || 'Agent terminal');
-  return true;
+  if (!sessionId) return Promise.resolve(false);
+  if (agentSessionOpens.has(sessionId)) return agentSessionOpens.get(sessionId);
+  const opening = (async () => {
+    try {
+      const sessions = await invoke('agent_sessions_list');
+      const meta = (sessions || []).find(s => s.session_id === sessionId);
+      const existing = (tabs || []).find(tab => tab.agentSessionId === sessionId || tab.sourceAgentSessionId === sessionId);
+      if (existing && existing.terminals?.some(t => t.sessionId && t.sessionId !== sessionId)) {
+        switchTab(existing.id); return true;
+      }
+      let target = sessionId;
+      if (meta?.remote_env && sessionId.startsWith('xnaut-')) {
+        target = await invoke('agent_remote_attach', { handle: meta.agent_id, sessionName: sessionId, cols: 120, rows: 30 });
+        if (!target) throw new Error('That remote session has finished. Refresh the agent list.');
+      } else if (sessionId.startsWith('xnaut-')) {
+        // A local adopted row is a zellij name, not a PTY UUID.
+        return await window.xnautOpenZellijSession(sessionId);
+      } else if (existing) { switchTab(existing.id); return true; }
+      const id = window.xnautAttachAgentTab(target, label || 'Agent terminal');
+      const tab = tabs.find(t => t.id === id);
+      if (tab) tab.sourceAgentSessionId = sessionId;
+      return true;
+    } catch (error) {
+      console.error('[agent-session-open]', error);
+      window.alert('Could not open agent session: ' + String(error?.message || error));
+      return false;
+    }
+  })();
+  agentSessionOpens.set(sessionId, opening);
+  opening.finally(() => agentSessionOpens.delete(sessionId));
+  return opening;
 };
 
 window.xnautAgentSessionPreview = function (sessionId, maxLines) {
