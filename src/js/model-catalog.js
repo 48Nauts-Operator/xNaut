@@ -30,7 +30,7 @@
         (byProvider[provider] = byProvider[provider] || []).push(entry);
         flat.push(entry);
       });
-      if (flat.length) {
+      if (Array.isArray(list)) {
         cache = { at: Date.now(), byProvider, flat };
         try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (_) {}
         try { window.dispatchEvent(new CustomEvent('xnaut-model-catalog-update')); } catch (_) {}

@@ -299,6 +299,16 @@ pub async fn ask_ai(
 
     let settings = crate::settings::load_or_default();
 
+    if crate::chat::gateway_enabled(&settings) {
+        let mut llm=crate::chat::selected_llm(&settings, &provider)?;
+        llm.model=model;
+        let user=context.map(|context| format!("{prompt}\n\nContext: {context}")).unwrap_or(prompt);
+        return crate::chat::complete_oneshot(&llm,Some("You are an expert terminal assistant. Provide accurate command suggestions and error analysis."),&user).await;
+    }
+    if settings.llm_providers.iter().any(|p| p.name.eq_ignore_ascii_case(&provider) && !p.enabled) {
+        return Err(format!("Provider {provider} is disabled"));
+    }
+
     // Handle local providers directly (Ollama, LM Studio)
     if provider.to_lowercase() == "ollama" {
         let base = local_provider_endpoint(

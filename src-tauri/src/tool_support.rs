@@ -131,23 +131,13 @@ pub async fn model_tool_support(
     if model.is_empty() {
         return Err("a model is required".to_string());
     }
+    let settings = state.settings.lock().await.clone();
+    let llm = crate::chat::selected_llm(&settings, &provider)?;
     let now = Instant::now();
     if !refresh.unwrap_or(false) {
-        if let Some(hit) = cached(&provider, &model, now) {
-            return Ok(hit);
-        }
+        if let Some(hit) = cached(&llm.provider, &model, now) { return Ok(hit); }
     }
-
-    let settings = state.settings.lock().await.clone();
-    // An empty provider means "whatever the app is set to", which is what the
-    // chat pane uses and therefore what has to be probeable.
-    let llm = if provider.trim().is_empty() || provider == "global" {
-        settings.llm.clone()
-    } else {
-        crate::chat::provider_llm(&settings, &provider)
-            .ok_or_else(|| format!("no provider configured called {provider}"))?
-    };
-    let support = probe_route(&llm, &provider, &model).await?;
+    let support = probe_route(&llm, &llm.provider, &model).await?;
     remember(&support, now);
     Ok(support)
 }
@@ -155,6 +145,7 @@ pub async fn model_tool_support(
 async fn probe_route(llm: &crate::settings::LlmSettings, provider: &str, model: &str) -> Result<ToolSupport,String> {
     let url = crate::chat::join_endpoint(&llm.endpoint, "chat/completions");
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(90))
         .build()
@@ -162,6 +153,18 @@ async fn probe_route(llm: &crate::settings::LlmSettings, provider: &str, model: 
 
     let mut body = probe_body(&model);
     let mut support = ToolSupport { provider: provider.into(), model: model.into(), supported: false, reason: String::new() };
+    if crate::responses::required(model) {
+        let messages = body["messages"].as_array().unwrap();
+        let tools = body["tools"].as_array().unwrap();
+        match crate::responses::Session::default().request(&client, llm, model, messages, tools, Some("low"), 4096, None).await {
+            Ok(answer) => {
+                support.supported = has_ping_call(&serde_json::json!({"choices":[{"message":answer.message}]}));
+                if !support.supported { support.reason = "Native Responses returned no ping call; tool execution is unverified.".into(); }
+            },
+            Err(error) => support.reason = error,
+        }
+        return Ok(support);
+    }
     for attempt in 0..3 {
         let response = crate::chat::apply_auth(client.post(&url), &llm.api_key)
             .json(&body).send().await.map_err(|error| format!("probe request failed: {error}"))?;

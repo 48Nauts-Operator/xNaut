@@ -656,13 +656,16 @@ window.xnautAttachTasksTab = (opts) =>
           token: row.querySelector('.tm-f-token').value.trim() || null,
         })),
       };
-      if (['nautgate','lmstudio','ollama'].includes(updated.llm.provider)) {
+      if (updated.llm.provider) {
         const providers = (updated.llm_providers || []).map(item => ({...item}));
         const index = providers.findIndex(item => item.name === updated.llm.provider);
         const entry = {...(providers[index] || {}), name:updated.llm.provider, endpoint:updated.llm.endpoint, api_key:updated.llm.api_key, enabled:true};
         if (index < 0) providers.push(entry); else providers[index] = entry;
         updated.llm_providers = providers;
       }
+      const gatewayIndex = (updated.llm_providers || []).findIndex(item => item.name.toLowerCase() === 'nautgate');
+      if (gatewayIndex >= 0) updated.llm_providers[gatewayIndex].enabled = chatModelPicker.gatewayEnabled();
+      else (updated.llm_providers ||= []).push({name:'nautgate', endpoint:'http://localhost:8090/v1', api_key:null, enabled:chatModelPicker.gatewayEnabled()});
       await invoke('settings_set', { settings: updated });
       s = updated;
       applyModuleVisibility(updated);

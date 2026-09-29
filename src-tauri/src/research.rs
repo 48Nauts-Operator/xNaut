@@ -114,6 +114,7 @@ pub fn chat_completions_url(provider: &str) -> Option<String> {
 /// names this same provider. A blank string is treated as absent, because a
 /// provider row saved with an empty field is exactly the "no key" case.
 pub fn provider_api_key(settings: &Settings, provider: &str) -> Option<String> {
+    if crate::chat::gateway_enabled(settings) { return crate::chat::provider_llm(settings, "nautgate").and_then(|p| p.api_key); }
     let want = provider.trim().to_ascii_lowercase();
     settings
         .llm_providers

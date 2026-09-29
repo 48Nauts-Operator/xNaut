@@ -264,6 +264,9 @@ pub(crate) fn provider_llm(
         return None;
     }
 
+    if settings.llm_providers.iter().any(|p| p.name.eq_ignore_ascii_case(provider) && !p.enabled) {
+        return None;
+    }
     let configured = settings
         .llm_providers
         .iter()
@@ -319,6 +322,41 @@ pub(crate) fn provider_llm(
     })
 }
 
+/// An explicit registry switch wins over legacy primary-provider settings.
+pub(crate) fn gateway_enabled(settings: &crate::settings::Settings) -> bool {
+    settings.llm_providers.iter().find(|p| p.name.eq_ignore_ascii_case("nautgate"))
+        .map(|p| p.enabled).unwrap_or_else(|| settings.llm.provider.eq_ignore_ascii_case("nautgate"))
+}
+
+/// Apply transport policy without changing the requested model or prompt.
+/// No network fallback is permitted: a gateway failure stays a gateway failure.
+pub(crate) fn route_llm(settings: &crate::settings::Settings, requested: &crate::settings::LlmSettings)
+    -> Result<crate::settings::LlmSettings, String> {
+    if gateway_enabled(settings) {
+        let mut route = provider_llm(settings, "nautgate").ok_or("NautGate is enabled but not configured")?;
+        route.model = requested.model.clone();
+        route.system_prompt = requested.system_prompt.clone();
+        route.harness_local = false;
+        return Ok(route);
+    }
+    if settings.llm_providers.iter().any(|p| p.name.eq_ignore_ascii_case(&requested.provider) && !p.enabled) {
+        return Err(format!("Provider {} is disabled. Select a configured direct provider in Settings.", requested.provider));
+    }
+    Ok(requested.clone())
+}
+
+pub(crate) fn selected_llm(settings: &crate::settings::Settings, provider: &str)
+    -> Result<crate::settings::LlmSettings, String> {
+    if gateway_enabled(settings) {
+        // The provider need not have local credentials when the gateway owns them.
+        return route_llm(settings, &settings.llm);
+    }
+    let requested = if provider.trim().is_empty() || provider == "global" {
+        settings.llm.clone()
+    } else { provider_llm(settings, provider).ok_or_else(|| format!("LLM provider is not configured or is disabled: {provider}"))? };
+    route_llm(settings, &requested)
+}
+
 /// One-shot completion, non-streaming. Used by AI commit messages and PR title/body.
 pub async fn complete_oneshot(
     llm: &crate::settings::LlmSettings,
@@ -335,6 +373,8 @@ pub async fn complete_oneshot_with_usage(
     system: Option<&str>,
     user: &str,
 ) -> Result<CompletionResult, String> {
+    let routed = route_llm(&crate::settings::load_or_default(), llm)?;
+    let llm = &routed;
     let mut messages = Vec::new();
     if let Some(sys) = system {
         messages.push(serde_json::json!({"role": "system", "content": sys}));
@@ -344,10 +384,20 @@ pub async fn complete_oneshot_with_usage(
     // Non-streaming, but full-document generation on a local model is slow —
     // generous overall cap, fail fast only on an unreachable endpoint.
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
+
+    if crate::responses::required(&llm.model) {
+        let answer = crate::responses::Session::default().request(&client, llm, &llm.model, &messages, &[], None, 8192, None).await?;
+        return Ok(CompletionResult {
+            content: answer.message["content"].as_str().unwrap_or("").trim().into(),
+            input_tokens: answer.usage["input_tokens"].as_u64().unwrap_or(0),
+            output_tokens: answer.usage["output_tokens"].as_u64().unwrap_or(0),
+        });
+    }
 
     let url = join_endpoint(&llm.endpoint, "chat/completions");
     let req = apply_auth(client.post(&url), &llm.api_key).json(&serde_json::json!({
@@ -439,8 +489,7 @@ pub async fn chat_send_provider(
 ) -> Result<String, String> {
     let mut settings = state.settings.lock().await.clone();
     let provider = provider.trim();
-    let configured = provider_llm(&settings, provider)
-        .ok_or_else(|| format!("LLM provider is not configured: {provider}"))?;
+    let configured = selected_llm(&settings, provider)?;
     settings.llm.provider = configured.provider;
     settings.llm.endpoint = configured.endpoint;
     settings.llm.api_key = configured.api_key;
@@ -462,12 +511,7 @@ pub(crate) fn pin_provider(
     settings: &mut crate::settings::Settings,
     provider_name: &str,
 ) -> Result<crate::settings::LlmSettings, String> {
-    let name = provider_name.trim();
-    if name.is_empty() || name == "global" {
-        return Ok(settings.llm.clone());
-    }
-    let llm = provider_llm(settings, name)
-        .ok_or_else(|| format!("no provider configured called {name}"))?;
+    let llm = selected_llm(settings, provider_name)?;
     settings.llm = llm.clone();
     Ok(llm)
 }
@@ -516,11 +560,11 @@ pub async fn chat_send_tools(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| llm.model.clone());
 
-    let known_bad = crate::tool_support::known(&provider_name, &chosen)
+    let known_bad = crate::tool_support::known(&llm.provider, &chosen)
         .filter(|support| !support.supported)
         .map(|support| support.reason);
 
-    if known_bad.is_none() && !chosen.is_empty() {
+    if (known_bad.is_none() || crate::responses::required(&chosen)) && !chosen.is_empty() {
         let mut with_model = llm.clone();
         with_model.model = chosen.clone();
         let history: Vec<serde_json::Value> = messages
@@ -544,7 +588,7 @@ pub async fn chat_send_tools(
             &with_model,
             &chosen,
             history,
-            None,
+            reasoning_effort.as_deref(),
             &[],
             canvas_key,
             Some((&app, &request_id)),
@@ -553,6 +597,7 @@ pub async fn chat_send_tools(
         {
             Ok(outcome) => return Ok(outcome.text),
             Err(error) => {
+                if crate::responses::required(&chosen) { return Err(error); }
                 let _ = crate::debug_log::debug_log_append(vec![format!(
                     "[chat_send_tools] tool loop unavailable, falling back to a plain completion: {error}"
                 )]);
@@ -599,7 +644,8 @@ async fn chat_send_with_settings(
     model_override: Option<String>,
     reasoning_effort: Option<String>,
 ) -> Result<String, String> {
-    let llm = &settings.llm;
+    let routed = route_llm(&settings, &settings.llm)?;
+    let llm = &routed;
     let model = model_override.as_deref().unwrap_or(&llm.model);
 
     // Build the outgoing message list: [system_prompt?, brain?, ...messages].
@@ -641,9 +687,20 @@ async fn chat_send_with_settings(
     // Streaming: no overall timeout (a slow local model generating a long
     // reply can take minutes). Fail fast only if the endpoint is unreachable.
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
+
+    if crate::responses::required(model) {
+        let input: Vec<_> = outgoing.iter().map(|m| serde_json::json!({"role":m.role,"content":m.content})).collect();
+        let answer = crate::responses::Session::default().request(&client, llm, model, &input, &[], reasoning_effort.as_deref(), 8192, Some((&app, &request_id))).await?;
+        let mut text = answer.message["content"].as_str().unwrap_or("").to_string();
+        if let Some(notice) = answer.receipt.substitution_notice() { text = format!("{notice}\n\n{text}"); }
+        if let Some(count) = brain_count { let _ = app.emit("chat://brain", serde_json::json!({"requestId":request_id,"count":count})); }
+        let _ = app.emit("chat://done", serde_json::json!({"requestId":request_id}));
+        return Ok(text);
+    }
 
     let url = join_endpoint(&llm.endpoint, "chat/completions");
     let mut body = streaming_request_body(model, outgoing, reasoning_effort.as_deref());
@@ -732,12 +789,7 @@ pub async fn chat_check_endpoint(
     provider: Option<String>,
 ) -> Result<bool, String> {
     let settings = state.settings.lock().await.clone();
-    let llm = provider
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .and_then(|name| provider_llm(&settings, name))
-        .unwrap_or(settings.llm);
+    let llm = selected_llm(&settings, provider.as_deref().unwrap_or(""))?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -756,7 +808,8 @@ pub async fn chat_check_endpoint(
 pub async fn chat_list_models(
     state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<Vec<String>, String> {
-    let llm = state.settings.lock().await.llm.clone();
+    let settings = state.settings.lock().await.clone();
+    let llm = selected_llm(&settings, "")?;
     list_models_for(&llm).await
 }
 
@@ -823,18 +876,10 @@ pub async fn chat_list_provider_models(
             enabled: true,
         });
     }
-    if !providers
-        .iter()
-        .any(|provider| provider.name.eq_ignore_ascii_case("nautgate"))
-    {
-        if let Some(nautgate) = provider_llm(&settings, "nautgate") {
-            providers.push(crate::settings::LlmProviderSettings {
-                name: nautgate.provider,
-                endpoint: nautgate.endpoint,
-                api_key: nautgate.api_key,
-                enabled: true,
-            });
-        }
+    providers.retain(|p| !settings.llm_providers.iter().any(|r| r.name.eq_ignore_ascii_case(&p.name) && !r.enabled));
+    if gateway_enabled(&settings) {
+        let gateway = selected_llm(&settings, "nautgate")?;
+        providers = vec![crate::settings::LlmProviderSettings { name: gateway.provider, endpoint: gateway.endpoint, api_key: gateway.api_key, enabled: true }];
     }
 
     let requests = providers.into_iter().map(|provider| async move {
@@ -939,6 +984,24 @@ mod tests {
     /// The provider was resolved and then thrown away, so both of
     /// `chat_send_tools`'s fallbacks answered from the global default.
     #[test]
+    fn gateway_policy_preserves_selection_and_never_borrows_direct_credentials() {
+        let mut settings = crate::settings::Settings::default();
+        settings.llm = crate::settings::LlmSettings { provider:"openai".into(), endpoint:"https://direct.invalid/v1".into(), api_key:Some("direct-key".into()), model:"gpt-6-astra".into(), ..Default::default() };
+        settings.llm_providers.push(crate::settings::LlmProviderSettings { name:"nautgate".into(), endpoint:"http://gateway.invalid/v1".into(), api_key:Some("gateway-key".into()), enabled:true });
+        let routed = route_llm(&settings, &settings.llm).unwrap();
+        assert_eq!(routed.endpoint,"http://gateway.invalid/v1");
+        assert_eq!(routed.api_key.as_deref(),Some("gateway-key"));assert_eq!(routed.model,"gpt-6-astra");
+        assert_eq!(selected_llm(&settings,"unconfigured-cloud-account").unwrap().provider,"nautgate");
+        settings.llm_providers[0].enabled=false;
+        let direct=selected_llm(&settings,"openai").unwrap();
+        assert_eq!(direct.endpoint,"https://direct.invalid/v1");assert_eq!(direct.api_key.as_deref(),Some("direct-key"));
+        assert!(provider_llm(&settings,"nautgate").is_none());
+        assert!(selected_llm(&settings,"nautgate").is_err());
+        settings.llm.provider="nautgate".into();
+        assert!(!gateway_enabled(&settings));assert!(selected_llm(&settings,"global").is_err());
+    }
+
+    #[test]
     fn a_provider_override_survives_into_the_fallback_settings() {
         let mut settings = crate::settings::Settings::default();
         settings.llm.provider = "lmstudio".into();
@@ -963,6 +1026,8 @@ mod tests {
         let global = pin_provider(&mut untouched, "").expect("an empty provider means the global one");
         assert_eq!(global.endpoint, "http://localhost:8090/v1");
 
+        assert_eq!(pin_provider(&mut settings, "nope").unwrap().provider, "nautgate");
+        settings.llm_providers[0].enabled = false;
         assert!(pin_provider(&mut settings, "nope").is_err());
     }
 

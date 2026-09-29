@@ -2675,7 +2675,7 @@ window.xnautSyncChatSettingsFromAiSettings = async function(options = {}) {
     // NautGate is first-class: its visible Settings-page URL must be durable
     // even before a token is entered. The merge below retains an existing key
     // if this webview has not hydrated it yet.
-    { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate || null, enabled: true },
+    { name: 'nautgate', endpoint: aiSettingsChatEndpoint('nautgate'), api_key: settings.apiKeyNautGate || null, enabled: (current.llm_providers || []).find(p => p.name === 'nautgate')?.enabled ?? (provider === 'nautgate' || !!settings.apiKeyNautGate) },
   ].filter(Boolean);
   // AI Settings is still backed by the legacy webview store. Merge it into
   // the Rust provider registry instead of replacing the registry wholesale:
@@ -2696,7 +2696,7 @@ window.xnautSyncChatSettingsFromAiSettings = async function(options = {}) {
   });
   if (current.chat_model_source === 'workspace' && !options.overrideDefault && current.llm?.provider) {
     const index = configuredProviders.findIndex(item => item.name === current.llm.provider);
-    const entry = {...(configuredProviders[index] || {}), name:current.llm.provider, endpoint:current.llm.endpoint, api_key:current.llm.api_key || null, enabled:true};
+    const entry = {...(configuredProviders[index] || {}), name:current.llm.provider, endpoint:current.llm.endpoint, api_key:current.llm.api_key || null, enabled:configuredProviders[index]?.enabled ?? true};
     if (index < 0) configuredProviders.push(entry); else configuredProviders[index] = entry;
   }
   await invoke('settings_set', {

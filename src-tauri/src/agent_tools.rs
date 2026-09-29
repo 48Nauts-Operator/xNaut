@@ -2106,8 +2106,9 @@ pub async fn run_turn_streaming(
     canvas_key: &str,
     stream_to: Option<(&tauri::AppHandle, &str)>,
 ) -> Result<TurnOutcome, String> {
+    let routed = crate::chat::route_llm(&crate::settings::load_or_default(), llm)?;
     let opened = crate::mcp_client::open_for(capabilities).await;
-    run_turn_with_opened_tools(llm, model, messages, effort, canvas_key, stream_to, opened).await
+    run_turn_with_opened_tools(&routed, model, messages, effort, canvas_key, stream_to, opened).await
 }
 
 // Keep connection discovery separate from the request loop so the entire wire
@@ -2122,6 +2123,7 @@ async fn run_turn_with_opened_tools(
     opened: (Vec<crate::mcp_client::Session>, Vec<Value>, Vec<String>),
 ) -> Result<TurnOutcome, String> {
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(180))
         .build()
@@ -2197,8 +2199,11 @@ async fn run_turn_with_opened_tools(
     // WITHOUT tools at the configured effort, then act WITH tools carrying
     // the plan. Only on turns that are about to do something; a question
     // stays one cheap call.
+    let native = crate::responses::required(model);
+    let mut native_session = crate::responses::Session::default();
+    let mut native_calls = std::collections::HashSet::new();
     let mut plan: Option<String> = None;
-    if let Some(effort) = effort.filter(|e| *e != "none") {
+    if let Some(effort) = effort.filter(|e| *e != "none" && !native) {
         if wants_action(&conversation) && !read_only_panel {
             let mut thinking = conversation.clone();
             thinking.push(json!({
@@ -2259,6 +2264,19 @@ async fn run_turn_with_opened_tools(
         // Snapshot the advertised set for this whole batch. A parallel load
         // cannot authorize a sibling call that the model had no schema for.
         let tools = catalog.specs();
+        let message = if native {
+            let answer = native_session.request(&client, llm, model, &conversation, &tools, effort, 8192, stream_to).await?;
+            if let Some(mut body) = answer.receipt.evidence_body() {
+                body.insert("model".into(), json!(model));
+                body.insert("transport".into(), json!(answer.transport));
+                body.insert("usage".into(), answer.usage);
+                let _ = crate::evidence::record("model_call", canvas_key, body);
+            }
+            if let Some(notice) = answer.receipt.substitution_notice() {
+                if !routing_notices.contains(&notice) { routing_notices.push(notice); }
+            }
+            answer.message
+        } else {
         let mut round = Round::default();
         for attempt in 0..2 {
             let mut body = json!({
@@ -2310,7 +2328,8 @@ async fn run_turn_with_opened_tools(
             }
             return Err(format!("{status}: {detail}{}", receipt.error_suffix()));
         }
-        let message = round.message();
+        round.message()
+        };
         let calls = message
             .get("tool_calls")
             .and_then(Value::as_array)
@@ -2354,6 +2373,15 @@ async fn run_turn_with_opened_tools(
                 attach_session: attach,
                 swarm_plan: proposed_swarm,
             });
+        }
+        if native {
+            // Validate the entire batch before executing anything. Never replay a
+            // side effect if the provider repeats an earlier round's call ID.
+            for call in &calls {
+                if !native_calls.insert(call["id"].as_str().unwrap_or("").to_string()) {
+                    return Err("Responses repeated an executed call ID; stopped without re-executing it".into());
+                }
+            }
         }
         conversation.push(message);
         for call in calls {
@@ -2599,7 +2627,7 @@ mod tests {
                 }
             });
             let llm = crate::settings::LlmSettings { endpoint:format!("http://{addr}/v1"), ..Default::default() };
-            let result = tokio::time::timeout(std::time::Duration::from_secs(5), run_turn_with_opened_tools(&llm,"gpt-6-astra",vec![json!({"role":"user","content":"Hello"})],None,"fixture",None,(vec![],vec![],vec![]))).await.unwrap().unwrap();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), run_turn_with_opened_tools(&llm,"gpt-5.6-sol",vec![json!({"role":"user","content":"Hello"})],None,"fixture",None,(vec![],vec![],vec![]))).await.unwrap().unwrap();
             assert_eq!(result.text,"Ready.");
             server.await.unwrap();
         }
@@ -2660,6 +2688,39 @@ mod tests {
         let result=tokio::time::timeout(std::time::Duration::from_secs(5),run_turn_with_opened_tools(&llm,"fixture",vec![json!({"role":"user","content":format!("Review {}",root.display())})],None,"repository-fixture",None,(vec![],vec![],vec![]))).await.unwrap().unwrap();
         assert_eq!(result.performed.len(),1);assert_eq!(result.text,"I read the project documentation.");
         server.await.unwrap();std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn responses_repository_tool_continuation_and_duplicate_call_guard() {
+        for duplicate in [false, true] {
+            let root=std::env::temp_dir().join(format!("xnaut-native-wire-{}",uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(root.join(".git")).unwrap();
+            std::fs::write(root.join("README.md"),"Native transport read evidence.").unwrap();
+            let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr=listener.local_addr().unwrap();let server_root=root.clone();
+            let server=tokio::spawn(async move {
+                for step in 0..2 {
+                    let (mut socket,_)=listener.accept().await.unwrap();let request=read_test_http(&mut socket).await;
+                    assert_eq!(request["reasoning"]["effort"],"high");
+                    assert!(request["tools"].as_array().unwrap().len()<=128);
+                    assert!(request["tools"].as_array().unwrap().iter().any(|t| t["name"]=="read_repository_file"));
+                    if step==1 {
+                        assert_eq!(request["previous_response_id"],"r0");
+                        assert_eq!(request["input"][0]["call_id"],"read-1");
+                        assert!(request["input"][0]["output"].as_str().unwrap().contains("Native transport read evidence."));
+                    }
+                    let output=if step==0 || duplicate {json!([{"type":"function_call","call_id":"read-1","name":"read_repository_file","arguments":json!({"root":server_root,"path":"README.md"}).to_string()}])}
+                        else {json!([{"type":"message","content":[{"type":"output_text","text":"Read verified."}]}])};
+                    let event=json!({"type":"response.completed","response":{"id":format!("r{step}"),"status":"completed","output":output}});
+                    write_test_http(&mut socket,"text/event-stream",&format!("data: {event}\n\n")).await;
+                }
+            });
+            let llm=crate::settings::LlmSettings{endpoint:format!("http://{addr}/v1"),..Default::default()};
+            let result=tokio::time::timeout(std::time::Duration::from_secs(5),run_turn_with_opened_tools(&llm,"gpt-6-astra",vec![json!({"role":"user","content":format!("Review {}",root.display())})],Some("high"),"native-repo-fixture",None,(vec![],vec![],vec![]))).await.unwrap();
+            if duplicate { assert!(result.err().unwrap().contains("repeated an executed call ID")); }
+            else { let result=result.unwrap();assert_eq!(result.performed.len(),1);assert_eq!(result.text,"Read verified."); }
+            server.await.unwrap();std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     // This covers the actual SSE request loop and MCP execution, not just the

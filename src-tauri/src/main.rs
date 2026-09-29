@@ -24,6 +24,7 @@ mod flow_drift;
 mod canvas;
 mod build_log;
 mod chat;
+mod responses;
 mod repository_read;
 mod conversation_store;
 mod codex_spend;

@@ -648,6 +648,7 @@ fn collect_legacy_local_storage_databases(
 }
 
 fn apply_legacy_nautgate(settings: &mut Settings, endpoint: String, token: String) -> bool {
+    if settings.llm_providers.iter().any(|p| p.name.eq_ignore_ascii_case("nautgate") && !p.enabled) { return false; }
     let already_configured = settings
         .llm_providers
         .iter()
@@ -687,6 +688,7 @@ fn apply_legacy_nautgate(settings: &mut Settings, endpoint: String, token: Strin
 /// forever. Import only the missing NautGate credential into the owner-only
 /// Rust settings file; never overwrite a token configured by the current app.
 fn migrate_legacy_nautgate_settings(settings: &mut Settings) -> bool {
+    if settings.llm_providers.iter().any(|p| p.name.eq_ignore_ascii_case("nautgate") && !p.enabled) { return false; }
     if settings
         .llm_providers
         .iter()
@@ -783,12 +785,22 @@ pub async fn settings_set(
 ) -> Result<(), String> {
     save(&settings)?;
     *state.settings.lock().await = settings;
+    crate::tool_support::forget_all();
     Ok(())
 }
 
 #[cfg(test)]
 mod forge_token_tests {
     use super::*;
+    #[test]
+    fn legacy_credentials_cannot_reenable_disabled_gateway() {
+        let mut settings=Settings::default();
+        settings.llm_providers.push(LlmProviderSettings{name:"nautgate".into(),endpoint:"http://configured/v1".into(),api_key:None,enabled:false});
+        assert!(!apply_legacy_nautgate(&mut settings,"http://legacy/v1".into(),"legacy-key".into()));
+        assert!(!settings.llm_providers[0].enabled);
+        assert!(settings.llm_providers[0].api_key.is_none());
+    }
+
     #[test]
     fn a_pasted_token_with_a_newline_or_a_stray_byte_still_makes_a_valid_header() {
         // "builder error: failed to parse header value", Tasks panel, 2026-09-11.

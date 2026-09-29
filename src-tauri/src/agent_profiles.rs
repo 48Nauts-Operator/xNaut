@@ -1741,21 +1741,10 @@ pub async fn agent_chat_turn(
     // local model still answers rather than erroring.
     let llm = {
         let settings = state.settings.lock().await;
-        let chat_model = profile.chat_model_or_model().to_string();
-        if provider.is_empty() || provider == "global" {
-            let mut llm = settings.llm.clone();
-            if !chat_model.is_empty() {
-                llm.model = chat_model;
-            }
-            Some(llm)
-        } else {
-            crate::chat::provider_llm(&settings, provider).map(|mut llm| {
-                if !chat_model.is_empty() {
-                    llm.model = chat_model;
-                }
-                llm
-            })
-        }
+        let mut llm = crate::chat::selected_llm(&settings, provider)?;
+        let model = profile.chat_model_or_model();
+        if !model.is_empty() { llm.model = model.to_string(); }
+        Some(llm)
     };
     // Set when the tool loop could not run, so the reply can say why rather
     // than looking like an agent that simply chose not to act.
@@ -1864,6 +1853,7 @@ pub async fn agent_chat_turn(
                     return Ok(text);
                 }
                 Err(error) => {
+                    if crate::responses::required(&llm.model) { return Err(error); }
                     // The fallback is right — an agent that cannot call tools
                     // should still answer — but it was SILENT, and that is what
                     // cost four days. The model, asked to do something, replied

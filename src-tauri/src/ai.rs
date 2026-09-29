@@ -83,17 +83,34 @@ impl AiClient {
     pub fn new(config: AiConfig) -> Self {
         Self {
             config,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).connect_timeout(std::time::Duration::from_secs(15)).timeout(std::time::Duration::from_secs(300)).build().expect("HTTP client"),
         }
     }
 
     /// Sends a request to the AI provider
     pub async fn ask(&self, request: AiRequest) -> Result<AiResponse> {
-        match self.config.provider {
-            AiProvider::OpenAi => self.ask_openai(request).await,
-            AiProvider::Anthropic => self.ask_anthropic(request).await,
-            AiProvider::Custom => self.ask_custom(request).await,
+        let config = route_config(&crate::settings::load_or_default(), &self.config)?;
+        let routed = Self { config, http_client: self.http_client.clone() };
+        if crate::responses::required(&routed.config.model) {
+            return routed.ask_responses(request).await;
         }
+        match routed.config.provider {
+            AiProvider::OpenAi => routed.ask_openai(request).await,
+            AiProvider::Anthropic => routed.ask_anthropic(request).await,
+            AiProvider::Custom => routed.ask_custom(request).await,
+        }
+    }
+
+    async fn ask_responses(&self, request: AiRequest) -> Result<AiResponse> {
+        anyhow::ensure!(!matches!(self.config.provider, AiProvider::Anthropic), "Astra requires a Responses-compatible provider; select OpenAI or enable NautGate");
+        let endpoint = self.config.base_url.as_deref().unwrap_or("https://api.openai.com/v1")
+            .trim_end_matches('/').trim_end_matches("/chat/completions");
+        let llm = crate::settings::LlmSettings { endpoint:endpoint.into(), model:self.config.model.clone(), api_key:Some(self.config.api_key.clone()), ..Default::default() };
+        let user = request.context.map(|context| format!("{}\n\nContext: {context}", request.prompt)).unwrap_or(request.prompt);
+        let input = vec![serde_json::json!({"role":"system","content":request.system.unwrap_or_else(default_system_prompt)}),serde_json::json!({"role":"user","content":user})];
+        let answer = crate::responses::Session::default().request(&self.http_client,&llm,&llm.model,&input,&[],None,8192,None).await.map_err(anyhow::Error::msg)?;
+        let content = answer.message["content"].as_str().unwrap_or("").to_string();
+        Ok(AiResponse { suggestions:extract_suggestions(&content), commands:extract_commands(&content), response:content, confidence:0.8, citations:Vec::new() })
     }
 
     /// Analyzes terminal output for errors and suggestions
@@ -165,6 +182,7 @@ impl AiClient {
             .context("Failed to send request to OpenAI")?;
 
         let response_data: serde_json::Value = response
+            .error_for_status().context("Model endpoint rejected the request")?
             .json()
             .await
             .context("Failed to parse OpenAI response")?;
@@ -218,6 +236,7 @@ impl AiClient {
             .context("Failed to send request to Anthropic")?;
 
         let response_data: serde_json::Value = response
+            .error_for_status().context("Model endpoint rejected the request")?
             .json()
             .await
             .context("Failed to parse Anthropic response")?;
@@ -271,6 +290,7 @@ impl AiClient {
             .context("Failed to send request to custom provider")?;
 
         let response_data: serde_json::Value = response
+            .error_for_status().context("Model endpoint rejected the request")?
             .json()
             .await
             .context("Failed to parse custom provider response")?;
@@ -299,6 +319,12 @@ impl AiClient {
             working_directory: std::env::current_dir().ok()?.to_string_lossy().to_string(),
         })
     }
+}
+
+fn route_config(settings: &crate::settings::Settings, config: &AiConfig) -> Result<AiConfig> {
+    if !crate::chat::gateway_enabled(settings) { return Ok(config.clone()); }
+    let gateway = crate::chat::selected_llm(settings, "nautgate").map_err(anyhow::Error::msg)?;
+    Ok(AiConfig { provider:AiProvider::Custom, model:config.model.clone(), api_key:gateway.api_key.unwrap_or_default(), base_url:Some(crate::chat::join_endpoint(&gateway.endpoint,"chat/completions")) })
 }
 
 fn default_system_prompt() -> String {
@@ -403,6 +429,24 @@ fn extract_commands(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn responses_rejects_anthropic_credentials_before_any_request() {
+        let client=AiClient::new(AiConfig{provider:AiProvider::Anthropic,model:"gpt-6-astra".into(),api_key:"anthropic-fixture".into(),base_url:None});
+        let error=client.ask_responses(AiRequest{prompt:"Hello".into(),context:None,terminal_output:None,system_info:None,system:None}).await.unwrap_err();
+        assert!(error.to_string().contains("Responses-compatible provider"));
+    }
+
+    #[test]
+    fn gateway_also_owns_terminal_and_research_requests_without_direct_key_reuse() {
+        let config=AiConfig{provider:AiProvider::Custom,model:"sonar-pro".into(),api_key:"direct-key".into(),base_url:Some("https://direct.invalid/chat/completions".into())};
+        let mut settings=crate::settings::Settings::default();
+        settings.llm_providers.push(crate::settings::LlmProviderSettings{name:"nautgate".into(),endpoint:"http://gateway.invalid/v1".into(),api_key:Some("gateway-key".into()),enabled:true});
+        let routed=route_config(&settings,&config).unwrap();
+        assert_eq!(routed.api_key,"gateway-key");assert_eq!(routed.base_url.as_deref(),Some("http://gateway.invalid/v1/chat/completions"));assert_eq!(routed.model,"sonar-pro");
+        settings.llm_providers[0].enabled=false;
+        let direct=route_config(&settings,&config).unwrap();assert_eq!(direct.api_key,"direct-key");assert_eq!(direct.base_url,config.base_url);
+    }
 
     #[test]
     fn test_extract_commands() {

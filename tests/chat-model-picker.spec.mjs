@@ -40,6 +40,7 @@ test('Chat LLM settings save OpenRouter as a NautGate route and retain manual mo
   const host=document.createElement('div');host.id='settings-fixture';host.style.cssText='position:fixed;inset:10px;z-index:99999;overflow:auto;background:#111';document.body.appendChild(host);
   await window.xnautRenderTasksModeSettings(host);
  });
+ await expect(page.locator('#tm-llm-endpoint')).toHaveValue('http://gateway.example/v1');
  await page.getByRole('combobox',{name:'Chat provider route'}).selectOption('openrouter');
  await page.getByRole('combobox',{name:'Available chat models'}).selectOption('openrouter/google/gemini-3.7-flash');
  await expect(page.locator('#tm-llm-endpoint')).toHaveValue('http://gateway.example/v1');
@@ -49,4 +50,50 @@ test('Chat LLM settings save OpenRouter as a NautGate route and retain manual mo
  await expect.poll(()=>page.evaluate(()=>window.__xnautStub.settings_get.llm.model)).toBe('openrouter/vendor/custom-model');
  expect(await page.evaluate(()=>window.__xnautStub.settings_get)).toMatchObject({chat_model_source:'workspace',llm:{provider:'nautgate',model:'openrouter/vendor/custom-model'}});
  expect(await page.evaluate(()=>window.__xnautStub.settings_get.llm_providers.find(p=>p.name==='nautgate').endpoint)).toBe('http://new-gateway.example/v1');
+});
+
+test('disabled gateway saves a direct OpenAI route and legacy sync preserves the switch',async({page})=>{
+ await models(page);await page.evaluate(async()=>{
+  window.__xnautStub.settings_get.llm_providers=[{name:'nautgate',endpoint:'http://gateway.example/v1',api_key:'gateway-fixture',enabled:true}];
+  const host=document.createElement('div');host.id='settings-fixture';host.style.cssText='position:fixed;inset:10px;z-index:99999;overflow:auto;background:#111';document.body.appendChild(host);
+  await window.xnautRenderTasksModeSettings(host);
+ });
+ await page.getByLabel('Route model requests through NautGate').uncheck();
+ await page.getByRole('combobox',{name:'Chat provider route'}).selectOption('codex');
+ await expect(page.locator('#tm-llm-endpoint')).toHaveValue('https://api.openai.com/v1');
+ await expect(page.locator('#tm-llm-key')).toHaveValue('');
+ await page.locator('#tm-llm-key').fill('direct-fixture');
+ await page.locator('#tm-llm-model').fill('gpt-6-astra');
+ await page.locator('#tm-save').click();
+ await expect.poll(()=>page.evaluate(()=>window.__xnautStub.settings_get.llm.provider)).toBe('openai');
+ await page.evaluate(()=>window.xnautSyncChatSettingsFromAiSettings());
+ const saved=await page.evaluate(()=>window.__xnautStub.settings_get);
+ expect(saved.llm).toMatchObject({provider:'openai',model:'gpt-6-astra',api_key:'direct-fixture',endpoint:'https://api.openai.com/v1'});
+ expect(saved.llm_providers.find(p=>p.name==='nautgate')).toMatchObject({enabled:false,api_key:'gateway-fixture'});
+});
+
+test('direct provider models remain selectable and an empty refreshed catalog removes stale routes',async({page})=>{
+ await models(page);await page.evaluate(async()=>{
+  window.__xnautStub.chat_list_provider_models=[{provider:'openai',model:'gpt-6-astra'},{provider:'openrouter',model:'vendor/model'}];
+  await window.xnautModelCatalog.refresh();
+  window.xnautAttachChatTab({title:'Direct models',chatKey:'direct-models'});
+ });
+ const select=page.getByRole('combobox',{name:'Chat model',exact:true});
+ await select.selectOption(JSON.stringify(['openai','gpt-6-astra']));
+ expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('xnaut-chat-model:direct-models')))).toEqual({provider:'openai',model:'gpt-6-astra'});
+ await page.evaluate(async()=>{window.__xnautStub.chat_list_provider_models=[];await window.xnautModelCatalog.refresh();});
+ expect(await page.evaluate(()=>window.xnautModelCatalog.all())).toEqual([]);
+});
+
+test('opening gateway settings preserves a primary credential when the registry key is empty',async({page})=>{
+ await models(page);await page.evaluate(async()=>{
+  window.__xnautStub.settings_get.llm={provider:'nautgate',endpoint:'http://primary-gateway/v1',api_key:'primary-fixture-key',model:'gpt-6-astra'};
+  window.__xnautStub.settings_get.llm_providers=[{name:'nautgate',endpoint:'',api_key:null,enabled:true}];
+  const host=document.createElement('div');host.style.cssText='position:fixed;inset:10px;z-index:99999;overflow:auto;background:#111';document.body.appendChild(host);
+  await window.xnautRenderTasksModeSettings(host);
+ });
+ await expect(page.locator('#tm-llm-endpoint')).toHaveValue('http://primary-gateway/v1');
+ await expect(page.locator('#tm-llm-key')).toHaveValue('primary-fixture-key');
+ await page.locator('#tm-save').click();
+ await expect.poll(()=>page.evaluate(()=>window.__xnautStub.settings_get.llm_providers.find(p=>p.name==='nautgate').api_key)).toBe('primary-fixture-key');
 });
