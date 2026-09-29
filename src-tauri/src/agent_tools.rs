@@ -2100,18 +2100,28 @@ pub async fn run_turn_streaming(
     canvas_key: &str,
     stream_to: Option<(&tauri::AppHandle, &str)>,
 ) -> Result<TurnOutcome, String> {
+    let opened = crate::mcp_client::open_for(capabilities).await;
+    run_turn_with_opened_tools(llm, model, messages, effort, canvas_key, stream_to, opened).await
+}
+
+// Keep connection discovery separate from the request loop so the entire wire
+// protocol can be tested with isolated MCP and model endpoints.
+async fn run_turn_with_opened_tools(
+    llm: &crate::settings::LlmSettings,
+    model: &str,
+    messages: Vec<Value>,
+    effort: Option<&str>,
+    canvas_key: &str,
+    stream_to: Option<(&tauri::AppHandle, &str)>,
+    opened: (Vec<crate::mcp_client::Session>, Vec<Value>, Vec<String>),
+) -> Result<TurnOutcome, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
     let url = crate::chat::join_endpoint(&llm.endpoint, "chat/completions");
-
-    // The plugins this agent holds are OPENED for the turn, and their tools
-    // sit next to xNAUT's own. Without this, "Forgejo connected" was followed
-    // by "I can't query Forgejo in this chat", which is a fair thing to swear
-    // about: connecting something has to change what the agent can do.
-    let (mut sessions, plugin_tools, problems) = crate::mcp_client::open_for(capabilities).await;
+    let (mut sessions, plugin_tools, problems) = opened;
     let mut conversation = without_trailing_assistant(messages);
     if !problems.is_empty() {
         // Say it in-band: a server that would not start is something the agent
@@ -2131,6 +2141,29 @@ pub async fn run_turn_streaming(
     // document_mode so no signature changes ripple through the call sites;
     // capabilities are empty on these turns, so no plugin tools open either.
     let read_only_panel = canvas_key.starts_with("xfusion:");
+    let mut tools = tool_specs();
+    // The vault document chat draws INTO the open note as ```mermaid```,
+    // not onto a separate canvas file the workspace never shows. The
+    // canvas tool's own description says "this is how you draw a
+    // diagram", so leaving it in wins over the persona every time; drop
+    // it here so the model embeds the diagram in the document instead.
+    if document_mode {
+        tools.retain(|tool| {
+            let name = crate::agent_tool_catalog::name(tool);
+            name != "read_canvas" && name != "update_canvas"
+        });
+    }
+    if read_only_panel {
+        tools.retain(|tool| {
+            let name = crate::agent_tool_catalog::name(tool);
+            name.starts_with("list_") || name.starts_with("read_")
+        });
+    }
+    let mut catalog = crate::agent_tool_catalog::ToolCatalog::new(tools, plugin_tools);
+    if catalog.is_deferred() {
+        conversation.push(json!({"role":"system","content":"Additional tools from this agent's connected plugins are available through xnaut_search_tools and xnaut_load_tools. Search and load missing tools before claiming a capability is unavailable. Newly loaded tools can be called in your next response, not the same batch. Discovery and loading do not execute the requested work."}));
+    }
+
     let mut performed: Vec<String> = Vec::new();
     let mut surface: Option<String> = None;
     let mut needs_auth: Option<Value> = None;
@@ -2211,35 +2244,11 @@ pub async fn run_turn_streaming(
         // The effort is spent in the thinking pass above; the acting pass
         // must send none, or this route 400s on the tools.
         let _ = effort;
+        // Snapshot the advertised set for this whole batch. A parallel load
+        // cannot authorize a sibling call that the model had no schema for.
+        let tools = catalog.specs();
         let mut round = Round::default();
         for attempt in 0..2 {
-            let mut tools = tool_specs();
-            // The vault document chat draws INTO the open note as ```mermaid```,
-            // not onto a separate canvas file the workspace never shows. The
-            // canvas tool's own description says "this is how you draw a
-            // diagram", so leaving it in wins over the persona every time; drop
-            // it here so the model embeds the diagram in the document instead.
-            if document_mode {
-                tools.retain(|tool| {
-                    let name = tool
-                        .get("function")
-                        .and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("");
-                    name != "read_canvas" && name != "update_canvas"
-                });
-            }
-            if read_only_panel {
-                tools.retain(|tool| {
-                    let name = tool
-                        .get("function")
-                        .and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("");
-                    name.starts_with("list_") || name.starts_with("read_")
-                });
-            }
-            tools.extend(plugin_tools.iter().cloned());
             let mut body = json!({
                 "model": model,
                 "messages": conversation,
@@ -2345,27 +2354,34 @@ pub async fn run_turn_streaming(
             }
             // "<plugin>__<tool>" belongs to an MCP server; anything else is
             // xNAUT's own.
-            let result = match name.split_once("__") {
-                Some((prefix, tool)) => {
-                    let wanted = prefix.replace('_', "-");
-                    match sessions
-                        .iter_mut()
-                        .find(|session| session.plugin_id.replace('-', "_") == prefix || session.plugin_id == wanted)
-                    {
-                        Some(session) => match session.call(tool, &args).await {
-                            Ok(value) => value,
-                            Err(error) => json!({ "ok": false, "error": error }),
-                        },
-                        None => json!({ "ok": false, "error": format!("{prefix} is not connected to this agent") }),
+            let result = if !tools.iter().any(|tool| crate::agent_tool_catalog::name(tool) == name) {
+                json!({"ok":false,"error":"Tool was not advertised for this round. Search and load available tools, then call them in a subsequent response."})
+            } else if crate::agent_tool_catalog::is_catalog_call(&name) {
+                catalog.handle(&name, &args)
+            } else {
+                match name.split_once("__") {
+                    Some((prefix, tool)) => {
+                        let wanted = prefix.replace('_', "-");
+                        match sessions
+                            .iter_mut()
+                            .find(|session| session.plugin_id.replace('-', "_") == prefix || session.plugin_id == wanted)
+                        {
+                            Some(session) => match session.call(tool, &args).await {
+                                Ok(value) => value,
+                                Err(error) => json!({ "ok": false, "error": error }),
+                            },
+                            None => json!({ "ok": false, "error": format!("{prefix} is not connected to this agent") }),
+                        }
                     }
+                    None => execute(&name, &args, canvas_key).await,
                 }
-                None => execute(&name, &args, canvas_key).await,
             };
             attempted.push(format!("{name} {}", args));
             // A plugin's own tools answer in MCP's shape, not ours, so "did
             // something happen" is: it is a plugin call that did not error.
             let worked = result.get("ok").and_then(Value::as_bool) == Some(true)
-                || (name.contains("__") && result.get("error").is_none());
+                || (name.contains("__") && result.get("error").is_none()
+                    && result.get("isError").and_then(Value::as_bool) != Some(true));
             if let Some((app, request_id)) = stream_to {
                 let _ = tauri::Emitter::emit(app, "chat://tool", json!({
                     "requestId": request_id, "callId": id, "name": name,
@@ -2373,7 +2389,7 @@ pub async fn run_turn_streaming(
                     "error": result.get("error").and_then(Value::as_str),
                 }));
             }
-            if worked {
+            if worked && !crate::agent_tool_catalog::is_catalog_call(&name) {
                 performed.push(format!("{name} {}", args));
                 if surface.is_none() {
                     surface = local_surface(&result);
@@ -2502,6 +2518,105 @@ mod tests {
     }
 
     use super::*;
+
+    async fn read_test_http(socket: &mut tokio::net::TcpStream) -> Value {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        loop {
+            let mut chunk = [0u8; 8192];
+            let n = socket.read(&mut chunk).await.unwrap();
+            assert!(n > 0, "request ended early");
+            bytes.extend_from_slice(&chunk[..n]);
+            if let Some(boundary) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&bytes[..boundary]);
+                let size: usize = headers.lines().find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|s| s.trim().parse().unwrap())).unwrap();
+                if bytes.len() >= boundary + 4 + size {
+                    return serde_json::from_slice(&bytes[boundary + 4..boundary + 4 + size]).unwrap();
+                }
+            }
+        }
+    }
+
+    async fn write_test_http(socket: &mut tokio::net::TcpStream, mime: &str, body: &str) {
+        use tokio::io::AsyncWriteExt;
+        let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        socket.write_all(reply.as_bytes()).await.unwrap();
+    }
+
+    // This covers the actual SSE request loop and MCP execution, not just the
+    // catalog helper. All endpoints are loopback fixtures; no owner data changes.
+    #[tokio::test]
+    async fn oversized_catalog_discovers_loads_and_executes_over_the_wire() {
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            for execute_tool in [false, true] {
+                let mcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let mcp_addr = mcp.local_addr().unwrap();
+                let optional_count = 155 - tool_specs().len();
+                let mcp_task = tokio::spawn(async move {
+                    for step in 0..if execute_tool { 4 } else { 3 } {
+                        let (mut socket, _) = mcp.accept().await.unwrap();
+                        let request = read_test_http(&mut socket).await;
+                        let result = match step {
+                            0 => { assert_eq!(request["method"], "initialize"); json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}) },
+                            1 => { assert_eq!(request["method"], "notifications/initialized"); json!({}) },
+                            2 => { assert_eq!(request["method"], "tools/list"); json!({"tools":(0..optional_count).map(|i| json!({"name":format!("tool_{i}"),"description":format!("Read fixture record {i}"),"inputSchema":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}})).collect::<Vec<_>>()}) },
+                            _ => { assert_eq!(request["method"], "tools/call"); assert_eq!(request["params"]["name"], format!("tool_{}", optional_count-1)); assert_eq!(request["params"]["arguments"]["id"], 7); json!({"content":[{"type":"text","text":"fixture record 7"}]}) },
+                        };
+                        write_test_http(&mut socket,"application/json",&json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string()).await;
+                    }
+                });
+                let plugin: crate::plugins::Plugin = serde_json::from_value(json!({"id":"fixture","name":"Fixture","description":"Read-only test server","transport":"http","url":format!("http://{mcp_addr}")})).unwrap();
+                let mut session = crate::mcp_client::Session::open(&plugin).await.unwrap();
+                let plugin_tools = session.tools().await.unwrap();
+                assert_eq!(tool_specs().len()+plugin_tools.len(),155);
+                let target = format!("fixture__tool_{}", optional_count-1);
+                let model = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = model.local_addr().unwrap();
+                let model_task = tokio::spawn(async move {
+                    for step in 0..if execute_tool { 4 } else { 3 } {
+                        let (mut socket, _) = model.accept().await.unwrap();
+                        let request = read_test_http(&mut socket).await;
+                        let specs = request["tools"].as_array().unwrap();
+                        assert!(specs.len() <= 128);
+                        assert_eq!(request["stream"],true);
+                        let advertised = specs.iter().any(|t| crate::agent_tool_catalog::name(t) == target);
+                        assert_eq!(advertised,step >= 2);
+                        let messages = request["messages"].as_array().unwrap();
+                        let call = |name: &str, args: Value, id: &str| json!({"index":0,"id":id,"type":"function","function":{"name":name,"arguments":args.to_string()}});
+                        let delta = match step {
+                            0 => {
+                                // A fabricated unadvertised call must not execute, even
+                                // alongside legitimate discovery in the same batch.
+                                let mut early = call(&target,json!({"id":7}),"premature");
+                                early["index"] = json!(1);
+                                json!({"tool_calls":[call("xnaut_search_tools",json!({"query":target}),"search"),early]})
+                            },
+                            1 => {
+                                let early = messages.iter().find(|m| m["tool_call_id"] == "premature").unwrap();
+                                assert!(early["content"].as_str().unwrap().contains("not advertised"));
+                                json!({"tool_calls":[call("xnaut_load_tools",json!({"names":[target]}),"load")]})
+                            },
+                            2 if execute_tool => json!({"tool_calls":[call(&target,json!({"id":7}),"execute")]}),
+                            _ => {
+                                if execute_tool {
+                                    assert!(messages.last().unwrap()["content"].as_str().unwrap().contains("fixture record 7"));
+                                }
+                                json!({"content":"Fixture complete."})
+                            },
+                        };
+                        let body = format!("data: {}\n\ndata: [DONE]\n\n",json!({"choices":[{"delta":delta}]}));
+                        write_test_http(&mut socket,"text/event-stream",&body).await;
+                    }
+                });
+                let llm = crate::settings::LlmSettings { endpoint:format!("http://{addr}/v1"), ..Default::default() };
+                let outcome = run_turn_with_opened_tools(&llm,"fixture",vec![json!({"role":"user","content":"Read fixture record 7"})],None,"catalog-fixture",None,(vec![session],plugin_tools,vec![])).await.unwrap();
+                assert_eq!(outcome.text,"Fixture complete.");
+                assert_eq!(outcome.performed.len(),usize::from(execute_tool),"Discovery/loading and rejected calls must not count as work performed");
+                mcp_task.await.unwrap();
+                model_task.await.unwrap();
+            }
+        }).await.expect("fixture must finish promptly");
+    }
 
     #[tokio::test]
     async fn gateway_error_in_http_200_is_not_an_empty_answer() {

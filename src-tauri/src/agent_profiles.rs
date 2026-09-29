@@ -1934,6 +1934,9 @@ the tool; if it did not, ignore this line."
 }
 
 pub fn tool_failure_notice(model: &str, error: &str) -> String {
+    if error.contains("tools") && error.contains("array too long") {
+        return format!("\n\n---\n**Tool request rejected.** xNaut sent more tool definitions than the route accepts. The requested work did not start through this request. This is a tool-catalog issue, not evidence that `{model}` cannot use tools.\n\n> {}", error.trim());
+    }
     format!(
         "\n\n---\n**Answered without tools.** `{model}` could not run a tool call, so nothing was \
 created, changed or looked up above. The upstream said:\n\n> {}\n\nPick a model whose route \
@@ -4095,6 +4098,14 @@ accent_color = ""
     /// over a transport with no tool support. The notice has to name the model
     /// and quote the upstream, because those are the two things that turn "the
     /// feature is missing" into "this route is broken".
+    #[test]
+    fn oversized_tool_catalog_is_not_blame_assigned_to_the_model() {
+        let notice = tool_failure_notice("gpt-5.6-sol", "Invalid 'tools': array too long. Expected an array with maximum length 128, but got an array with length 155 instead.");
+        assert!(notice.contains("tool-catalog issue"));
+        assert!(notice.contains("did not start"));
+        assert!(!notice.contains("Pick a model"));
+    }
+
     #[test]
     fn the_tool_failure_notice_names_the_model_and_the_upstream() {
         let notice = tool_failure_notice(
