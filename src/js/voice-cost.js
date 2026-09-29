@@ -45,7 +45,9 @@
   }
   function paint() {
     const footer = document.getElementById('xnaut-usage-footer'); if (footer) mountFooter(footer);
-    for (const card of cards) { if (!card.isConnected) cards.delete(card); else paintCard(card); }
+    // Tabs temporarily detach their DOM. Keep a weak subscription so returning
+    // to Observatory resumes updates, while closed panels can be collected.
+    for (const ref of cards) { const card = ref.deref(); if (!card) cards.delete(ref); else if (card.isConnected) paintCard(card); }
   }
   function mountCard(parent) {
     const card = document.createElement('div'); card.className = 'obs-card obs-voice-cost'; card.hidden = true;
@@ -67,7 +69,7 @@
         paint();
       };
     });
-    parent.appendChild(card); cards.add(card); paintCard(card); refresh(); return card;
+    parent.appendChild(card); cards.add(new WeakRef(card)); paintCard(card); refresh(); return card;
   }
   async function refresh() {
     if (pending || !window.__TAURI__?.core?.invoke) return;

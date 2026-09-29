@@ -24,8 +24,12 @@ test('General and Agents separate content; ledger and agent lists paginate and s
   await ledger.getByRole('combobox').selectOption('10');
   await expect(page.locator('[data-ledger-list] .obs-led:visible')).toHaveCount(10);
   await ledger.getByRole('combobox').selectOption('25');
+  await expect(page.locator('[data-ledger-list] .obs-led:visible')).toHaveCount(25);
   await ledger.getByRole('button',{name:'Next Ledger page'}).click();
   await expect(page.locator('[data-ledger-list] .obs-led:visible')).toHaveCount(2);
+  // Repeated select commit/blur events must not reset a later page.
+  await ledger.getByRole('combobox').dispatchEvent('change');
+  await expect(ledger).toContainText('26–27 of 27');
   await page.locator('[data-refresh]').click();
   await expect(ledger).toContainText('26–27 of 27');
   await page.getByRole('tab',{name:'Agents',exact:true}).click();
@@ -103,4 +107,19 @@ test('Flow Watch opens the real terminal and identifies an authentication screen
   await expect(row.locator('.fw-status')).toHaveText('sign-in required');
   await row.getByRole('button',{name:'Open session'}).click();
   expect(await page.evaluate(()=>window.openedAgent)).toBe('remote-cortana');
+});
+
+
+test('voice cost resumes updates after the Observatory tab was detached', async ({page}) => {
+  await open(page);
+  const card=page.locator('.obs-voice-cost');
+  await expect(card.locator('[data-voice-price]')).toHaveText('~$0.075');
+  await page.evaluate(async()=>{
+    window.costPane=document.querySelector('.obs'); window.costParent=window.costPane.parentNode;
+    window.costPane.remove(); await window.xnautVoiceCost.refresh();
+    window.costParent.appendChild(window.costPane);
+    window.__xnautStub.voice_live_usage.session.seconds=120;
+    await window.xnautVoiceCost.refresh();
+  });
+  await expect(card.locator('[data-voice-price]')).toHaveText('~$0.100');
 });

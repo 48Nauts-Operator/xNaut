@@ -377,7 +377,11 @@
         bar.innerHTML = `<label>Rows <select class="obs-select" aria-label="${key} rows per page"><option>5</option><option>10</option><option>25</option></select></label><span data-page-count aria-live="polite"></span><button class="obs-btn" data-prev aria-label="Previous ${key} page">Previous</button><button class="obs-btn" data-next aria-label="Next ${key} page">Next</button>`;
         host.closest('.obs-table').appendChild(bar);
         state = { page: 0, size: 5, bar }; pagers.set(key, state);
-        bar.querySelector('select').onchange = e => { state.size = Number(e.target.value); state.page = 0; paginate(key, selector, rowSelector); };
+        bar.querySelector('select').onchange = e => {
+          const size = Number(e.target.value);
+          if (size === state.size) return; // A repeated native change is not a new page-size choice.
+          state.size = size; state.page = 0; paginate(key, selector, rowSelector);
+        };
         bar.querySelector('[data-prev]').onclick = () => { state.page--; paginate(key, selector, rowSelector); };
         bar.querySelector('[data-next]').onclick = () => { state.page++; paginate(key, selector, rowSelector); };
       }
