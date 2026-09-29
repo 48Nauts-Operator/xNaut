@@ -140,7 +140,7 @@ pub const BUILD_MARKER: &str = "BUILD-REQUEST";
 /// The rules half of a chat turn's system prompt. A raw string so what the
 /// model receives is exactly what is written here — the escaped version was
 /// unreadable and, worse, untestable against the live model.
-pub const CHAT_RULES: &str = r#"You are in a chat turn: no filesystem, no shell, no network tools. Answer questions directly and briefly.
+pub const CHAT_RULES: &str = r#"You are in an xNAUT chat turn. Your actual tools are the schemas supplied with this request, including connected plugins and tool discovery. Do not assume a filesystem, shell or network tool is absent: inspect the supplied tools and discover any deferred tools first. A tool mentioned in your persona may belong only to a coding runtime; do not invent a call to it. Answer questions directly and briefly.
 
 Asked for a document — a report, a spec, release notes, a plan, anything longer than a couple of paragraphs? Write it with write_document. It opens beside the conversation where it can be read and saved, instead of scrolling past in chat. Read it first if one exists, and send the complete document when you rewrite it.
 
@@ -198,6 +198,7 @@ mod tests {
             runtime_id: runtime.into(),
             provider: "anthropic".into(),
             model: String::new(),
+            chat_provider: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
             max_parallel: crate::swarm_plan::DEFAULT_MAX_PARALLEL as u32,
@@ -284,7 +285,9 @@ mod tests {
         // coding session, and the agent must say so in a way the UI can act
         // on rather than describing what it would have done.
         let system = chat_system(&profile(vec![], "claude"));
-        assert!(system.contains("no filesystem, no shell"));
+        assert!(system.contains("actual tools are the schemas supplied"));
+        assert!(system.contains("do not invent a call"));
+        assert!(!system.contains("no filesystem, no shell"));
         assert!(system.contains(BUILD_MARKER));
         assert!(system.contains("Turn an approved spec into an ordered plan."));
     }

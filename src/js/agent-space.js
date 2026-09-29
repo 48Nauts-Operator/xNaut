@@ -829,6 +829,7 @@
       // Separate from `model` on purpose: that one becomes --model on a CLI,
       // this one is the chat route and is the only one that needs tool calls.
       chat_model: String(values.chat_model || '').trim(),
+      chat_provider: String(values.chat_provider || '').trim(),
       reasoning_effort: String(values.reasoning_effort || '').trim(),
       // Clamped here AND in Rust: the form is one door, and swarm_plan::plan_from
       // is the one that actually bounds a batch.
@@ -1865,7 +1866,7 @@
       binding: () => ({
         conversationId: thread.id, agent: profile.handle,
         project: thread.workspace || profile.default_project || '',
-        provider: profile.provider || '', model: profile.chat_model || profile.model || '',
+        provider: profile.chat_provider || profile.provider || '', model: profile.chat_model || profile.model || '',
         permission: 'agent-chat',
       }),
       history: () => chatHistory().map((m) => ({ role: m.role, text: m.content })),
@@ -2000,10 +2001,14 @@
     });
     const selectedSkills = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('skill:')).map((item) => String(item).slice(6)));
     const selectedCollabs = new Set((profile.capabilities || []).filter((item) => String(item).startsWith('collab:')).map((item) => String(item).slice(7)));
+    await window.xnautModelCatalog?.refresh();
     const modelCatalog = window.xnautModelCatalog ? window.xnautModelCatalog.all() : [];
     const modelOptions = modelCatalog.slice();
     if (profile.model && !modelOptions.some((item) => item.id === profile.model && item.provider === profile.provider)) {
       modelOptions.unshift({ id:profile.model, name:profile.model, provider:profile.provider });
+    }
+    if (profile.chat_model && !modelOptions.some(m => m.id === profile.chat_model && m.provider === (profile.chat_provider || profile.provider))) {
+      modelOptions.unshift({id:profile.chat_model,name:profile.chat_model,provider:profile.chat_provider || profile.provider});
     }
     const providers = Array.from(new Set(['global', profile.provider, ...modelCatalog.map((item) => item.provider)].filter(Boolean)));
     const libraryProfiles = pinNautbotFirst(profiles || []);
@@ -2025,7 +2030,7 @@
           <label class="as-field"><span>Compute</span><select class="as-input" name="execution">${[['local','Local'],['exe-dev','exe.dev'],['gitvm','GitVM'],['sandbox','Automatic (configured provider)']].map(([value,label]) => `<option value="${value}" ${(profile.execution || 'local') === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
         <div class="as-inline"><label class="as-field"><span>Provider</span><select class="as-input" name="provider">${providers.map((provider) => `<option value="${esc(provider)}" ${provider === profile.provider ? 'selected' : ''}>${esc(provider)}</option>`).join('')}</select></label>
           <label class="as-field"><span>Model</span><select class="as-input" name="model"><option value="">Runtime default</option>${modelOptions.map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.model && model.provider === profile.provider ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select><small class="as-help">Handed to the runtime CLI as --model.</small></label>
-          <label class="as-field"><span>Chat model</span><select class="as-input" name="chat_model"><option value="">Same as Model</option>${modelOptions.map((model) => `<option value="${esc(model.id)}" ${model.id === profile.chat_model ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}</select><small class="as-help">Used for chat in the app. Only this one has to carry tool calls.</small></label>
+          <label class="as-field"><span>Chat model</span><input type="hidden" name="chat_provider" value="${esc(profile.chat_provider || '')}"><select class="as-input" name="chat_model"><option value="">Same as Model</option>${modelOptions.filter(m => ['nautgate','lmstudio','ollama',profile.chat_provider || profile.provider].includes(m.provider)).map((model) => `<option data-provider="${esc(model.provider)}" value="${esc(model.id)}" ${model.id === profile.chat_model && model.provider === (profile.chat_provider || profile.provider) ? 'selected' : ''}>${esc(model.provider)} · ${esc(model.name || model.id)}</option>`).join('')}</select><small class="as-help">Local, OpenRouter or subscription routes through NautGate. Runtime model stays separate. Account and availability are controlled by the gateway.</small></label>
           <label class="as-field"><span>Tool calls</span><button type="button" class="as-button" data-toolcheck>Check this route</button><small class="as-help" data-toolcheck-result>Asks the provider whether the chat model can actually run one.</small></label></div>
         <label class="as-field"><span>Reasoning effort</span><select class="as-input" name="reasoning_effort"><option value="" ${!profile.reasoning_effort ? 'selected' : ''}>Model default</option>${['low','medium','high','xhigh'].map((effort) => `<option value="${effort}" ${profile.reasoning_effort === effort ? 'selected' : ''}>${effort}</option>`).join('')}</select></label>
         <label class="as-field"><span>Role</span><input class="as-input" name="role" value="${esc(profile.role)}"></label>
@@ -2196,6 +2201,11 @@
       pane.querySelectorAll('[data-tabpane]').forEach((paneEl) => { paneEl.hidden = paneEl.dataset.tabpane !== key; });
     });
 
+    const chatModelField = pane.querySelector('[name="chat_model"]');
+    chatModelField.addEventListener('change', () => {
+      pane.querySelector('[name="chat_provider"]').value = chatModelField.selectedOptions[0]?.dataset.provider || '';
+    });
+
     // Can this route actually run a tool call? (XNAUT-196)
     //
     // The picker lists every model the gateway reports and none of them say
@@ -2208,7 +2218,7 @@
       if (!button || !result) return;
       button.onclick = async () => {
         const form = button.closest('form') || pane;
-        const provider = (form.querySelector('[name="provider"]') || {}).value || '';
+        const provider = (form.querySelector('[name="chat_provider"]') || {}).value || (form.querySelector('[name="provider"]') || {}).value || '';
         const chosen = (form.querySelector('[name="chat_model"]') || {}).value
           || (form.querySelector('[name="model"]') || {}).value || '';
         if (!chosen) { result.textContent = 'Pick a model first.'; return; }

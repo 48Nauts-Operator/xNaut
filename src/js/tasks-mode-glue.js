@@ -461,6 +461,7 @@ window.xnautAttachTasksTab = (opts) =>
     $('tm-llm-endpoint').value = s.llm.endpoint || '';
     $('tm-llm-model').value = s.llm.model || '';
     $('tm-llm-key').value = s.llm.api_key || '';
+    const chatModelPicker = window.xnautChatModelPicker.mountSettings(host, s);
     $('tm-engram-on').checked = !!s.engram.enabled;
     $('tm-engram-url').value = s.engram.url || '';
     $('tm-pm-module-on').checked = !!(s.project_management && s.project_management.enabled);
@@ -619,8 +620,10 @@ window.xnautAttachTasksTab = (opts) =>
       const updated = {
         ...s,
         project_root: $('tm-root').value.trim(),
+        chat_model_source: 'workspace',
         llm: {
           ...s.llm,
+          provider: chatModelPicker.provider(),
           endpoint: $('tm-llm-endpoint').value.trim(),
           model: $('tm-llm-model').value.trim(),
           api_key: $('tm-llm-key').value.trim() || null,
@@ -653,6 +656,13 @@ window.xnautAttachTasksTab = (opts) =>
           token: row.querySelector('.tm-f-token').value.trim() || null,
         })),
       };
+      if (['nautgate','lmstudio','ollama'].includes(updated.llm.provider)) {
+        const providers = (updated.llm_providers || []).map(item => ({...item}));
+        const index = providers.findIndex(item => item.name === updated.llm.provider);
+        const entry = {...(providers[index] || {}), name:updated.llm.provider, endpoint:updated.llm.endpoint, api_key:updated.llm.api_key, enabled:true};
+        if (index < 0) providers.push(entry); else providers[index] = entry;
+        updated.llm_providers = providers;
+      }
       await invoke('settings_set', { settings: updated });
       s = updated;
       applyModuleVisibility(updated);

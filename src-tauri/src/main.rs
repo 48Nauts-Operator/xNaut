@@ -71,6 +71,7 @@ mod run_control;
 mod run_signals;
 mod jury;
 mod jev_usage;
+mod jev_decisions;
 mod jury_runtime;
 mod jury_signoff;
 #[cfg(test)]
@@ -293,6 +294,11 @@ async fn main() {
             voice_live::settings::voice_live_settings_test,
             voice_live::usage::voice_live_usage,
             jev_usage::jev_usage,
+            jev_decisions::jev_decisions_settings_get,
+            jev_decisions::jev_decisions_settings_save,
+            jev_decisions::jev_decisions_list,
+            jev_decisions::jev_decision_get,
+            jev_decisions::jev_decisions_probe,
             voice_live::voice_live_open,
             voice_live::voice_live_close,
             voice_live::voice_live_text,

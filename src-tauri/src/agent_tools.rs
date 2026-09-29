@@ -1901,7 +1901,7 @@ fn without_trailing_assistant(mut messages: Vec<Value>) -> Vec<Value> {
 const ACTING_VERBS: &[&str] = &[
     "assign", "wake", "verify", "merge", "unmerge", "complete", "create",
     "file a ticket", "run ", "start", "launch", "fix", "ship", "release",
-    "review", "dispatch", "hand", "set ", "update", "delete", "connect",
+    "review", "audit", "dispatch", "hand", "set ", "update", "delete", "connect",
     "install", "enable", "disable", "build",
 ];
 
@@ -2063,10 +2063,12 @@ fn reject_provider_error(data: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn reasoning_override_rejected(error: &str) -> bool {
+pub(crate) fn reasoning_override_rejected(error: &str) -> bool {
     let error = error.to_ascii_lowercase();
     error.contains("reasoning") && (error.contains("cannot be disabled")
-        || error.contains("mandatory") || error.contains("not supported"))
+        || error.contains("mandatory") || error.contains("not supported")
+        || error.contains("does not support") || error.contains("unsupported value")
+        || error.contains("unsupported parameter"))
 }
 
 pub async fn run_turn(
@@ -2160,6 +2162,7 @@ async fn run_turn_with_opened_tools(
         });
     }
     let mut catalog = crate::agent_tool_catalog::ToolCatalog::new(tools, plugin_tools);
+    let mut selection = crate::jev_decisions::prepare(&conversation, &mut catalog, canvas_key).await;
     if catalog.is_deferred() {
         conversation.push(json!({"role":"system","content":"Additional tools from this agent's connected plugins are available through xnaut_search_tools and xnaut_load_tools. Search and load missing tools before claiming a capability is unavailable. Newly loaded tools can be called in your next response, not the same batch. Discovery and loading do not execute the requested work."}));
     }
@@ -2228,6 +2231,9 @@ async fn run_turn_with_opened_tools(
         }));
     }
 
+    let action_requested = wants_action(&conversation);
+    let mut retried_without_tools = false;
+    let mut omit_reasoning = false;
     for _ in 0..MAX_ROUNDS {
         // reasoning_effort is FORCED to none on a tool turn. Verified against
         // NautGate on 2026-08-15, which answered:
@@ -2254,7 +2260,7 @@ async fn run_turn_with_opened_tools(
                 "messages": conversation,
                 "tools": tools,
             });
-            if attempt == 0 {
+            if !omit_reasoning {
                 body["reasoning_effort"] = json!("none");
             }
             body["stream"] = json!(true);
@@ -2284,20 +2290,19 @@ async fn run_turn_with_opened_tools(
             if status.is_success() {
                 match read_round(response, stream_to).await {
                     Ok(result) => { round = result; break; }
-                    Err(error) if attempt == 0 && reasoning_override_rejected(&error) => continue,
+                    Err(error) if attempt == 0 && !omit_reasoning && reasoning_override_rejected(&error) => { omit_reasoning = true; continue; },
                     Err(error) => return Err(error),
                 }
             }
             let payload: Value = response.json().await.unwrap_or(Value::Null);
-            if attempt == 1 {
-                let detail = payload
-                    .get("error")
-                    .and_then(|error| error.get("message"))
-                    .and_then(Value::as_str)
-                    .or_else(|| payload.get("detail").and_then(Value::as_str))
-                    .unwrap_or("unknown error");
-                return Err(format!("{status}: {detail}{}", receipt.error_suffix()));
+            let detail = payload.pointer("/error/message").and_then(Value::as_str)
+                .or_else(|| payload.get("detail").and_then(Value::as_str))
+                .unwrap_or("unknown error");
+            if attempt == 0 && !omit_reasoning && reasoning_override_rejected(detail) {
+                omit_reasoning = true;
+                continue;
             }
+            return Err(format!("{status}: {detail}{}", receipt.error_suffix()));
         }
         let message = round.message();
         let calls = message
@@ -2306,6 +2311,17 @@ async fn run_turn_with_opened_tools(
             .cloned()
             .unwrap_or_default();
         if calls.is_empty() {
+            // One bounded recovery for an action request that stopped at prose.
+            // Never force a random tool, repeat a side effect, or retry a valid
+            // coding-session handoff. A clarification/refusal remains possible.
+            let handoff = message["content"].as_str().unwrap_or("").trim_start()
+                .lines().next().is_some_and(|line| line.trim() == crate::composer::BUILD_MARKER);
+            if action_requested && attempted.is_empty() && !retried_without_tools && !handoff && !read_only_panel {
+                retried_without_tools = true;
+                conversation.push(message);
+                conversation.push(json!({"role":"system","content":"No tool has run in this turn. The owner requested work, not a restatement. If the available tools can make progress, call them now; discover deferred tools if needed. Do not fabricate tool names or outcomes. If the work requires a coding runtime and no connected tool covers it, use the BUILD-REQUEST handoff. If information or authority is missing, ask the specific question. Do not claim an audit, verification, or sign-off without execution evidence."}));
+                continue;
+            }
             let text = message
                 .get("content")
                 .and_then(Value::as_str)
@@ -2320,6 +2336,7 @@ async fn run_turn_with_opened_tools(
             for session in sessions {
                 session.close().await;
             }
+            if let Some(trace) = selection.as_mut() { trace.finish("answered"); }
             let document_written = wrote_note || wrote_document(&performed);
             return Ok(TurnOutcome {
                 text,
@@ -2389,6 +2406,7 @@ async fn run_turn_with_opened_tools(
                     "error": result.get("error").and_then(Value::as_str),
                 }));
             }
+            if let Some(trace) = selection.as_mut() { trace.tool(&name, if worked { "completed" } else { "failed" }); }
             if worked && !crate::agent_tool_catalog::is_catalog_call(&name) {
                 performed.push(format!("{name} {}", args));
                 if surface.is_none() {
@@ -2541,6 +2559,70 @@ mod tests {
         use tokio::io::AsyncWriteExt;
         let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         socket.write_all(reply.as_bytes()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_none_retries_sse_and_http_errors_without_losing_tools() {
+        const ERROR: &str = "Unsupported value: 'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium', 'high', and 'xhigh'.";
+        assert!(reasoning_override_rejected(ERROR));
+        for status in [200, 400] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let mut original = Value::Null;
+                for step in 0..2 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let body = read_test_http(&mut socket).await;
+                    if step == 0 {
+                        assert_eq!(body["reasoning_effort"], "none");
+                        original = body["tools"].clone();
+                        let error = json!({"error":{"message":ERROR}}).to_string();
+                        if status == 200 {
+                            write_test_http(&mut socket,"text/event-stream", &format!("data: {error}\n\n")).await;
+                        } else {
+                            use tokio::io::AsyncWriteExt;
+                            socket.write_all(format!("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{error}",error.len()).as_bytes()).await.unwrap();
+                        }
+                    } else {
+                        assert!(body.get("reasoning_effort").is_none());
+                        assert_eq!(body["tools"], original);
+                        write_test_http(&mut socket,"text/event-stream", "data: {\"choices\":[{\"delta\":{\"content\":\"Ready.\"}}]}\n\ndata: [DONE]\n\n").await;
+                    }
+                }
+            });
+            let llm = crate::settings::LlmSettings { endpoint:format!("http://{addr}/v1"), ..Default::default() };
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), run_turn_with_opened_tools(&llm,"gpt-6-astra",vec![json!({"role":"user","content":"Hello"})],None,"fixture",None,(vec![],vec![],vec![]))).await.unwrap().unwrap();
+            assert_eq!(result.text,"Ready.");
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn action_without_calls_gets_one_recovery_but_handoff_and_questions_do_not() {
+        for (request, first, rounds) in [
+            ("Run a security audit of JobUp", "Clean-clone audit with verification and report.", 2),
+            ("Run a security audit of JobUp", "BUILD-REQUEST\nAudit JobUp with verification.", 1),
+            ("What is a security report?", "A report lists evidence and findings.", 1),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                for step in 0..rounds {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let body = read_test_http(&mut socket).await;
+                    assert!(body["tools"].as_array().unwrap().len() <= 128);
+                    assert!(body.get("tool_choice").is_none(), "never force unrelated work");
+                    if step == 1 { assert!(body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("No tool has run")); }
+                    let text = if step == 0 { first } else { "Which repository URL identifies JobUp?" };
+                    write_test_http(&mut socket, "text/event-stream", &format!("data: {}\n\ndata: [DONE]\n\n",json!({"choices":[{"delta":{"content":text}}]}))).await;
+                }
+            });
+            let llm = crate::settings::LlmSettings { endpoint:format!("http://{addr}/v1"), ..Default::default() };
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), run_turn_with_opened_tools(&llm,"fixture",vec![json!({"role":"user","content":request})],None,"fixture",None,(vec![],vec![],vec![]))).await.unwrap().unwrap();
+            assert!(result.performed.is_empty());
+            assert_eq!(result.text, if rounds == 2 { "Which repository URL identifies JobUp?" } else { first });
+            server.await.unwrap();
+        }
     }
 
     // This covers the actual SSE request loop and MCP execution, not just the

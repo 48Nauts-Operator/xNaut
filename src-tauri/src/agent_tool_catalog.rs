@@ -53,6 +53,33 @@ impl ToolCatalog {
         }
     }
 
+    pub fn all(&self) -> &[Value] {
+        &self.all
+    }
+
+    /// Activate a recommendation only after every name is validated. Discovery
+    /// remains available even when the original catalog was smaller than 128.
+    pub fn preselect(&mut self, names: &[String]) -> Result<(), String> {
+        if names.is_empty() || names.len() > TOOL_LIMIT - 2 {
+            return Err("Invalid tool selection size".into());
+        }
+        let mut selected = Vec::new();
+        for requested in names {
+            let schema = self
+                .all
+                .iter()
+                .find(|tool| name(tool) == requested)
+                .ok_or("Selected tool is not permitted for this turn")?;
+            if !selected.contains(schema) {
+                selected.push(schema.clone());
+            }
+        }
+        self.pinned.clear();
+        self.selected = selected;
+        self.overflow = true;
+        Ok(())
+    }
+
     pub fn is_deferred(&self) -> bool {
         self.overflow
     }

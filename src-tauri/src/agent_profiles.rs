@@ -45,6 +45,9 @@ pub struct AgentProfile {
     /// keeps behaving exactly as it did.
     #[serde(default)]
     pub chat_model: String,
+    /// In-app chat route, independent of the runtime provider. Empty inherits.
+    #[serde(default)]
+    pub chat_provider: String,
     #[serde(default)]
     pub reasoning_effort: String,
     /// How many runs one confirmed swarm may start (XNAUT-354).
@@ -77,6 +80,10 @@ pub struct AgentProfile {
 }
 
 impl AgentProfile {
+    pub fn chat_provider_or_provider(&self) -> &str {
+        if self.chat_provider.trim().is_empty() { self.provider.trim() } else { self.chat_provider.trim() }
+    }
+
     /// The model an in-app chat turn should use.
     ///
     /// `chat_model` when it is set, otherwise `model`. Empty means "unchanged",
@@ -741,6 +748,7 @@ fn default_profile_for_runtime(
         runtime_id: runtime.id.clone(),
         provider: inferred_provider(&runtime.id),
         model: String::new(),
+        chat_provider: String::new(),
         chat_model: String::new(),
         reasoning_effort: String::new(),
         max_parallel: default_max_parallel(),
@@ -765,6 +773,7 @@ fn default_nautbot_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         runtime_id: runtime_id.to_string(),
         provider: "nautgate".to_string(),
         model: "gpt-5.6-sol".to_string(),
+        chat_provider: String::new(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
         max_parallel: default_max_parallel(),
@@ -801,6 +810,7 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
         runtime_id: runtime_id.to_string(),
         provider: "nautgate".to_string(),
         model: "gpt-5.6-sol".to_string(),
+        chat_provider: String::new(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
         max_parallel: default_max_parallel(),
@@ -837,6 +847,7 @@ fn default_ralph_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         runtime_id: runtime_id.to_string(),
         provider: "nautgate".to_string(),
         model: "gpt-5.6-sol".to_string(),
+        chat_provider: String::new(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
         max_parallel: default_max_parallel(),
@@ -880,6 +891,7 @@ fn default_otto_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         runtime_id: runtime_id.to_string(),
         provider: "nautgate".to_string(),
         model: "gpt-5.6-sol".to_string(),
+        chat_provider: String::new(),
         chat_model: String::new(),
         reasoning_effort: "high".to_string(),
         max_parallel: default_max_parallel(),
@@ -921,6 +933,7 @@ fn default_reviewer_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         runtime_id: runtime_id.to_string(),
         provider: "anthropic".to_string(),
         model: "claude-sonnet-5".to_string(),
+        chat_provider: String::new(),
         chat_model: String::new(),
         reasoning_effort: String::new(),
         max_parallel: default_max_parallel(),
@@ -959,6 +972,7 @@ fn default_researcher_profile(runtime_id: &str, timestamp: &str) -> AgentProfile
         runtime_id: runtime_id.to_string(),
         provider: "perplexity".to_string(),
         model: "sonar-pro".to_string(),
+        chat_provider: String::new(),
         chat_model: String::new(),
         reasoning_effort: String::new(),
         // The swarm cap is @nautbot's (XNAUT-354); a researcher starts no batch.
@@ -1312,6 +1326,7 @@ pub fn create_profile_from(
             .unwrap_or_default(),
         // A new agent inherits NautBot's chat route, so an agent created while
         // the gateway cannot carry tool calls is not born unable to act.
+        chat_provider: nautbot.as_ref().map(|p| p.chat_provider.clone()).unwrap_or_default(),
         chat_model: nautbot.as_ref().map(|p| p.chat_model.clone()).unwrap_or_default(),
         reasoning_effort: "high".to_string(),
         max_parallel: default_max_parallel(),
@@ -1718,7 +1733,7 @@ pub async fn agent_chat_turn(
     }];
     turn.extend(messages);
     let effort = (!profile.reasoning_effort.trim().is_empty()).then(|| profile.reasoning_effort.clone());
-    let provider = profile.provider.trim();
+    let provider = profile.chat_provider_or_provider();
 
     // An agent that can only DESCRIBE how to switch a plugin on is answering
     // about the product instead of operating it. Try the tool loop first; fall
@@ -1911,7 +1926,7 @@ pub async fn agent_chat_turn(
 const ACTION_CLAIMS: &[&str] = &[
     "started", "starting", "running in", "kicked off", "launched", "woke",
     "assigned", "reassigned", "created the ticket", "filed", "updated the ticket",
-    "merged", "verified", "verification", "handed back", "set to", "moved to",
+    "merged", "verified", "handed back", "set to", "moved to",
 ];
 
 /// The note appended when an answer claims work that no tool performed.
@@ -1924,16 +1939,20 @@ const ACTION_CLAIMS: &[&str] = &[
 /// same shape as the tool-failure notice above, and for the same reason: a
 /// false record costs someone a debugging session.
 pub fn unbacked_claim_notice(text: &str) -> Option<String> {
+    if text.lines().next().is_some_and(|line| line.trim() == crate::composer::BUILD_MARKER) { return None; }
     let lower = text.to_ascii_lowercase();
     let claimed = ACTION_CLAIMS.iter().find(|word| lower.contains(**word))?;
     Some(format!(
         "\n\n---\n**No tools ran this turn**, so nothing was started, changed or looked up \
-above, whatever the wording says (\"{claimed}\"). If this needed an action, ask again and name \
-the tool; if it did not, ignore this line."
+above. The reply mentions \"{claimed}\", but there is no execution receipt. \
+The requested action has not been verified."
     ))
 }
 
 pub fn tool_failure_notice(model: &str, error: &str) -> String {
+    if error.contains("/v1/responses") && error.contains("tools") {
+        return format!("\n\n---\n**Tool transport incompatible.** `{model}` requires a compatible Responses route for this request. The current Chat Completions route rejected it, so no work started through this request. NautGate must preserve the native Responses protocol; changing the token limit or tool list alone will not fix this.\n\n> {}",error.trim());
+    }
     if error.contains("tools") && error.contains("array too long") {
         return format!("\n\n---\n**Tool request rejected.** xNaut sent more tool definitions than the route accepts. The requested work did not start through this request. This is a tool-catalog issue, not evidence that `{model}` cannot use tools.\n\n> {}", error.trim());
     }
@@ -3557,6 +3576,7 @@ mod tests {
             runtime_id: runtime_id.to_string(),
             provider: "nautgate".into(),
             model: String::new(),
+            chat_provider: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
             max_parallel: default_max_parallel(),
@@ -4065,6 +4085,7 @@ accent_color = ""
             runtime_id: "codex".into(),
             provider: "nautgate".into(),
             model: "gpt-5.6-sol".into(),
+            chat_provider: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
             max_parallel: default_max_parallel(),
@@ -4082,6 +4103,14 @@ accent_color = ""
         // exactly as it did.
         assert_eq!(profile.chat_model_or_model(), "gpt-5.6-sol");
 
+        assert_eq!(profile.chat_provider_or_provider(), "nautgate");
+        profile.chat_provider = "lmstudio".into();
+        assert_eq!(profile.chat_provider_or_provider(), "lmstudio");
+        assert_eq!(profile.provider, "nautgate");
+        let mut legacy = serde_json::to_value(&profile).unwrap();
+        legacy.as_object_mut().unwrap().remove("chat_provider");
+        let legacy: AgentProfile = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.chat_provider_or_provider(), "nautgate");
         profile.chat_model = "lmstudio/qwen/qwen3.6-35b-a3b".into();
         assert_eq!(profile.chat_model_or_model(), "lmstudio/qwen/qwen3.6-35b-a3b");
         // The launch model is untouched, which is the whole point.
@@ -4255,6 +4284,8 @@ You are a systems architect.
         // A description of what COULD be done is not a claim about what was.
         assert!(unbacked_claim_notice("You could ask me to assign it, and I would use update_ticket.").is_none());
         assert!(unbacked_claim_notice("The board has 64 ready tickets.").is_none());
+        assert!(unbacked_claim_notice("Clean-clone security audit of JobUp with remediation verification and final security report.").is_none());
+        assert!(unbacked_claim_notice("BUILD-REQUEST\nAudit JobUp, including verification of fixes.").is_none());
     }
 
     #[test]
@@ -4569,6 +4600,7 @@ You are a systems architect.
             runtime_id: "codex".to_string(),
             provider: "openai".to_string(),
             model: "gpt-5".to_string(),
+            chat_provider: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
             max_parallel: default_max_parallel(),

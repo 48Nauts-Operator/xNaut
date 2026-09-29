@@ -112,6 +112,16 @@ fn store_path() -> PathBuf {
 pub fn seed() -> Vec<Plugin> {
     vec![
         Plugin {
+            id: "paper".into(), name: "Paper".into(),
+            description: "Design and inspect files in the local Paper desktop application through its MCP server.".into(),
+            transport: Transport::Http, command: String::new(), args: vec![],
+            url: "http://127.0.0.1:29979/mcp".into(), headers: HashMap::new(),
+            category: "Design".into(),
+            note: "Open Paper on the same computer as xNaut. Enable this connector and assign it to the agent; Codex/Claude global MCP configuration is separate. A remote sandbox cannot reach this computer's loopback address.".into(),
+            env: HashMap::new(), required_env: vec![], skills: vec![], owner_edited: false,
+            enabled: false, docs_url: String::new(), seeded: true,
+        },
+        Plugin {
             id: "context7".into(),
             name: "Context7".into(),
             description: "Current library and framework documentation, fetched per question instead of recalled from training data.".into(),
@@ -1660,17 +1670,18 @@ pub fn launch_env(runtime_id: &str, plugins: &[Plugin]) -> HashMap<String, Strin
     if runtime_id != "codex" {
         return HashMap::new();
     }
-    plugins
-        .iter()
-        .filter(|plugin| plugin.transport == Transport::Stdio)
-        .flat_map(|plugin| {
-            plugin
-                .env
-                .iter()
-                .filter(|(key, value)| exportable(key) && !value.trim().is_empty())
-                .map(|(key, value)| (codex_env_name(&plugin.id, key), value.clone()))
-        })
-        .collect()
+    let mut result = HashMap::new();
+    for plugin in plugins {
+        match plugin.transport {
+            Transport::Stdio => for (key,value) in &plugin.env {
+                if exportable(key) && !value.trim().is_empty() { result.insert(codex_env_name(&plugin.id,key),value.clone()); }
+            },
+            Transport::Http => for (key,value) in &plugin.headers {
+                if !value.trim().is_empty() { result.insert(codex_env_name(&plugin.id,&format!("HTTP_{key}")),value.clone()); }
+            },
+        }
+    }
+    result
 }
 
 /// TOML value for one codex `-c mcp_servers.<id>=<value>` override.
@@ -1680,7 +1691,12 @@ pub fn launch_env(runtime_id: &str, plugins: &[Plugin]) -> HashMap<String, Strin
 fn codex_value(plugin: &Plugin) -> String {
     let quote = |value: &str| format!("{:?}", value);
     match plugin.transport {
-        Transport::Http => format!("{{url={}}}", quote(&plugin.url)),
+        Transport::Http => {
+            let mut headers: Vec<_> = plugin.headers.iter().filter(|(_,v)| !v.trim().is_empty()).collect();
+            headers.sort();
+            let mapping = headers.into_iter().map(|(key,_)| format!("{}={}",quote(key),quote(&codex_env_name(&plugin.id,&format!("HTTP_{key}"))))).collect::<Vec<_>>().join(",");
+            format!("{{url={},env_http_headers={{{mapping}}}}}",quote(&plugin.url))
+        },
         Transport::Stdio => {
             let resolved = plugin.resolved_args();
             let mut creds: Vec<(&String, &String)> = plugin
@@ -1770,19 +1786,11 @@ pub fn launch_flags(
             }
             vec!["--mcp-config".into(), path.to_string_lossy().into_owned()]
         }
-        // Plugins reach codex as stdio servers only: a url-shaped PLUGIN entry
-        // codex may not understand would fail the whole run at startup, a bad
-        // trade for one plugin. xNAUT's own server is different: codex 0.153
-        // takes streamable-http servers with `bearer_token_env_var` and
-        // `env_http_headers`, so the entry names the env variables the launch
-        // already sets and nothing secret lands in argv. Until 2026-09-05 this
-        // half of XNAUT-246 was missing (XNAUT-290): NautBot, on codex, the
-        // one agent whose job is moving tickets, was the one agent without
-        // xnaut_update_ticket and worked the board by curl.
+        // Both transports are supported by Codex. HTTP credentials travel by
+        // named environment variables, just like the built-in xNaut MCP route.
         "codex" => {
             let mut flags: Vec<String> = plugins
                 .iter()
-                .filter(|plugin| plugin.transport == Transport::Stdio)
                 .flat_map(|plugin| {
                     vec![
                         "-c".to_string(),
@@ -2135,6 +2143,20 @@ mod tests {
     }
 
     #[test]
+    fn codex_receives_http_plugins_without_credentials_in_argv() {
+        let mut plugin = seed().into_iter().find(|p|p.id=="paper").unwrap();
+        plugin.headers.insert("Authorization".into(),"Bearer fixture-secret".into());
+        let flags = launch_flags("codex", &[plugin.clone()],None);
+        assert_eq!(flags.len(),2);
+        assert!(flags[1].contains("mcp_servers.paper="));
+        assert!(!flags[1].contains("fixture-secret"));
+        let parsed:toml::Value=toml::from_str(&flags[1]).unwrap();
+        assert_eq!(parsed["mcp_servers"]["paper"]["url"].as_str(),Some("http://127.0.0.1:29979/mcp"));
+        assert_eq!(parsed["mcp_servers"]["paper"]["env_http_headers"]["Authorization"].as_str(),Some("XNAUT_P_PAPER_HTTP_AUTHORIZATION"));
+        assert_eq!(launch_env("codex",&[plugin])["XNAUT_P_PAPER_HTTP_AUTHORIZATION"],"Bearer fixture-secret");
+    }
+
+    #[test]
     fn claude_gets_a_config_file_and_codex_gets_overrides() {
         let plugins = vec![stdio("context7")];
         let flags = launch_flags("claude", &plugins, None);
@@ -2336,13 +2358,13 @@ mod tests {
     }
 
     #[test]
-    fn codex_never_receives_an_http_plugin() {
+    fn modern_codex_and_claude_receive_http_plugins() {
         let http = seed().into_iter().find(|p| p.id == "linear").unwrap();
-        assert!(launch_flags("codex", &[http.clone()], None).is_empty());
+        assert!(!launch_flags("codex", &[http.clone()], None).is_empty());
         assert!(!launch_flags("claude", &[http], None).is_empty());
     }
 
-    /// XNAUT-290. The one http server codex DOES get is xNAUT's own, and it
+    /// XNAUT-290. Codex also gets xNAUT's own HTTP MCP server, and it
     /// gets it with no secret in argv: the token and the session id are named
     /// by environment variable, which the launch sets.
     #[test]

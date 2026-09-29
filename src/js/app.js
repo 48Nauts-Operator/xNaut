@@ -2655,7 +2655,7 @@ function aiSettingsChatApiKey(provider) {
   return '';
 }
 
-window.xnautSyncChatSettingsFromAiSettings = async function() {
+window.xnautSyncChatSettingsFromAiSettings = async function(options = {}) {
   const provider = settings.llmProvider || '';
   const endpoint = aiSettingsChatEndpoint(provider);
   const model = settings.llmModel || '';
@@ -2690,12 +2690,18 @@ window.xnautSyncChatSettingsFromAiSettings = async function() {
       api_key: update.api_key || configuredProviders[index].api_key || null,
     };
   });
+  if (current.chat_model_source === 'workspace' && !options.overrideDefault && current.llm?.provider) {
+    const index = configuredProviders.findIndex(item => item.name === current.llm.provider);
+    const entry = {...(configuredProviders[index] || {}), name:current.llm.provider, endpoint:current.llm.endpoint, api_key:current.llm.api_key || null, enabled:true};
+    if (index < 0) configuredProviders.push(entry); else configuredProviders[index] = entry;
+  }
   await invoke('settings_set', {
     settings: {
       ...current,
       // harness_local rides along even when no default model is picked yet —
       // agent_launch reads it, and a fresh install has no model selected.
-      llm: endpoint && model ? {
+      chat_model_source: options.overrideDefault ? 'ai' : current.chat_model_source,
+      llm: endpoint && model && (options.overrideDefault || current.chat_model_source !== 'workspace') ? {
         ...(current.llm || {}),
         provider,
         endpoint,
@@ -2757,7 +2763,7 @@ window.saveAISettings = async function(btn) {
   localStorage.setItem('xnaut-settings', JSON.stringify(settings));
   try {
     await saveMcpSettings();
-    await window.xnautSyncChatSettingsFromAiSettings();
+    await window.xnautSyncChatSettingsFromAiSettings({ overrideDefault: true });
     flashSavedButton(btn);
   } catch (e) {
     console.error('Failed to sync chat settings:', e);

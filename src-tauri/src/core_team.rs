@@ -2306,6 +2306,7 @@ branch refs/heads/poc/acme-loop-runner
             runtime_id: "claude".into(),
             provider: provider.into(),
             model: "m".into(),
+            chat_provider: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
             max_parallel: 0,

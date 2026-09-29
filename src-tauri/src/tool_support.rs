@@ -27,7 +27,7 @@ const TTL: Duration = Duration::from_secs(15 * 60);
 pub struct ToolSupport {
     pub provider: String,
     pub model: String,
-    /// True only when the route answered 2xx to a request carrying tools.
+    /// True only when the route returned the requested ping tool call.
     pub supported: bool,
     /// The upstream's own words when it did not. This is the sentence that
     /// tells you whether to open a billing page or change a key.
@@ -72,14 +72,15 @@ pub fn forget_all() {
 /// The smallest request that proves a route can carry tools.
 ///
 /// One function, no arguments, one word of prompt, and `reasoning_effort:
-/// "none"` because tools plus an effort setting is its own 502 on this gateway
-/// (see agent_tools.rs). What matters is the status code, not the answer.
+/// "none"` for older gateway routes, retried without that override if rejected.
+/// The result must contain a ping call; accepting the schemas is insufficient.
 pub fn probe_body(model: &str) -> serde_json::Value {
     serde_json::json!({
         "model": model,
-        "messages": [{ "role": "user", "content": "ping" }],
+        "messages": [{ "role": "user", "content": "Call the ping tool exactly once with no arguments. Do not answer in prose." }],
         "reasoning_effort": "none",
-        "max_tokens": 16,
+        "max_completion_tokens": 4096,
+        "tool_choice": {"type":"function","function":{"name":"ping"}},
         "tools": [{
             "type": "function",
             "function": {
@@ -112,6 +113,11 @@ pub fn upstream_reason(status: u16, payload: &serde_json::Value) -> String {
     }
 }
 
+fn has_ping_call(payload: &serde_json::Value) -> bool {
+    payload.pointer("/choices/0/message/tool_calls").and_then(serde_json::Value::as_array)
+        .is_some_and(|calls| calls.iter().any(|call| call.pointer("/function/name").and_then(serde_json::Value::as_str) == Some("ping")))
+}
+
 /// Probe one provider+model. Cached; pass `refresh` to ignore what is stored.
 #[tauri::command]
 pub async fn model_tool_support(
@@ -141,6 +147,12 @@ pub async fn model_tool_support(
         crate::chat::provider_llm(&settings, &provider)
             .ok_or_else(|| format!("no provider configured called {provider}"))?
     };
+    let support = probe_route(&llm, &provider, &model).await?;
+    remember(&support, now);
+    Ok(support)
+}
+
+async fn probe_route(llm: &crate::settings::LlmSettings, provider: &str, model: &str) -> Result<ToolSupport,String> {
     let url = crate::chat::join_endpoint(&llm.endpoint, "chat/completions");
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -148,25 +160,27 @@ pub async fn model_tool_support(
         .build()
         .map_err(|error| format!("failed to build http client: {error}"))?;
 
-    let response = crate::chat::apply_auth(client.post(&url), &llm.api_key)
-        .json(&probe_body(&model))
-        .send()
-        .await
-        .map_err(|error| format!("probe request failed: {error}"))?;
-    let status = response.status();
-    let payload: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
-
-    let support = ToolSupport {
-        provider: provider.clone(),
-        model: model.clone(),
-        supported: status.is_success(),
-        reason: if status.is_success() {
-            String::new()
-        } else {
-            upstream_reason(status.as_u16(), &payload)
-        },
-    };
-    remember(&support, now);
+    let mut body = probe_body(&model);
+    let mut support = ToolSupport { provider: provider.into(), model: model.into(), supported: false, reason: String::new() };
+    for attempt in 0..3 {
+        let response = crate::chat::apply_auth(client.post(&url), &llm.api_key)
+            .json(&body).send().await.map_err(|error| format!("probe request failed: {error}"))?;
+        let status = response.status();
+        let payload: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
+        let reason = upstream_reason(status.as_u16(), &payload);
+        // HTTP 200 can still carry an upstream error. The probe and actual
+        // tool loop must agree before caching a model as unsupported.
+        if attempt < 2 && crate::chat::adapt_rejected_request(&mut body, &reason) {
+            continue;
+        }
+        support.supported = status.is_success() && payload.get("error").is_none() && has_ping_call(&payload);
+        support.reason = if support.supported { String::new() } else if status.is_success() && payload.get("error").is_none() {
+            "The route accepted the request but returned no ping tool call; tool execution is unverified.".into()
+        } else if reason.contains("/v1/responses") && reason.contains("tools") {
+            format!("Native Responses transport required. This NautGate route must preserve Responses function calls; Chat Completions cannot serve this tool request. {reason}")
+        } else { reason };
+        break;
+    }
     Ok(support)
 }
 
@@ -180,6 +194,18 @@ pub fn model_tool_support_reset() {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "explicit live NautGate route probe; no tool is executed"]
+    async fn live_selected_gateway_model_runs_ping() {
+        let model = std::env::var("XNAUT_PROBE_MODEL").expect("explicit model");
+        let settings = crate::settings::load_or_default();
+        let llm = crate::chat::provider_llm(&settings,"nautgate").expect("configured NautGate");
+        let started = Instant::now();
+        let result = probe_route(&llm,"nautgate",&model).await.unwrap();
+        println!("ROUTE_PROBE {} {}ms",serde_json::to_string(&result).unwrap(),started.elapsed().as_millis());
+        assert!(result.supported,"{}",result.reason);
+    }
+
     #[test]
     /// The probe has to CARRY tools, or it proves nothing. A payload that lost
     /// its tools array would answer 200 on exactly the routes this exists to
@@ -191,6 +217,22 @@ mod tests {
         assert_eq!(body.pointer("/tools/0/function/name").and_then(serde_json::Value::as_str), Some("ping"));
         // Tools plus an effort setting is its own 502 on this gateway.
         assert_eq!(body.get("reasoning_effort").and_then(serde_json::Value::as_str), Some("none"));
+    }
+
+    #[test]
+    fn modern_and_legacy_limits_adapt_without_masking_auth_or_fabricating_execution() {
+        let mut body = probe_body("gpt-6-astra");
+        assert_eq!(body["max_completion_tokens"],4096);
+        assert!(body.get("max_tokens").is_none());
+        assert!(crate::chat::adapt_rejected_request(&mut body,"Unsupported value: 'reasoning_effort' does not support 'none' with this model"));
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(!crate::chat::adapt_rejected_request(&mut body,"Invalid API key"));
+        let mut old = serde_json::json!({"max_tokens":4096,"tools":[{"type":"function"}]});
+        assert!(crate::chat::adapt_rejected_request(&mut old,"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."));
+        assert_eq!(old["max_completion_tokens"],4096);
+        assert!(old.get("tools").is_some());
+        assert!(!has_ping_call(&serde_json::json!({"choices":[{"message":{"content":"Done"}}]})));
+        assert!(has_ping_call(&serde_json::json!({"choices":[{"message":{"tool_calls":[{"function":{"name":"ping","arguments":"{}"}}]}}]})));
     }
 
     #[test]

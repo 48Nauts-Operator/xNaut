@@ -158,6 +158,22 @@ fn body_excerpt(body: &str) -> String {
     format!("{}…", &trimmed[..end])
 }
 
+/// Retry only explicit parameter rejection, before any tool can execute.
+/// Providers can wrap the same validation message in HTTP 400 or 502.
+pub(crate) fn adapt_rejected_request(body: &mut serde_json::Value, error: &str) -> bool {
+    let reason = error.to_ascii_lowercase();
+    let Some(object) = body.as_object_mut() else { return false; };
+    if crate::agent_tools::reasoning_override_rejected(error) && object.remove("reasoning_effort").is_some() { return true; }
+    if reason.contains("unsupported") || reason.contains("not supported") || reason.contains("does not support") {
+        if reason.contains("'max_tokens'") && reason.contains("max_completion_tokens") {
+            if let Some(value) = object.remove("max_tokens") { object.insert("max_completion_tokens".into(),value); return true; }
+        } else if reason.contains("max_completion_tokens") {
+            if let Some(value) = object.remove("max_completion_tokens") { object.insert("max_tokens".into(),value); return true; }
+        }
+    }
+    false
+}
+
 fn streaming_request_body(
     model: &str,
     messages: Vec<ChatMessage>,
@@ -630,26 +646,18 @@ async fn chat_send_with_settings(
         .map_err(|e| format!("failed to build http client: {e}"))?;
 
     let url = join_endpoint(&llm.endpoint, "chat/completions");
-    let req = apply_auth(client.post(&url), &llm.api_key).json(&streaming_request_body(
-        model,
-        outgoing,
-        reasoning_effort.as_deref(),
-    ));
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("LLM request to {url} failed: {e}"))?;
-    let status = resp.status();
-    let receipt = NautGateReceipt::from_headers(resp.headers());
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "LLM request failed ({status}): {}{}",
-            body_excerpt(&body),
-            receipt.error_suffix(),
-        ));
-    }
+    let mut body = streaming_request_body(model, outgoing, reasoning_effort.as_deref());
+    let mut attempt = 0;
+    let (resp, receipt) = loop {
+        let resp = apply_auth(client.post(&url), &llm.api_key).json(&body).send().await
+            .map_err(|e| format!("LLM request to {url} failed: {e}"))?;
+        let status = resp.status();
+        let receipt = NautGateReceipt::from_headers(resp.headers());
+        if status.is_success() { break (resp, receipt); }
+        let error = resp.text().await.unwrap_or_default();
+        if attempt < 2 && adapt_rejected_request(&mut body, &error) { attempt += 1; continue; }
+        return Err(format!("LLM request failed ({status}): {}{}",body_excerpt(&error),receipt.error_suffix()));
+    };
 
     // Parse the SSE stream. Events can span chunk boundaries, so keep a byte
     // buffer and only consume complete newline-terminated lines.

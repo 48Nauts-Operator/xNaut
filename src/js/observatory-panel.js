@@ -341,16 +341,19 @@
     const strip = pane.querySelector("[data-strip]"); strip.before(summary); summary.appendChild(strip);
     window.xnautVoiceCost?.mountCard(summary);
     window.xnautJevCost?.mountCard(summary);
+    const decisions = document.createElement("div");
+    const decisionView = window.xnautJevDecisions.mount(decisions);
     const sections = {
       general: [summary, pane.querySelector('[data-sessions]'), pane.querySelector('[data-ledger-list]').closest('.obs-table')],
       agents: [pane.querySelector('[data-rows]').closest('.obs-table'), pane.querySelector('[data-swarm-pills]').closest('.obs-table')],
+      decisions: [decisions],
     };
     pane.querySelector('.obs-head').after(tabs);
     Object.entries(sections).forEach(([key, cards]) => {
       const page = document.createElement('section'); page.className = 'obs-page'; page.dataset.page = key;
       page.id = `${tabId}-obs-${key}`; page.setAttribute('role', 'tabpanel'); page.hidden = key !== 'general';
       const button = document.createElement('button'); button.className = 'obs-btn'; button.type = 'button';
-      button.textContent = key === 'general' ? 'General' : 'Agents'; button.dataset.pageTab = key;
+      button.textContent = {general:'General',agents:'Agents',decisions:'Decisions'}[key]; button.dataset.pageTab = key;
       button.id = `${page.id}-tab`; button.setAttribute('role', 'tab'); button.setAttribute('aria-controls', page.id);
       button.setAttribute('aria-selected', String(!page.hidden)); button.tabIndex = page.hidden ? -1 : 0;
       page.setAttribute('aria-labelledby', button.id);
@@ -359,11 +362,13 @@
         tabs.querySelectorAll('button').forEach(el => { const active = el === button; el.setAttribute('aria-selected', String(active)); el.tabIndex = active ? 0 : -1; });
         pane.querySelector('[data-stopall]').hidden = key !== 'agents';
         pane.scrollTop = 0;
+        if (key === 'decisions') void decisionView.refresh();
       };
       button.onkeydown = event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault(); const buttons = [...tabs.querySelectorAll('button')];
-        const next = event.key === 'Home' ? buttons[0] : event.key === 'End' ? buttons.at(-1) : buttons.find(el => el !== button);
+        const index = buttons.indexOf(button);
+        const next = event.key === 'Home' ? buttons[0] : event.key === 'End' ? buttons.at(-1) : buttons[(index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length];
         next.click(); next.focus();
       };
       tabs.appendChild(button); cards.forEach(card => page.appendChild(card)); pane.appendChild(page);
@@ -1251,7 +1256,7 @@
     // often would disarm a Kill button mid-question and reset the two selects
     // under the reader's hand. It repaints on Refresh, after a kill or an open,
     // and on the slow clock.
-    async function refresh() { await Promise.all([refreshFast(), renderStrip(), renderSessions()]); }
+    async function refresh() { await Promise.all([refreshFast(), renderStrip(), renderSessions(), decisionView.refresh()]); }
     pane.querySelector('[data-refresh]').onclick = async (e) => {
       const b = e.currentTarget; b.disabled = true; b.textContent = '↻ Refreshing…';
       try { await refresh(); } finally { b.disabled = false; b.textContent = '↻ Refresh'; }

@@ -271,6 +271,7 @@ mod tests {
             runtime_id: "claude".to_string(),
             provider: provider.to_string(),
             model: model.to_string(),
+            chat_provider: String::new(),
             chat_model: String::new(),
             reasoning_effort: String::new(),
             max_parallel: 0,

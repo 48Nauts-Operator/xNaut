@@ -307,6 +307,18 @@ pub async fn open_for(capabilities: &[String]) -> (Vec<Session>, Vec<Value>, Vec
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "read-only local Paper MCP handshake and tools/list"]
+    async fn local_paper_exposes_tools() {
+        let plugin = crate::plugins::seed().into_iter().find(|p| p.id == "paper").unwrap();
+        let mut session = Session::open(&plugin).await.expect("Paper MCP initialize");
+        let tools = session.tools().await.expect("Paper tools/list");
+        assert!(tools.iter().any(|t| t["function"]["name"] == "paper__get_basic_info"));
+        assert!(tools.iter().any(|t| t["function"]["name"] == "paper__list_files"));
+        println!("PAPER_MCP tools={} read_only_discovery=true",tools.len());
+        session.close().await;
+    }
+
     #[test]
     fn tool_names_are_namespaced_per_plugin() {
         // Two servers both offering "search" would otherwise collide, and the

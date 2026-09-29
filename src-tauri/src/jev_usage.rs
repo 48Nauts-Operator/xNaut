@@ -1,5 +1,6 @@
 //! xNaut-only Jev receipts. No account-wide balance, external demo logs, prompts
-//! or credentials are exposed. The future Jev caller records provider usage here.
+//! or credentials are exposed. Native decision receipts and legacy xNaut usage
+//! are combined here; unknown usage is shown separately instead of priced at zero.
 //! Pricing: https://docs.typesafe.ai/models.md (verified 2026-09-29).
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -23,10 +24,11 @@ pub struct Summary {
     output_tokens: u64,
     cost_usd: f64,
     unpriced_calls: usize,
+    unknown_calls: usize,
 }
 fn summary(receipts: Vec<Receipt>, month: &str, configured: bool) -> Summary {
     let mut result = Summary { configured, month: month.into(), calls: 0,
-        input_tokens: 0, output_tokens: 0, cost_usd: 0.0, unpriced_calls: 0 };
+        input_tokens: 0, output_tokens: 0, cost_usd: 0.0, unpriced_calls: 0, unknown_calls: 0 };
     let mut seen = std::collections::HashSet::new();
     for r in receipts {
         if !seen.insert(r.request_id) || !r.at.starts_with(&format!("{month}-")) { continue; }
@@ -54,8 +56,13 @@ pub async fn jev_usage() -> Result<Summary, String> {
             || crate::plugins::plugin_env("typesafe").is_some_and(|env| env.get("TYPESAFE_API_KEY").is_some_and(|v| !v.trim().is_empty()));
         // This file is reserved for xNaut's native Jev caller. Do not import
         // account totals: other tools may share the same credential.
-        let receipts = read(&root.join("jev-usage.json"))?;
-        Ok(summary(receipts, &chrono::Local::now().format("%Y-%m").to_string(), configured))
+        let mut receipts = read(&root.join("jev-usage.json"))?;
+        let (native, unknown) = crate::jev_decisions::usage_records()?;
+        receipts.extend(native);
+        let mut result = summary(receipts, &chrono::Utc::now().format("%Y-%m").to_string(), configured);
+        result.unknown_calls = unknown;
+        result.calls += unknown;
+        Ok(result)
     }).await.map_err(|e| e.to_string())?
 }
 #[cfg(test)]

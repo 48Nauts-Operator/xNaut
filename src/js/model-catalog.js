@@ -11,7 +11,12 @@
   let cache = null;
   try { cache = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (_) { cache = null; }
 
-  async function refresh() {
+  let pending = null;
+  function refresh() {
+    if (!pending) pending = fetchCatalog().finally(() => { pending = null; });
+    return pending;
+  }
+  async function fetchCatalog() {
     try {
       const list = (await invoke('chat_list_provider_models')) || [];
       const byProvider = {};

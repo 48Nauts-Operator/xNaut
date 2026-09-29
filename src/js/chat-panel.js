@@ -1814,6 +1814,22 @@
     if (opts.systemPromptAppend) {
       entry.systemPrompt += `\n\n${String(opts.systemPromptAppend).trim()}`;
     }
+    // Per-conversation selection never changes other chats or the CLI runtime.
+    const modelPreferenceKey = `xnaut-chat-model:${entry.chatKey}`;
+    if (!opts.modelOverride && !opts.providerOverride) {
+      try { const saved = JSON.parse(localStorage.getItem(modelPreferenceKey) || 'null');
+        if (saved) { entry.providerOverride = String(saved.provider || ''); entry.modelOverride = String(saved.model || ''); }
+      } catch (_) {}
+    }
+    window.xnautChatModelPicker?.mountChat(bar, {
+      get: () => ({provider: entry.providerOverride, model: entry.modelOverride}),
+      onChange: ({provider,model}) => {
+        entry.providerOverride=provider; entry.modelOverride=model;
+        try { localStorage.setItem(`xnaut-chat-model:${entry.chatKey}`, JSON.stringify({provider,model})); } catch (_) {}
+        const label = bar.querySelector('.chatp-model');
+        if (label) label.textContent = model || entry.settings.llm?.model || '';
+      },
+    });
     const titleEl = bar.querySelector('.chatp-title');
     if (titleEl && opts.title) titleEl.textContent = String(opts.title);
     if (opts.embedded) {
