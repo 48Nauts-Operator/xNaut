@@ -2297,46 +2297,53 @@ async fn launch_on_exe_dev(
 ) -> Result<crate::agents::LaunchAgentResponse, String> {
     use crate::sandbox::exe;
 
-    let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
-
-    // ISOLATION GRANULARITY (XNAUT-266): one directory per agent per PROJECT,
-    // not per worktree. Keyed per worktree, the agent's next ticket landed in a
-    // fresh directory with a cold `target/`, which is a thirty-minute Rust
-    // build instead of a three-minute one — and the warm cache is the whole
-    // reason to pay for a persistent VM. Keyed per project, the next ticket
-    // mirrors over the same directory and `push`'s exclusions leave `target/`
-    // and `node_modules` exactly as the last run left them. Two agents still
-    // get two directories, because `push` mirrors with `--delete`.
-    let workdir = exe::agent_workdir(&profile.handle, project)?;
-    let run_id = uuid::Uuid::new_v4().simple().to_string();
-    let session = exe::session_name(&profile.handle, &run_id);
-    let script = exe::run_script(
-        &workdir,
-        &command,
-        &session,
-        &crate::sandbox::launch_env::onboarding_seed(&cfg),
+    let mut run = crate::run_control::RunManifest::requested(
+        &profile.handle, &profile.runtime_id, &req.worktree_path, req.ticket.clone(),
+        (!profile.model.trim().is_empty()).then(|| profile.model.clone()),
+        &crate::run_control::ProjectSite::board(), crate::run_control::now_ms(),
     );
-
-    // ssh and rsync are blocking and a push is seconds, not milliseconds.
-    // Running them on the async executor would freeze the webview, the same
-    // failure class as the keystroke stall in b528872.
+    run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::ExeDev.key().into());
+    let run_id = run.run_id.clone();
+    let path = std::path::PathBuf::from(&req.worktree_path);
+    let root = project.to_path_buf();
+    let ticket = req.ticket.clone();
+    let handle = profile.handle.clone();
+    let id = run_id.clone();
+    let mut transfer = tokio::task::spawn_blocking(move || crate::repository_transfer::prepare(&path, &root, ticket, &handle, &id))
+        .await.map_err(|e| e.to_string())??;
+    let prompt = Some(format!("{}{}", prompt.unwrap_or_default(), crate::repository_transfer::instructions(&transfer)));
+    let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
+    let workdir = transfer.workdir.clone();
+    let session = exe::session_name(&profile.handle, &run_id);
+    let script = crate::repository_transfer::run_script(&transfer, &command, &crate::sandbox::launch_env::onboarding_seed(&cfg));
+    crate::repository_transfer::save(&transfer)?;
     let staged = {
-        let dir = std::path::PathBuf::from(&req.worktree_path);
-        let workdir = workdir.clone();
+        let snapshot = transfer.clone();
         let session = session.clone();
         let check_codex = uses_standard_codex_login(&cfg);
         tokio::task::spawn_blocking(move || -> Result<String, String> {
-            // Each step names itself, so an unreachable VM, a failed push and
-            // a failed staging are three different sentences rather than one
-            // shrug.
             exe::ensure()?;
             if check_codex { exe::codex_auth_ready()?; }
-            exe::push_to(&dir, &workdir)?;
-            exe::stage_script_in(&workdir, &session, &script)
-        })
-        .await
-        .map_err(|error| format!("the exe.dev launch task did not finish: {error}"))??
+            crate::repository_transfer::stage(&snapshot)?;
+            let relative = format!(".git/{session}.sh");
+            exe::repository_file(&snapshot.workdir, &relative, &script)?;
+            exe::repository_command(&format!("chmod +x {}", exe::shell_single_quote(&format!("{}/{relative}", snapshot.workdir))))?;
+            Ok(format!("{}/{relative}", snapshot.workdir))
+        }).await.map_err(|error| format!("the exe.dev launch task did not finish: {error}"))?
     };
+    let staged = match staged {
+        Ok(path) => path,
+        Err(error) => {
+            transfer.state = "preparation_failed".into(); transfer.error = Some(error.clone());
+            let _ = crate::repository_transfer::save(&transfer);
+            return Err(error);
+        }
+    };
+    let registry = crate::agents::registry_dir()?;
+    run.branch = transfer.branch.clone();
+    crate::run_control::request_in(&registry, run, || Ok(()))?;
+    transfer.state = "running".into();
+    crate::repository_transfer::save(&transfer)?;
 
     let pty_config = crate::pty::PtyConfig {
         shell: None,
@@ -2358,11 +2365,30 @@ async fn launch_on_exe_dev(
     let session_id = crate::pty::create_pty_session(app.clone(), state.clone(), pty_config)
         .await
         .map_err(|error| {
-            format!(
-                "could not open a viewport onto the {} run {session}: {error}",
-                exe::VM
-            )
+            let error = error.to_string();
+            transfer.state = "launch_failed".into(); transfer.error = Some(error.clone());
+            let _ = crate::repository_transfer::save(&transfer);
+            let _ = crate::run_control::update_in(&registry, &run_id, |run| { run.state = crate::run_control::RunState::Failed; run.last_signal = error.clone(); });
+            format!("could not open a viewport onto the {} run {session}: {error}", exe::VM)
         })?;
+    // The worker has started: failure to update bookkeeping must not invite
+    // a duplicate dispatch. Its durable receipt already exists.
+    if let Err(error) = crate::run_control::update_in(&registry, &run_id, |run| {
+        run.state = crate::run_control::RunState::Starting;
+        run.pty_session = Some(session_id.clone());
+        run.last_signal = "viewport opened; awaiting worker execution evidence".into();
+    }) { eprintln!("remote run registry update: {}", error); }
+    let probe_dir = workdir.clone();
+    if let Ok(Ok(proof)) = tokio::task::spawn_blocking(move || exe::repository_probe(&probe_dir)).await {
+        if let Some(pid) = proof["agent_pid"].as_u64() {
+            let _ = crate::run_control::update_in(&registry, &run_id, |run| {
+                run.state = crate::run_control::RunState::Running;
+                run.pid = Some(pid as u32);
+                run.last_seen_at = crate::run_control::now_ms();
+                run.last_signal = "exe.dev agent process observed".into();
+            });
+        }
+    }
     let env_key = crate::sandbox::launch_env::LaunchEnv::ExeDev.key();
 
     // Registered as REMOTE (XNAUT-266). The flag is what keeps the local
@@ -2378,7 +2404,7 @@ async fn launch_on_exe_dev(
     .await;
 
     Ok(crate::agents::LaunchAgentResponse {
-        run_id: None,
+        run_id: Some(run_id.clone()),
         session_id,
         agent_id: profile.handle.clone(),
         injection_mode: cfg.prompt_injection_mode,

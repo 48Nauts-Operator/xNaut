@@ -2828,6 +2828,36 @@ pub mod exe {
         }
     }
 
+    /// Avoid returning credential-helper output in errors.
+    pub fn repository_command(command: &str) -> Result<(), String> {
+        let out = ssh(&vm_host(), &format!("timeout 180s bash -lc {}", shell_single_quote(command)))?;
+        if out.status.success() { Ok(()) }
+        else { Err("Repository preparation on exe.dev failed; check worker repository access and Git LFS. Existing runs were preserved.".into()) }
+    }
+
+    pub fn repository_probe(workdir: &str) -> Result<serde_json::Value, String> {
+        let script = r#"import json, pathlib, subprocess, sys
+p = pathlib.Path.home() / sys.argv[1]
+phase = (p / '.git/xnaut-phase').read_text().strip()
+pid = None
+if phase == 'running':
+    parent = int((p / '.git/xnaut-supervisor.pid').read_text())
+    child = subprocess.run(['pgrep', '-o', '-P', str(parent)], capture_output=True, text=True, timeout=5)
+    if child.returncode == 0: pid = int(child.stdout.strip())
+head = subprocess.run(['git', '-C', str(p), 'rev-parse', 'HEAD'], capture_output=True, text=True, timeout=5).stdout.strip()
+print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase}))
+"#;
+        let command = format!("timeout 20s python3 -c {} {}", shell_single_quote(script), shell_single_quote(workdir));
+        let out = ssh(&vm_host(), &command)?;
+        if !out.status.success() { return Err("Could not read worker progress; existing data is retained.".into()); }
+        serde_json::from_slice(&out.stdout).map_err(|_| "Invalid worker progress".into())
+    }
+
+    pub fn repository_file(workdir: &str, relative: &str, body: &str) -> Result<(), String> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        repository_command(&format!("printf %s {} | base64 -d > {}", shell_single_quote(&STANDARD.encode(body)), shell_single_quote(&format!("{workdir}/{relative}"))))
+    }
+
     /// Run one verify step in the project dir. A login shell so per-user
     /// toolchains (rustup's ~/.cargo/env, nvm) are on PATH the way they are
     /// for a human ssh-ing in.

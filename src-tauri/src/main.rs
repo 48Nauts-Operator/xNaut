@@ -73,6 +73,8 @@ mod nudge;
 mod spend;
 mod sweep;
 mod run_control;
+mod repository_transfer;
+mod repository_notes;
 mod run_signals;
 mod jury;
 mod jev_usage;
@@ -575,6 +577,8 @@ async fn main() {
             project_management::pm_module_connect,
             project_management::pm_module_sync,
             project_management::pm_project_list,
+            repository_transfer::repository_transfer_list,
+            repository_notes::repository_notebook_queue,
             project_management::pm_project_import_existing,
             project_management::pm_project_create,
             project_management::pm_project_update,
@@ -865,6 +869,7 @@ async fn main() {
             // it finishes them before starting anything new.
             sweep::queue_retries(sandbox_verify::reap_orphaned_runs());
             sweep::spawn_sweep_task(app.handle().clone());
+            repository_transfer::spawn_reconciler(app.handle().clone());
 
             // Runs that outlived the last app (XNAUT-242): put them back on
             // the board before anything else asks "who is working".

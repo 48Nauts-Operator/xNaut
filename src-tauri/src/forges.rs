@@ -620,7 +620,7 @@ pub fn host_for_remote<'a>(hosts: &'a [ForgeHost], remote: &str) -> Option<(&'a 
         let configured_bare = configured.split(':').next().unwrap_or(configured);
         configured_bare == bare
             // api.github.com is configured for remotes written github.com.
-            || (host.kind == "github" && bare.ends_with("github.com"))
+            || (host.kind == "github" && bare == "github.com")
     })?;
     Some((matched, parsed))
 }
@@ -817,6 +817,33 @@ pub async fn create_repo_for_owner(
         }
         other => Err(format!("unknown forge kind: {other}")),
     }
+}
+
+/// Recover an existing review after a lost POST response or app restart.
+pub async fn ensure_pr(host: &ForgeHost, repo: &str, head: &str, base: &str, title: &str, body: &str) -> Result<String, String> {
+    if !matches!(host.kind.as_str(), "github" | "forgejo") {
+        return Err("Repository runs currently support Forgejo and GitHub PRs.".into());
+    }
+    let client = http_client()?;
+    let token = token_for(host)?;
+    let api = api_base(host)?;
+    for page in 1..=100 {
+        let mut url = url::Url::parse(&format!("{api}/repos/{}/{repo}/pulls", host.owner)).map_err(|e| e.to_string())?;
+        url.query_pairs_mut().append_pair("state", "all").append_pair("limit", "50").append_pair("per_page", "50").append_pair("page", &page.to_string());
+        if host.kind == "github" { url.query_pairs_mut().append_pair("head", &format!("{}:{head}", host.owner)).append_pair("base", base); }
+        let rows = request_json(&client, reqwest::Method::GET, url.as_str(), host, &token, None).await?;
+        let rows = rows.as_array().ok_or("Invalid pull request list")?;
+        for row in rows {
+            if row.pointer("/head/ref").and_then(Value::as_str) == Some(head)
+                && row.pointer("/base/ref").and_then(Value::as_str) == Some(base)
+            {
+                let link = str_field(row, "html_url");
+                if !link.is_empty() { return Ok(link); }
+            }
+        }
+        if rows.len() < 50 { return create_pr(host, repo, head, base, title, body).await; }
+    }
+    Err("Could not finish checking existing PRs; creation deferred to avoid a duplicate.".into())
 }
 
 /// Open a PR (merge request on GitLab); returns its html_url.
@@ -1147,4 +1174,28 @@ mod tests {
         assert_eq!(i.author, "andre");
         assert!(!i.is_pr);
     }
+    #[tokio::test]
+    async fn repository_pr_recovers_a_lost_response_for_both_forges() {
+        use axum::{extract::State, Json, Router, routing::get};
+        use std::sync::{Arc, Mutex};
+        async fn listing(State(rows): State<Arc<Mutex<Vec<Value>>>>) -> Json<Value> { Json(json!(*rows.lock().unwrap())) }
+        async fn create(State(rows): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>) -> Json<Value> {
+            let record = json!({"head":{"ref":body["head"]},"base":{"ref":body["base"]},"html_url":"https://example.test/pulls/1","state":"closed"});
+            rows.lock().unwrap().push(record.clone()); Json(record)
+        }
+        for kind in ["forgejo", "github"] {
+            let rows = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let route = if kind == "forgejo" { "/api/v1/repos/48Nauts/app/pulls" } else { "/repos/48Nauts/app/pulls" };
+            let router = Router::new().route(route, get(listing).post(create)).with_state(rows.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+            let config = host(kind, &format!("http://{address}"));
+            let first = ensure_pr(&config, "app", "xnaut/runs/fixture", "main", "Results", "Evidence").await.unwrap();
+            let second = ensure_pr(&config, "app", "xnaut/runs/fixture", "main", "Results", "Evidence").await.unwrap();
+            assert_eq!(first, second); assert_eq!(rows.lock().unwrap().len(), 1);
+            server.abort();
+        }
+    }
+
 }

@@ -91,6 +91,7 @@ pub fn project_create(
     if path.is_empty() {
         return Err("a local path is required — the code has to live somewhere".into());
     }
+    crate::repository_transfer::validate_remote(remote.as_deref().unwrap_or_default())?;
     let dir = PathBuf::from(&path);
     let created_dir = !dir.exists();
     if created_dir {

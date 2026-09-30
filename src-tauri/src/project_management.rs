@@ -204,6 +204,8 @@ pub struct ProjectCreateRequest {
     pub flow_type: String,
     #[serde(default)]
     pub source_repo: String,
+    #[serde(default)]
+    pub forge_remote: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -229,6 +231,8 @@ pub struct ProjectUpdateRequest {
     pub flow_type: String,
     #[serde(default)]
     pub source_repo: String,
+    #[serde(default)]
+    pub forge_remote: Option<String>,
     #[serde(default)]
     pub stage: Option<String>,
 }
@@ -1747,6 +1751,7 @@ pub async fn pm_project_create(
     let settings = state.settings.lock().await.project_management.clone();
     let repo = configured_repo(&settings)?;
     let key = validate_project_key(&request.key)?;
+    let forge_remote = crate::repository_transfer::validate_remote(request.forge_remote.as_deref().unwrap_or(&request.source_repo))?;
     let name = request.name.trim();
     if name.is_empty() {
         return Err("project name is required".into());
@@ -1797,13 +1802,7 @@ key: key.clone(),
         } else {
             String::new()
         },
-        forge_remote: if request.source_repo.contains("://")
-            || request.source_repo.starts_with("git@")
-        {
-            request.source_repo.trim().into()
-        } else {
-            String::new()
-        },
+        forge_remote,
         task_id: String::new(),
         fleet: false,
         client: None,
@@ -1881,14 +1880,20 @@ pub async fn pm_project_update(
     record.source_repo = source_repo.into();
     record.source_path = if Path::new(source_repo).is_absolute() {
         source_repo.into()
-    } else {
+    } else if source_repo.is_empty() && request.forge_remote.is_some() {
         String::new()
-    };
-    record.forge_remote = if source_repo.contains("://") || source_repo.starts_with("git@") {
-        source_repo.into()
     } else {
-        String::new()
+        // Legacy stage updates may still send a clone URL as source_repo.
+        // That must not erase the independently linked local folder.
+        record.source_path.clone()
     };
+    // Legacy callers updating a stage keep the configured destination.
+    // The settings form always supplies it explicitly and cannot clear it.
+    if let Some(remote) = request.forge_remote.as_deref() {
+        record.forge_remote = crate::repository_transfer::validate_remote(remote)?;
+    } else if record.forge_remote.is_empty() && crate::repository_transfer::validate_remote(source_repo).is_ok() {
+        record.forge_remote = source_repo.into();
+    }
     record.revision += 1;
     write_json_atomic(&manifest, &record)?;
     record_mutation(

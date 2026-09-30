@@ -725,6 +725,8 @@ commands.allow = [
   "pm_module_connect",
   "pm_module_sync",
   "pm_project_list",
+  "repository_transfer_list",
+  "repository_notebook_queue",
   "pm_project_import_existing",
   "pm_project_create",
   "pm_project_update",

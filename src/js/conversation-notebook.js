@@ -4,6 +4,7 @@
   'use strict';
   const PREFIX = 'xnaut-notebook:';
   const mounts = new Set();
+  const uploads = new Map();
   let preferred = null, scheduled = false;
   const storage = () => window.xnautConversationStorage;
   const el = (tag, cls, text) => {
@@ -82,7 +83,17 @@
       try {
         storage().setItem(targetKey, JSON.stringify(data));
         await storage().confirmSaved(targetKey);
-        if (key === targetKey) notify('Saved on this device');
+        if (root) {
+          const snapshot = JSON.parse(JSON.stringify(data));
+          const previous = uploads.get(targetKey) || Promise.resolve();
+          const upload = previous.catch(() => {}).then(() => window.__TAURI__.core.invoke('repository_notebook_queue', {root, key:targetKey, data:snapshot}));
+          uploads.set(targetKey, upload);
+          try {
+            await upload;
+            if (key === targetKey) notify('Saved on this device · queued for repository PR');
+          } catch (error) { if (key === targetKey) notify('Saved on this device · repository sync pending: ' + String(error), true); }
+          finally { if (uploads.get(targetKey) === upload) uploads.delete(targetKey); }
+        } else if (key === targetKey) notify('Saved on this device · select a project to sync');
       } catch (error) { if (key === targetKey) notify('Could not save: ' + String(error), true); }
     }
     function read(target) {

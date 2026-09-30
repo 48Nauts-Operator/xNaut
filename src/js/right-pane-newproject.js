@@ -6,9 +6,7 @@
 // configured, and argued when corrected. Four known fields do not need a model
 // to collect them.
 //
-// Order matters: only the local path is mandatory. Code has to live somewhere.
-// Everything else — repo, agent — is optional, and skipping the repo is a
-// complete, valid project rather than a dead end.
+// Every project has an explicit repository destination.
 (function () {
   'use strict';
 
@@ -58,7 +56,7 @@
     document.head.appendChild(st);
   }
 
-  const REPOS = [['none', 'No repo'], ['github', 'GitHub'], ['gitlab', 'GitLab'], ['forgejo', 'Forgejo']];
+  const REPOS = [['forgejo', 'Forgejo'], ['github', 'GitHub']];
   // Friendly names for the provider keys we know; anything else shows its key.
   const PROVIDER_LABEL = {
     lmstudio: 'LM Studio (local)',
@@ -103,7 +101,7 @@
 
   function mount(container) {
     injectStyles();
-    const state = { kind: 'none' };
+    const state = { kind: 'forgejo' };
 
     container.innerHTML = `<div class="rpnp">
       <h3>New project</h3>
@@ -116,15 +114,15 @@
       <div class="rpnp-field">
         <label>Local path <span class="req">*</span></label>
         <input class="rpnp-path" placeholder="/Users/you/code/tony-stark" autocomplete="off" spellcheck="false">
-        <div class="rpnp-hint">Created if it doesn't exist. The code has to live somewhere — this is the only required answer besides the name.</div>
+        <div class="rpnp-hint">Created if it doesn't exist. Each project needs a local folder and a repository.</div>
       </div>
 
       <div class="rpnp-field">
-        <label>Repository</label>
+        <label>Repository <span class="req">*</span></label>
         <div class="rpnp-repos">${REPOS.map(([k, l]) =>
-          `<button type="button" class="rpnp-repo${k === 'none' ? ' on' : ''}" data-kind="${k}">${esc(l)}</button>`).join('')}</div>
-        <input class="rpnp-url" placeholder="git@github.com:you/tony-stark.git" autocomplete="off" spellcheck="false" hidden>
-        <div class="rpnp-hint rpnp-repo-hint">Skipping is fine — a local-only project is complete. A sandbox needs a repo; local work does not.</div>
+          `<button type="button" class="rpnp-repo${k === 'forgejo' ? ' on' : ''}" data-kind="${k}">${esc(l)}</button>`).join('')}</div>
+        <input class="rpnp-url" placeholder="git@github.com:you/tony-stark.git" autocomplete="off" spellcheck="false">
+        <div class="rpnp-hint rpnp-repo-hint">Code, reports, notes, pictures and videos are delivered to this repository on a task branch for PR review. Media uses Git LFS.</div>
         <div class="rpnp-check" hidden></div>
       </div>
 
@@ -141,7 +139,7 @@
 
       <div class="rpnp-actions">
         <button class="rpnp-btn primary rpnp-create" disabled>Create project</button>
-        <button class="rpnp-btn rpnp-checkbtn" hidden>Check repo</button>
+        <button class="rpnp-btn rpnp-checkbtn">Check repo</button>
         <span class="rpnp-state"></span>
       </div>
     </div>`;
@@ -160,13 +158,13 @@
       stateEl.classList.toggle('err', !!err);
     };
 
-    // Only name + path gate creation. A failing repo check is information, not
-    // a blocker — the user may intend to fix the key afterwards.
+    // A repository is required; credentials can be repaired with Check repo.
     const sync = () => {
-      createBtn.disabled = !(name.value.trim() && path.value.trim());
+      createBtn.disabled = !(name.value.trim() && path.value.trim() && url.value.trim());
     };
     name.oninput = sync;
     path.oninput = sync;
+    url.oninput = sync;
 
     // Models depend on the provider, so the field only appears once one is
     // chosen, and lists what the catalogue actually knows for it.
@@ -208,13 +206,10 @@
       b.onclick = () => {
         container.querySelectorAll('.rpnp-repo').forEach((x) => x.classList.toggle('on', x === b));
         state.kind = b.dataset.kind;
-        const wantsRepo = state.kind !== 'none';
-        url.hidden = !wantsRepo;
-        checkBtn.hidden = !wantsRepo;
+        url.hidden = false;
+        checkBtn.hidden = false;
         checkBox.hidden = true;
-        $('.rpnp-repo-hint').textContent = wantsRepo
-          ? 'Paste the URL of the repo this should push to. Check it before creating — a missing SSH key or token fails later, somewhere unrelated.'
-          : "Skipping is fine — a local-only project is complete. A sandbox needs a repo; local work does not.";
+        $('.rpnp-repo-hint').textContent = 'Task branches, reports and media go to this repository for PR review. Check access before creating.';
       };
     });
 
@@ -259,7 +254,7 @@
         await invoke('project_create', {
           name: projectName,
           path: path.value.trim(),
-          remote: state.kind === 'none' ? null : (url.value.trim() || null),
+          remote: url.value.trim() || null,
           agentId: providerSel.value || null,
           model: modelSel.value || null,
         });
@@ -270,7 +265,7 @@
         const key = keyFor(projectName);
         if (key) {
           try {
-            await invoke('pm_project_create', { request: { key, name: projectName, source_repo: url.value.trim() || '' } });
+            await invoke('pm_project_create', { request: { key, name: projectName, source_repo: path.value.trim(), forge_remote: url.value.trim() } });
           } catch (e) {
             console.warn('[newproject] PM record not created (may already exist):', e);
           }
