@@ -755,18 +755,21 @@ mod tests {
         git(dir.path(), &["init", main.to_str().unwrap()]).unwrap();
         git(&main, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base"]).unwrap();
         git(&main, &["worktree", "add", "-b", "registered", linked.to_str().unwrap()]).unwrap();
+        // A fixture must not inherit a real machine's XNAUT project-path override.
+        let key = format!("FIXTURE{}", uuid::Uuid::new_v4().simple());
+        let ticket = format!("{key}-1");
         let project: crate::project_management::ProjectRecord = serde_json::from_value(serde_json::json!({
-            "key":"XNAUT", "name":"xnaut", "source_path":linked,
+            "key":key, "name":"fixture", "source_path":linked,
             "forge_remote":"https://forge.example/team/xnaut.git", "created_at":"fixture"
         })).unwrap();
         let root = crate::sandbox::launch_env::project_root(&linked);
         let mut projects = vec![project.clone()];
-        assert_eq!(project_for_source(&projects, None, &root).unwrap().key, "XNAUT");
+        assert_eq!(project_for_source(&projects, None, &root).unwrap().key, key);
         assert!(project_for_source(&projects, Some("OTHER-1"), &root).is_err());
-        projects.push(crate::project_management::ProjectRecord { key:"OTHER".into(), ..project });
+        projects.push(crate::project_management::ProjectRecord { key:format!("{key}B"), ..project });
         assert!(project_for_source(&projects, None, &root).unwrap_err().contains("Multiple"));
-        assert_eq!(project_for_source(&projects, Some("XNAUT-1"), &root).unwrap().key, "XNAUT");
-        assert!(project_for_source(&projects, Some("XNAUT-1"), dir.path()).is_err());
+        assert_eq!(project_for_source(&projects, Some(&ticket), &root).unwrap().key, key);
+        assert!(project_for_source(&projects, Some(&ticket), dir.path()).is_err());
     }
     #[test]
     fn repository_must_be_explicit_and_credential_free() {
