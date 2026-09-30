@@ -683,6 +683,14 @@ its first run may open a wizard\\033[0m\\n'\n"
                 self.environments.iter().filter(|e| e.env == env).collect()
             }
 
+            /// exe.dev's driver always targets exe::VM. Its per-agent/project
+            /// rows support session adoption; they are not separately billed
+            /// machines. Keep every row rather than merging away run ownership.
+            fn machine_count(&self, env: &str) -> usize {
+                let rows = self.of(env).len();
+                if env == "exe-dev" { usize::from(rows > 0) } else { rows }
+            }
+
             /// Record this environment as in use right now, creating the entry
             /// on first sight.
             ///
@@ -799,10 +807,12 @@ its first run may open a wizard\\033[0m\\n'\n"
                 project: &str,
                 cap: u32,
             ) -> Result<(), String> {
-                if self.find(env, handle, project).is_some() {
+                if self.find(env, handle, project).is_some()
+                    || (env == "exe-dev" && self.machine_count(env) > 0)
+                {
                     return Ok(());
                 }
-                let live = self.of(env).len();
+                let live = self.machine_count(env);
                 if live < cap as usize {
                     return Ok(());
                 }
@@ -812,12 +822,11 @@ its first run may open a wizard\\033[0m\\n'\n"
                     .map(|e| format!("@{} on {}", e.handle, e.project))
                     .collect();
                 Err(format!(
-                    "environment ceiling: {live} `{env}` environments are already up and the cap \
-is {cap}, so a new one is refused rather than added to the bill.\n  {}\nThe reaper already ran and \
-kept these, which means each one's beacon is still answering for a run that is working or waiting \
-(XNAUT-307). Nothing here times out: a machine is returned when its run ends or its beacon stops, \
-not when it gets old. Finish or stop one of those runs, or raise max_live_environments in \
-spend-ceiling.json.",
+                    "environment ceiling: {live} `{env}` environments are already recorded and the cap \
+is {cap}; no new environment was started.\n  {}\nExisting entries were preserved. This ledger \
+does not by itself prove that a run is active or waiting on a ticket; check its beacon/status. Retry when capacity is \
+available or explicitly adjust max_live_environments in spend-ceiling.json. Do not stop active \
+or waiting runs to make room.",
                     if names.is_empty() {
                         "(none recorded)".to_string()
                     } else {
@@ -938,6 +947,28 @@ run `gitvm stop` there by hand if it is still up",
                 // coming back costs nothing, whatever the cap says.
                 assert!(ledger.admit("gitvm", "a", "/p1", 2).is_ok());
                 assert!(ledger.admit("gitvm", "a", "/p1", 0).is_ok());
+            }
+
+            #[test]
+            fn exe_dev_agent_rows_share_one_machine_without_touching_existing_runs() {
+                let mut ledger = Ledger::default();
+                ledger.touch("exe-dev", "claude", "/xnaut", "/claude-worktree", None, 10);
+                ledger.touch("exe-dev", "cortana", "/jobup", "/cortana-worktree", None, 20);
+                let existing = ledger.environments.clone();
+                assert_eq!(ledger.machine_count("exe-dev"), 1);
+                // Exactly the reported regression, including a different
+                // identity and a different worktree of the same project.
+                assert!(ledger.admit("exe-dev", "codex", "/xnaut", 2).is_ok());
+                assert!(ledger.admit("exe-dev", "codex", "/another-project", 1).is_ok());
+                ledger.touch("exe-dev", "codex", "/xnaut", "/new-task", None, 30);
+                assert_eq!(&ledger.environments[..2], existing.as_slice());
+                assert_eq!(ledger.machine_count("exe-dev"), 1);
+                assert_eq!(ledger.environments.len(), 3);
+                assert!(ledger.reapable_now("exe-dev", None, 40, |_| None).is_empty());
+                // A zero budget still refuses the first machine; a previously
+                // admitted machine follows the existing reuse policy.
+                assert!(Ledger::default().admit("exe-dev", "codex", "/xnaut", 0).is_err());
+                assert!(ledger.admit("exe-dev", "codex", "/other", 0).is_ok());
             }
 
             /// A cap is per provider. exe.dev's single VM must not be spent by
@@ -1140,6 +1171,8 @@ run `gitvm stop` there by hand if it is still up",
                 };
                 let refused = ledger.admit("gitvm", "b", "/p2", 1).unwrap_err();
                 assert!(refused.contains("beacon"), "{refused}");
+                assert!(!refused.contains("XNAUT-307"), "historical bug IDs are not task dependencies");
+                assert!(refused.contains("does not by itself prove"), "the ledger cannot assert liveness");
                 assert!(
                     !refused.contains("idle out"),
                     "nothing idles out any more: {refused}"

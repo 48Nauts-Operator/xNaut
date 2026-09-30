@@ -106,3 +106,20 @@ This replaces rsync as the task source/results transport for exe.dev and GitVM
 **agent launches**. The existing sandbox verification path remains separate.
 Existing runs and JOBUP-11's earlier
 macOS `.git` pointer are not automatically migrated or declared recovered.
+
+## Shared exe.dev admission follow-up
+
+The exe.dev driver uses one persistent VM (`exe::VM`). Its agent/project ledger
+rows record session ownership and adoption, not separate machines. Environment
+admission counts those rows as one VM and admits a new isolated task on that
+existing machine without stopping, attaching to, or typing into another task's
+session. Per-task checkouts/session IDs and concurrent/daily launch limits still
+apply. A zero environment budget refuses first creation; previously admitted
+machines retain the existing reuse policy. No live ceiling configuration or
+ledger is rewritten by this fix.
+
+Capacity errors no longer cite XNAUT-307 as if it were a task dependency or
+assert liveness from an unlinked ledger entry. The project selection step also
+normalizes a registered linked worktree to its common repository root, matching
+the launcher's identity. Without a ticket, multiple projects for one repository
+are refused as ambiguous instead of publishing to the first match.

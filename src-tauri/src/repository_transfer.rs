@@ -240,6 +240,33 @@ pub fn repository_transfer_list(project: String) -> Result<Vec<Transfer>, String
         .collect())
 }
 
+fn project_for_source<'a>(
+    projects: &'a [crate::project_management::ProjectRecord],
+    ticket: Option<&str>,
+    project_root: &Path,
+) -> Result<&'a crate::project_management::ProjectRecord, String> {
+    let matches_source = |project: &crate::project_management::ProjectRecord| {
+        let local = crate::project_management::local_source_path(project);
+        !local.is_empty()
+            && crate::sandbox::launch_env::project_root(Path::new(&local)) == project_root
+    };
+    if let Some(ticket) = ticket {
+        let (key, _) = ticket.rsplit_once('-').ok_or("Invalid ticket identity")?;
+        let project = projects.iter().find(|p| p.key == key).ok_or("Ticket project is not registered")?;
+        return if matches_source(project) { Ok(project) } else {
+            Err("The ticket's project does not match this checkout. Link the correct local folder in Project settings before uploading source.".into())
+        };
+    }
+    // Registered sources may themselves be linked worktrees. Compare their
+    // common repository root, just as the launcher does for the task worktree.
+    let matches: Vec<_> = projects.iter().filter(|p| matches_source(p)).collect();
+    match matches.as_slice() {
+        [project] => Ok(*project),
+        [] => Err("Link this checkout to a project and add its repository in Project settings before dispatching.".into()),
+        _ => Err("Multiple projects share this repository. Supply a ticket from the intended project before publishing task data.".into()),
+    }
+}
+
 pub fn prepare(
     path: &Path,
     project_root: &Path,
@@ -249,16 +276,7 @@ pub fn prepare(
 ) -> Result<Transfer, String> {
     let projects =
         crate::project_management::list_projects(&crate::project_management::repo_now()?)?;
-    let project = projects.iter().find(|p| {
-        ticket.as_deref().is_some_and(|t| t.rsplit_once('-').is_some_and(|(key, _)| key == p.key))
-    }).or_else(|| projects.iter().find(|p| {
-        let local = crate::project_management::local_source_path(p);
-        !local.is_empty() && Path::new(&local) == project_root
-    })).ok_or("Link this checkout to a project and add its repository in Project settings before dispatching.")?;
-    let registered_path = crate::project_management::local_source_path(project);
-    if registered_path.is_empty() || crate::sandbox::launch_env::project_root(Path::new(&registered_path)) != project_root {
-        return Err("The ticket's project does not match this checkout. Link the correct local folder in Project settings before uploading source.".into());
-    }
+    let project = project_for_source(&projects, ticket.as_deref(), project_root)?;
     let configured = validate_remote(&project.forge_remote)?;
     if !git(path, &["status", "--porcelain"])?.is_empty() {
         return Err("Commit or stash this checkout's changes before dispatching. Repository runs use an exact committed revision.".into());
@@ -561,6 +579,31 @@ pub fn spawn_reconciler(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ticketless_tasks_resolve_a_project_registered_to_a_linked_worktree() {
+        struct Scratch(PathBuf);
+        impl Scratch { fn path(&self) -> &Path { &self.0 } }
+        impl Drop for Scratch { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let dir = Scratch(std::env::temp_dir().join(format!("xnaut-source-project-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let main = dir.path().join("main");
+        let linked = dir.path().join("registered-source");
+        git(dir.path(), &["init", main.to_str().unwrap()]).unwrap();
+        git(&main, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base"]).unwrap();
+        git(&main, &["worktree", "add", "-b", "registered", linked.to_str().unwrap()]).unwrap();
+        let project: crate::project_management::ProjectRecord = serde_json::from_value(serde_json::json!({
+            "key":"XNAUT", "name":"xnaut", "source_path":linked,
+            "forge_remote":"https://forge.example/team/xnaut.git", "created_at":"fixture"
+        })).unwrap();
+        let root = crate::sandbox::launch_env::project_root(&linked);
+        let mut projects = vec![project.clone()];
+        assert_eq!(project_for_source(&projects, None, &root).unwrap().key, "XNAUT");
+        assert!(project_for_source(&projects, Some("OTHER-1"), &root).is_err());
+        projects.push(crate::project_management::ProjectRecord { key:"OTHER".into(), ..project });
+        assert!(project_for_source(&projects, None, &root).unwrap_err().contains("Multiple"));
+        assert_eq!(project_for_source(&projects, Some("XNAUT-1"), &root).unwrap().key, "XNAUT");
+        assert!(project_for_source(&projects, Some("XNAUT-1"), dir.path()).is_err());
+    }
     #[test]
     fn repository_must_be_explicit_and_credential_free() {
         for good in [
