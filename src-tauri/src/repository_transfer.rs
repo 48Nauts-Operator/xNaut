@@ -360,6 +360,42 @@ pub(crate) fn project_for_source<'a>(
     }
 }
 
+/// A task PR must describe the task delta, not everything the launch checkout
+/// happened to have ahead of the forge's default branch (PR #105).
+fn task_base(path: &Path, source_checkout: &Path, remote: &str, source: &str) -> Result<String, String> {
+    let refs = git(path, &["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"])?;
+    let default = refs.lines().find_map(|line| {
+        line.strip_prefix("ref: refs/heads/").and_then(|v| v.split_once('\t')).map(|(name, _)| name.to_string())
+    }).ok_or("The configured repository needs a default branch with an initial commit.")?;
+    let heads: std::collections::BTreeMap<String, String> = refs.lines().filter_map(|line| {
+        let (sha, reference) = line.split_once('\t')?;
+        let name = reference.strip_prefix("refs/heads/")?;
+        (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| (name.to_string(), sha.to_string()))
+    }).collect();
+    let public_branch = |name: &str| !name.starts_with("xnaut/inputs/") && !name.starts_with("xnaut/runs/");
+    let preferred = git(source_checkout, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let mut candidates = Vec::new();
+    if let Some(name) = preferred.filter(|name| public_branch(name) && heads.contains_key(name)) {
+        candidates.push(name);
+    }
+    if !candidates.contains(&default) { candidates.push(default); }
+    for name in candidates {
+        let Some(tip) = heads.get(&name) else { continue };
+        if tip == source { return Ok(name); }
+        git(path, &["fetch", "--no-tags", remote, tip])?;
+        if git(path, &["merge-base", "--is-ancestor", source, tip]).is_ok() { return Ok(name); }
+    }
+    // A detached verification checkout can still identify an exact, uniquely
+    // published source branch. Never choose an arbitrary alias or input ref.
+    let exact: Vec<_> = heads.iter().filter(|(name, tip)| public_branch(name) && *tip == source).collect();
+    match exact.as_slice() {
+        [(name, _)] => Ok((*name).clone()),
+        [] => Err("The task's starting commit is not on a published source branch. Push that branch to the project's repository before starting the task; refusing a PR with unrelated source changes.".into()),
+        _ => Err("Several published branches match this detached checkout. Select the intended source branch in the project's local folder before starting the task.".into()),
+    }
+}
+
 pub fn prepare(
     path: &Path,
     project_root: &Path,
@@ -377,17 +413,13 @@ pub fn prepare(
     let source_sha = git(path, &["rev-parse", "HEAD"])?;
     let remote = portable_remote(&configured)?;
     let desktop = desktop_remote(path, &configured)?;
-    let refs = git(path, &["ls-remote", "--symref", &desktop, "HEAD"])?;
-    let base = refs
-        .lines()
-        .find_map(|l| {
-            l.strip_prefix("ref: refs/heads/")
-                .and_then(|s| s.split_once('\t'))
-                .map(|(b, _)| b.to_string())
-        })
-        .ok_or("The configured repository needs a default branch with an initial commit.")?;
-    git(path, &["check-ref-format", &format!("refs/heads/{base}")])?;
     let review_parent = crate::repository_review::parent_for_workspace(path)?;
+    let base = if let Some(parent) = &review_parent {
+        list()?.into_iter().find(|t| &t.run_id == parent).ok_or("Parent review receipt missing")?.base
+    } else {
+        task_base(path, Path::new(&crate::project_management::local_source_path(project)), &desktop, &source_sha)?
+    };
+    git(path, &["check-ref-format", &format!("refs/heads/{base}")])?;
     let quality = review_parent.is_none().then(crate::repository_review::Review::default);
     Ok(Transfer {
         review_parent,
@@ -770,6 +802,47 @@ mod tests {
         assert!(project_for_source(&projects, None, &root).unwrap_err().contains("Multiple"));
         assert_eq!(project_for_source(&projects, Some(&ticket), &root).unwrap().key, key);
         assert!(project_for_source(&projects, Some(&ticket), dir.path()).is_err());
+    }
+    #[test]
+    fn task_pr_base_excludes_inherited_feature_changes_and_refuses_unpublished_sources() {
+        struct Scratch(PathBuf);
+        impl Drop for Scratch { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let scratch = Scratch(std::env::temp_dir().join(format!("xnaut-pr-base-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        let root = scratch.0.join("source");
+        let remote = scratch.0.join("remote.git");
+        let task = scratch.0.join("task");
+        git(&scratch.0, &["init", "--bare", "-b", "main", remote.to_str().unwrap()]).unwrap();
+        git(&scratch.0, &["init", "-b", "main", root.to_str().unwrap()]).unwrap();
+        git(&root, &["config", "user.name", "Fixture"]).unwrap();
+        git(&root, &["config", "user.email", "fixture@example.invalid"]).unwrap();
+        std::fs::write(root.join("app.txt"), "main\n").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        git(&root, &["commit", "-m", "main"]).unwrap();
+        let main = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        let remote = remote.to_str().unwrap();
+        git(&root, &["push", remote, "main"]).unwrap();
+        assert_eq!(task_base(&root, &root, remote, &main).unwrap(), "main");
+        git(&root, &["checkout", "-b", "feature"]).unwrap();
+        std::fs::write(root.join("app.txt"), "unrelated feature\n").unwrap();
+        git(&root, &["commit", "-am", "feature"]).unwrap();
+        let source = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        assert!(task_base(&root, &root, remote, &source).unwrap_err().contains("published source branch"));
+        git(&root, &["push", remote, "feature"]).unwrap();
+        git(&root, &["worktree", "add", "--detach", task.to_str().unwrap(), &source]).unwrap();
+        assert_eq!(task_base(&task, &root, remote, &source).unwrap(), "feature");
+        assert_eq!(task_base(&task, &task, remote, &source).unwrap(), "feature");
+        std::fs::write(task.join("report.md"), "smoke evidence\n").unwrap();
+        git(&task, &["add", "report.md"]).unwrap();
+        git(&task, &["commit", "-m", "task report"]).unwrap();
+        let base = task_base(&task, &root, remote, &source).unwrap();
+        assert_eq!(git(&task, &["diff", "--name-only", &format!("{base}...HEAD")]).unwrap(), "report.md");
+        assert!(git(&task, &["diff", "--name-only", "main...HEAD"]).unwrap().contains("app.txt"));
+        // Aliased detached tips must not choose a random parent. A checked-out
+        // source branch still disambiguates them, and internal input refs don't.
+        git(&root, &["push", remote, "feature:refs/heads/alias", "feature:refs/heads/xnaut/inputs/fixture"]).unwrap();
+        assert!(task_base(&task, &task, remote, &source).unwrap_err().contains("Several published branches"));
+        assert_eq!(task_base(&task, &root, remote, &source).unwrap(), "feature");
     }
     #[test]
     fn repository_must_be_explicit_and_credential_free() {
