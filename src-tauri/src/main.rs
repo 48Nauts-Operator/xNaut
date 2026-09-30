@@ -588,6 +588,7 @@ async fn main() {
             project_management::pm_project_create,
             project_management::pm_project_update,
             project_management::pm_ticket_list,
+            project_management::pm_project_ticket_count,
             project_management::pm_ticket_create,
             project_management::pm_ticket_update,
             project_management::pm_ticket_delete,

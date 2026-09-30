@@ -86,6 +86,9 @@ test('project review and merge permissions default off, require review, and save
     window.__xnautStub.pm_module_status={enabled:true,configured:true,valid:true,repo_path:'/tmp/control',git_repository:true};
     window.__xnautStub.project_mcp_info={url:'http://127.0.0.1:5000',token:'fixture',read_token:'fixture-read'};
     window.__xnautStub.pm_project_import_existing=[project];window.__xnautStub.pm_project_list=[project];
+    // A slow historical ticket store must not keep project permissions blank.
+    const invoke=window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke=(cmd,args)=>cmd==='pm_ticket_list'?new Promise(()=>{}):invoke(cmd,args);
     window.__xnautStub.repository_review_policy_get={revision:0,remote:project.forge_remote,automatic_review:false,otto_merge:false};
     window.__xnautStub.repository_review_policy_save={revision:1,remote:project.forge_remote,automatic_review:true,otto_merge:true};
     window.__xnautStub.repository_transfer_list=[{run_id:'legacy',state:'review',pr_url:'https://github.com/team/app/pull/7'},{run_id:'blocked',state:'review',pr_url:'https://github.com/team/app/pull/8',quality:{state:'blocked',message:'Jev unavailable; owner review required'}}];

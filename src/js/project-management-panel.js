@@ -4291,7 +4291,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
         } else {
           projects = await invoke('pm_project_list');
         }
-        const tickets = await invoke('pm_ticket_list', { project: null });
+        // Settings has no ticket dependency. Waiting for every historical jury
+        // payload left this sheet blank on a real 300 MB control repository.
+        const tickets = state.section === 'settings' ? [] : await invoke('pm_ticket_list', { project: state.project });
         if (request !== state.request) return;
         // A periodic refresh that found nothing new must not repaint: renderContent
         // and renderDetail rewrite their innerHTML wholesale, which flashes the page

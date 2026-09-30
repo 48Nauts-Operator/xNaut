@@ -253,6 +253,11 @@ const STUB_JS = `
     core: { invoke: (cmd, args) => {
       window.__xnautInvokes.push({ cmd, args });
       if (cmd === 'settings_set' && args?.settings) BY.settings_get = args.settings;
+      if (cmd === 'pm_project_ticket_count' && !Object.prototype.hasOwnProperty.call(BY, cmd)) {
+        const rows = BY.pm_ticket_list;
+        if (rows?.__reject) return Promise.reject(rows.__reject);
+        return Promise.resolve((rows || []).filter(row => String(row.project).toUpperCase() === String(args.project).toUpperCase()).length);
+      }
       if (cmd === 'conversation_store_load' && !Object.prototype.hasOwnProperty.call(BY, cmd)) {
         const records = JSON.parse(localStorage.getItem('__fixture_conversations') || '{}');
         for (const [key,value] of Object.entries(args.legacy || {})) if (!(key in records)) records[key]={value,revision:1};

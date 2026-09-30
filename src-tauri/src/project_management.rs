@@ -1187,6 +1187,16 @@ fn local_path_overrides() -> std::collections::HashMap<String, String> {
         .unwrap_or_default()
 }
 
+fn display_paths(mut projects: Vec<ProjectRecord>, paths: &std::collections::HashMap<String, String>) -> Vec<ProjectRecord> {
+    for project in &mut projects {
+        if let Some(path) = paths.get(&project.key) { project.source_path = path.clone(); }
+    }
+    projects
+}
+fn projects_for_display(projects: Vec<ProjectRecord>) -> Vec<ProjectRecord> {
+    display_paths(projects, &local_path_overrides())
+}
+
 pub fn list_projects(repo: &Path) -> Result<Vec<ProjectRecord>, String> {
     let mut projects = Vec::new();
     for entry in std::fs::read_dir(repo.join("projects"))
@@ -1723,7 +1733,7 @@ pub async fn pm_project_list(
     state: State<'_, crate::state::AppState>,
 ) -> Result<Vec<ProjectRecord>, String> {
     let settings = state.settings.lock().await.project_management.clone();
-    list_projects(&configured_repo(&settings)?)
+    Ok(projects_for_display(list_projects(&configured_repo(&settings)?)?))
 }
 
 #[tauri::command]
@@ -1736,11 +1746,11 @@ pub async fn pm_project_import_existing(
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
     import_task_projects(&repo, &crate::tasks::load_tasks())?;
-    migrate_legacy_pm_data(
+    Ok(projects_for_display(migrate_legacy_pm_data(
         &repo,
         &crate::pm::load_pm_projects(),
         &crate::project_todos::load_all(),
-    )
+    )?))
 }
 
 #[tauri::command]
@@ -1878,8 +1888,16 @@ pub async fn pm_project_update(
         record.flow_type != flow_type,
     )?;
     record.flow_type = flow_type;
-    record.source_repo = source_repo.into();
-    record.source_path = if Path::new(source_repo).is_absolute() {
+    // A display record can carry this machine's override. Saving Settings
+    // must not copy that path back into the shared control repository.
+    let mut paths = local_path_overrides();
+    let local_edit = paths.contains_key(&key)
+        && (Path::new(source_repo).is_absolute() || (source_repo.is_empty() && request.forge_remote.is_some()));
+    if local_edit {
+        paths.insert(key.clone(), source_repo.into());
+    } else {
+        record.source_repo = source_repo.into();
+        record.source_path = if Path::new(source_repo).is_absolute() {
         source_repo.into()
     } else if source_repo.is_empty() && request.forge_remote.is_some() {
         String::new()
@@ -1887,7 +1905,8 @@ pub async fn pm_project_update(
         // Legacy stage updates may still send a clone URL as source_repo.
         // That must not erase the independently linked local folder.
         record.source_path.clone()
-    };
+        };
+    }
     // Legacy callers updating a stage keep the configured destination.
     // The settings form always supplies it explicitly and cannot clear it.
     if let Some(remote) = request.forge_remote.as_deref() {
@@ -1908,7 +1927,11 @@ pub async fn pm_project_update(
         &[manifest],
         &format!("chore(pm): update project {key}"),
     )?;
-    Ok(record)
+    if local_edit {
+        let dir = dirs::config_dir().ok_or("Machine configuration folder unavailable")?;
+        write_json_atomic(&dir.join("xnaut/project-paths.json"), &paths)?;
+    }
+    Ok(projects_for_display(vec![record]).remove(0))
 }
 
 /// Set a project's issue-intake settings and nothing else (XNAUT-382).
@@ -2006,6 +2029,28 @@ pub async fn pm_ticket_list(
 ) -> Result<Vec<TicketRecord>, String> {
     let settings = state.settings.lock().await.project_management.clone();
     ticket_list_in(&configured_repo(&settings)?, project)
+}
+
+/// Workspace headers only need the number of stored tickets, not hundreds of
+/// megabytes of historical jury evidence serialized across the webview bridge.
+fn ticket_count_in(repo: &Path, project: &str) -> Result<usize, String> {
+    let key = validate_project_key(project)?;
+    let root = repo.join("projects").join(&key);
+    if !root.join("project.json").is_file() { return Err("Project is not registered".into()); }
+    let entries = match std::fs::read_dir(root.join("tickets")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(entries.flatten().filter(|entry| entry.file_type().is_ok_and(|t| t.is_file())
+        && entry.path().extension().and_then(|v| v.to_str()) == Some("json")
+        && entry.file_name().to_string_lossy().starts_with(&format!("{key}-"))).count())
+}
+
+#[tauri::command]
+pub async fn pm_project_ticket_count(state: State<'_, crate::state::AppState>, project: String) -> Result<usize, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    ticket_count_in(&configured_repo(&settings)?, &project)
 }
 
 /// One hand-off in a ticket's life.
@@ -2914,6 +2959,34 @@ mod abandoned_tmp_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn local_display_paths_do_not_rewrite_shared_project_records() {
+        let record: ProjectRecord = serde_json::from_value(json!({"key":"XT","name":"Fixture","source_path":"/studio/project","source_repo":"https://forge.example/team/app.git","created_at":"fixture"})).unwrap();
+        let paths = std::collections::HashMap::from([("XT".to_string(), "/tron/project".to_string())]);
+        let shown = display_paths(vec![record.clone()], &paths);
+        assert_eq!(shown[0].source_path, "/tron/project");
+        assert_eq!(shown[0].source_repo, record.source_repo);
+        assert_eq!(record.source_path, "/studio/project");
+        assert_eq!(display_paths(vec![record], &Default::default())[0].source_path, "/studio/project");
+    }
+
+    #[test]
+    fn workspace_ticket_count_does_not_read_historical_review_payloads() {
+        let dir = std::env::temp_dir().join(format!("xnaut-ticket-count-{}", uuid::Uuid::new_v4()));
+        let root = dir.join("projects/XT");
+        std::fs::create_dir_all(root.join("tickets")).unwrap();
+        std::fs::write(root.join("project.json"), "{}").unwrap();
+        // Counting stored ticket files must not parse their potentially huge
+        // bodies. Backups, unrelated keys and directories are not tickets.
+        for name in ["XT-1.json", "XT-2.json", "OTHER-1.json", "XT-3.json.bak"] {
+            std::fs::write(root.join("tickets").join(name), "unread payload").unwrap();
+        }
+        std::fs::create_dir(root.join("tickets/XT-4.json")).unwrap();
+        assert_eq!(ticket_count_in(&dir, "XT").unwrap(), 2);
+        assert!(ticket_count_in(&dir, "OTHER").is_err());
+        assert!(ticket_count_in(&dir, "../XT").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     /// A scratch control repo with one ticket in it.
     ///
     /// Keyed by the caller's name as well as the pid and thread, because the

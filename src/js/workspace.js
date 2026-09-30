@@ -1212,14 +1212,13 @@
         because(['lastcommit', 'changes', 'worktrees', 'tickets'], 'no project selected');
         return;
       }
-      const key = state.projectKey.toUpperCase();
       try {
-        const tickets = (await invoke('pm_ticket_list', { project: state.projectKey })) || [];
+        const count = await invoke('pm_project_ticket_count', { project: state.projectKey });
         if (generation !== state.factsGeneration) return;
-        // The rows are counted rather than trusted: the command filters, and a
-        // count that came from somewhere else would be a number about the wrong
-        // project sitting under this project's name.
-        set('tickets', String(tickets.filter((item) => String(item.project || '').toUpperCase() === key).length));
+        // Count stored tickets in this project's directory without transferring
+        // historical jury payloads just to paint a header.
+        if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid ticket count');
+        set('tickets', String(count));
       } catch (_error) {
         if (generation !== state.factsGeneration) return;
         because(['tickets'], 'the ticket store could not be read');
