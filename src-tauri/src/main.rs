@@ -28,6 +28,7 @@ mod chat;
 mod responses;
 mod repository_read;
 mod conversation_store;
+mod notebook;
 mod codex_spend;
 mod commands;
 mod core_team;
@@ -334,6 +335,7 @@ async fn main() {
             // File Navigator + Editor
             conversation_store::conversation_store_load,
             conversation_store::conversation_store_put,
+            notebook::notebook_distill,
             commands::list_directory,
             commands::read_file,
             commands::write_file,

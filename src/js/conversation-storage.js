@@ -7,7 +7,7 @@
   const revisions = new Map();
   const failed = new Set();
   const allowed = key => ['xnaut-agent-threads:v1','xnaut-chat-sessions','xnaut-librarian-threads-migrated'].includes(key)
-    || ['xnaut-chat-history:','xnaut-chat-model:','xnaut-chat-title:'].some(prefix => key.startsWith(prefix));
+    || ['xnaut-chat-history:','xnaut-chat-model:','xnaut-chat-title:','xnaut-notebook:'].some(prefix => key.startsWith(prefix));
   let loading, native = false, queue = Promise.resolve();
   function report(error) {
     console.error('[conversation-storage]', error);
@@ -71,6 +71,10 @@
   }
   window.xnautConversationStorage = {
     ready, flush: () => queue,
+    async confirmSaved(key) {
+      await queue;
+      if (failed.has(key) || !native) throw new Error('Native save unavailable. Your local copy is retained.');
+    },
     getItem: key => allowed(key) && cache.has(key) ? cache.get(key) : localStorage.getItem(key),
     setItem: (key,value) => save(key,String(value)), removeItem: key => save(key,null),
     keys: () => [...new Set([...Object.keys(snapshot()), ...cache.keys()])].filter(key => cache.has(key) ? cache.get(key)!=null : true),

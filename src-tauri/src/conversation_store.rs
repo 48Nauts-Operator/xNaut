@@ -22,6 +22,7 @@ fn allowed(key: &str) -> bool {
     ) || key.starts_with("xnaut-chat-history:")
         || key.starts_with("xnaut-chat-model:")
         || key.starts_with("xnaut-chat-title:")
+        || key.starts_with("xnaut-notebook:")
 }
 fn root() -> Result<PathBuf, String> {
     Ok(dirs::config_dir()
@@ -279,6 +280,13 @@ fn recover_pending(db: &Connection, key: &str, value: &str) -> Result<(), String
     } else if key.starts_with("xnaut-chat-history:") {
         recoveries.push(("chat".into(), value.into()));
     }
+    if key.starts_with("xnaut-notebook:") {
+        // Preserve interrupted edits separately, visible in the notebook's
+        // recovery picker; never overwrite the newer canonical notebook.
+        let recovery_key = format!("{key}:recovered:{source}");
+        db.execute("INSERT OR IGNORE INTO conversations VALUES (?,?,1)",
+            params![recovery_key, value]).map_err(|e| e.to_string())?;
+    }
     for (label, body) in recoveries {
         let name = format!("xnaut-chat-history:recovered-{source}-{label}");
         db.execute(
@@ -476,6 +484,19 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("interrupted")));
+    }
+
+    #[test]
+    fn notebook_edits_recover_without_overwriting_newer_notes() {
+        let tmp = Scratch::new();
+        let mut db = connect(tmp.path()).unwrap();
+        let key = "xnaut-notebook:agent:cortana:one";
+        put(&mut db, key, Some(r#"{"notes":[{"body":"newer"}]}"#.into()), 0).unwrap();
+        assert!(put(&mut db, key, Some("{}".into()), 0).is_err());
+        recover_pending(&db, key, r#"{"notes":[{"body":"interrupted"}]}"#).unwrap();
+        let records = read_all(&db).unwrap();
+        assert!(records[key].value.as_ref().unwrap().contains("newer"));
+        assert!(records.iter().any(|(k,v)| k.starts_with(&format!("{key}:recovered:")) && v.value.as_ref().unwrap().contains("interrupted")));
     }
 
     #[test]

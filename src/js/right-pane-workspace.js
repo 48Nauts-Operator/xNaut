@@ -1406,9 +1406,13 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       injectStyles();
       active = localStorage.getItem(scopeKey()) || localStorage.getItem(SUBTAB_KEY) || 'plan';
       if (!root) {
-        container.innerHTML = `<div class="rpws"><div class="rpws-body"><div class="rpws-empty">
-          <div class="rpws-ico">${ICON.artifact}</div><h3>No project open</h3>
-          <p>Open a project (or focus a terminal in one) to use its Workspace.</p></div></div></div>`;
+        // Chat and Agent Space need notes even without a terminal/project cwd.
+        active = 'wiki';
+        container.innerHTML = `<div class="rpws">
+          <div class="rpws-head"><div class="rpws-scope">Conversation notebook</div></div>
+          <div class="rpws-nav"><button data-sub="wiki" class="active">Wiki</button></div>
+          <div class="rpws-body">${wikiPage()}</div></div>`;
+        applyActive(); loadWiki();
         return;
       }
       container.innerHTML = `<div class="rpws">

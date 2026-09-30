@@ -864,6 +864,15 @@
     let thread = options.newThread ? emptyExisting : (recent.find((item) => item.id === options.threadId) || recent[0]);
     if (!thread) thread = emptyExisting || newThread(profile.handle, 'New thread');
     pane.dataset.voiceThread = thread.id; pane.dataset.voiceAgent = profile.handle;
+    pane.dataset.notebookContext = 'agent';
+    pane.xnautNotebookContext = () => {
+      const saved = allThreadsFor(profile.handle).find(item => item.id === thread.id) || thread;
+      return {id:'agent:' + profile.handle + ':' + thread.id,
+        label:(profile.display_name || profile.handle) + ' · ' + saved.title,
+        messages:(saved.messages || []).filter(m => ['user','agent','assistant'].includes(m.role)).map(m => ({role:m.role === 'user' ? 'user' : 'assistant',content:m.text || ''})),
+        provider:profile.chat_provider || profile.provider || '', model:profile.chat_model || profile.model || ''};
+    };
+
     const session = sessionFor(profile, sessions);
     // The thread's harness, not the profile's: XNAUT-150 switches one
     // conversation without moving every other thread of the same agent.
@@ -1114,7 +1123,7 @@
     // gap). It sits HERE and not at the end of the function on purpose: a throw
     // in any later wiring step used to leave the right pane blank, which is
     // indistinguishable from the pane being broken.
-    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile);
+    if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile, {preserveNotebook:true});
 
     const composer = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');

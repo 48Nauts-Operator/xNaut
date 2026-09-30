@@ -1790,6 +1790,13 @@
     // an explicit opts.chatKey, else the shared 'default' chat.
     entry.chatKey = opts.chatKey || (opts.projectContext && opts.projectContext.path) || 'default';
     if (opts.title) (window.xnautConversationStorage || localStorage).setItem('xnaut-chat-title:' + entry.chatKey, JSON.stringify(opts.title));
+    pane.dataset.notebookContext = 'chat';
+    pane.xnautNotebookContext = () => ({
+      id: 'chat:' + entry.chatKey, label: opts.title || 'Chat',
+      messages: entry.history.filter(m => ['user', 'assistant'].includes(m.role)).map(m => ({role:m.role, content:m.display || m.content})),
+      provider: entry.providerOverride || '', model: entry.modelOverride || '',
+    });
+
 
     // --- header data: settings + agents + engram status (best effort) ---
     try {

@@ -97,6 +97,7 @@ async function mountWiki(page, { html = DOCS_HTML, url = PAGE_URL } = {}) {
     return wiki.attach(host, '/tmp/smoke');
   }, { html, url });
 
+  await page.locator('#wiki-test-host [data-wiki-mode="docs"]').click();
   return page.locator('#wiki-test-host .rpwk');
 }
 
@@ -126,6 +127,8 @@ test('the Build run pane carries a Wiki tab between Output and History', async (
   // And it is a tab that renders its own surface, not a nav entry wired to
   // nothing, which is the failure this whole file exists to catch.
   await nav.locator('button[data-sub="wiki"]').click();
+  await expect(page.getByRole('button',{name:'+ Add note',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Documentation',exact:true}).click();
   await expect(page.locator('.rpws-page[data-page="wiki"] .rpwk-url')).toBeVisible();
   await expect(page.locator('.rpws-page[data-page="wiki"]')).toContainText('The docs, and nothing else');
 });
@@ -335,6 +338,7 @@ test('the open page is remembered per project', async ({ page }) => {
     host.innerHTML = wiki.page();
     return wiki.attach(host, '/tmp/smoke');
   });
+  await page.locator('#wiki-test-host [data-wiki-mode="docs"]').click();
   await expect(page.locator('#wiki-test-host .rpwk-article h1')).toHaveText('LLM agents');
 });
 

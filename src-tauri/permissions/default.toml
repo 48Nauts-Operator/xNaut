@@ -662,6 +662,7 @@ commands.allow = [
   "mobile_info",
   "conversation_store_load",
   "conversation_store_put",
+  "notebook_distill",
   "chat_send",
   "chat_send_model",
   "chat_send_provider",

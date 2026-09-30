@@ -693,13 +693,15 @@
   if (window.xnautRightPaneRegisterView) window.xnautRightPaneRegisterView('agent', view);
   else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key:'agent', view });
 
-  window.xnautRightPaneOpenAgent = (profile) => {
+  window.xnautRightPaneOpenAgent = (profile, options = {}) => {
+    const keepNotebook = options.preserveNotebook && [...document.querySelectorAll('[data-page="wiki"]')]
+      .some(node => node.getClientRects().length && !node.closest('[hidden]'));
     selected = profile || null;
     machinesAt = 0; // opening the pane is a deliberate look: re-ask exe.dev.
     // xnautShowRightPane never existed (silent no-op — the CLAUDE.md
     // window.* trap); xnautEnsureRightPane opens AND mounts the host.
     if (window.xnautEnsureRightPane) window.xnautEnsureRightPane();
-    if (window.xnautRightPaneShow) window.xnautRightPaneShow('agent');
+    if (!keepNotebook && window.xnautRightPaneShow) window.xnautRightPaneShow('agent');
     render();
   };
 })();

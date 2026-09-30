@@ -452,6 +452,10 @@
 .rpwk-article pre { overflow-x:auto; }
 .rpwk-article table { display:block; overflow-x:auto; }
 .rpwk-empty { flex:1 1 auto; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:30px 22px; text-align:center; color:var(--muted-foreground); font-size:12px; line-height:1.55; }
+.rpwk-switch { display:flex; gap:6px; padding:8px 12px; border-bottom:1px solid var(--border,#333); }
+.rpwk-switch [aria-pressed=true] { color:var(--primary,#e9b949); border-color:var(--primary,#e9b949); }
+.rpwk [data-notebook-host],.rpwk-docs { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
+.rpwk [hidden] { display:none!important; }
 .rpwk-empty h3 { margin:0; font-size:13px; color:var(--foreground); font-weight:650; }
 .rpwk-empty p { margin:0; max-width:38ch; }
 `;
@@ -509,6 +513,12 @@
 
     function page() {
       return `<div class="rpwk">
+        <div class="rpwk-switch" role="group" aria-label="Wiki view">
+          <button class="rpwk-btn" data-wiki-mode="notes" aria-pressed="true">Notes</button>
+          <button class="rpwk-btn" data-wiki-mode="docs" aria-pressed="false">Documentation</button>
+        </div>
+        <div data-notebook-host></div>
+        <div class="rpwk-docs" data-docs-host hidden>
         <div class="rpwk-bar">
           <input class="rpwk-url" data-wiki-url type="text" spellcheck="false"
                  placeholder="Paste a docs link (https://adk.dev/), or @adk-docu" />
@@ -530,6 +540,7 @@
                  click and still reads when the site is down.</p>
             </div>
           </article>
+        </div>
         </div>
       </div>`;
     }
@@ -757,6 +768,16 @@
 
     function wire() {
       const e = els(); if (!e) return;
+      const notebook = container.querySelector('[data-notebook-host]');
+      const docs = container.querySelector('[data-docs-host]');
+      const choose = mode => {
+        notebook.hidden = mode !== 'notes'; docs.hidden = mode !== 'docs';
+        container.querySelectorAll('[data-wiki-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.wikiMode === mode)));
+      };
+      container.querySelectorAll('[data-wiki-mode]').forEach(b => { b.onclick = () => choose(b.dataset.wikiMode); });
+      if (window.xnautNotebook) void window.xnautNotebook.mount(notebook, root);
+      else notebook.textContent = 'Notes could not load. Reopen the pane.';
+
       e.go.onclick = () => open();
       e.hist.onclick = () => toggleMenu();
       e.input.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); closeMenu(); open(); } };
@@ -788,6 +809,7 @@
         if (next === root) return Promise.resolve();
         root = next || '';
         currentUrl = ''; collection = null; slug = '';
+        if (window.xnautNotebook) void window.xnautNotebook.mount(container.querySelector('[data-notebook-host]'), root);
         const e = els();
         if (e) { e.input.value = ''; e.article.innerHTML = ''; renderNav([]); note(''); }
         return load();
