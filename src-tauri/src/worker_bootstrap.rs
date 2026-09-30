@@ -66,6 +66,8 @@ fn failure(code: &str) -> String {
     let detail = match code {
         "network_setup_required" => "The repository is not reachable from workers. Configure fleet network access once in Settings → Worker access, or use a worker-reachable repository endpoint. New tasks will reuse that setup automatically.",
         "network_install_failed" => "The worker could not install the private-network client. Check its package/network policy in provider setup.",
+        "network_tags_invalid" => "Worker network tags need the tag: prefix, for example tag:workers. Enter only tags authorized in your Tailscale policy; leave this field empty if the enrollment key already assigns its tags.",
+        "network_tags_denied" => "Tailscale rejected the requested worker tags. Use tags authorized for this enrollment key in your tailnet policy, or leave Worker network tags empty if the key already assigns its tags.",
         "network_enrollment_failed" => "Automatic fleet network enrollment failed. Check the reusable enrollment credential in Settings → Worker access.",
         "network_device_approval_required" => "The worker network requires administrator device approval. Use a preauthorized fleet enrollment credential in Settings → Worker access.",
         "network_daemon_unavailable" => "The worker's private-network service could not start. Check the provider image's service permissions.",

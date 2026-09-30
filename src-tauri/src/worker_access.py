@@ -10,6 +10,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -61,6 +62,10 @@ def network(host, port, enrollment):
     key = enrollment.get('auth_key', '').strip()
     if not key:
         raise SetupError('network_setup_required')
+    tags = enrollment.get('tags', '').strip()
+    if tags and any(not re.fullmatch(r'tag:[a-zA-Z][a-zA-Z0-9-]*', tag.strip()) for tag in tags.split(',')):
+        raise SetupError('network_tags_invalid')
+    tags = ','.join(tag.strip() for tag in tags.split(','))
     sudo = [] if os.geteuid() == 0 else ['sudo', '-n']
     if not shutil.which('tailscale'):
         # The official installer selects the distribution's signed repository.
@@ -93,10 +98,14 @@ def network(host, port, enrollment):
         with os.fdopen(fd, 'w') as output:
             output.write(key)
         command = sudo + ['tailscale', 'up', '--auth-key=file:' + str(auth), '--timeout=45s']
-        tags = enrollment.get('tags', '').strip()
         if tags:
             command.append('--advertise-tags=' + tags)
-        if run(command, timeout=60).returncode:
+        result = run(command, timeout=60)
+        if result.returncode:
+            # Classify only known policy errors; never expose raw auth output.
+            detail = (result.stdout + result.stderr).lower()
+            if 'requested tags' in detail and ('not permitted' in detail or 'invalid' in detail):
+                raise SetupError('network_tags_denied')
             raise SetupError('network_enrollment_failed')
     if not reachable(host, port):
         raise SetupError('network_route_unavailable')

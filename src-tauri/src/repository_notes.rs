@@ -1,6 +1,6 @@
 //! Project notebook snapshots share the repository PR outbox. SQLite remains
 //! the immediate local save; this queue survives a crash or an offline forge.
-use crate::repository_transfer::{git, portable_remote, store_dir, validate_remote, Transfer};
+use crate::repository_transfer::{desktop_remote, git, portable_remote, project_for_source, store_dir, transfer_desktop_remote, validate_remote, Transfer};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -51,13 +51,7 @@ fn queue(root: &str, key: &str, data: serde_json::Value) -> Result<(), String> {
     let projects =
         crate::project_management::list_projects(&crate::project_management::repo_now()?)?;
     let project_root = crate::sandbox::launch_env::project_root(Path::new(root));
-    let project = projects
-        .iter()
-        .find(|p| {
-            let local = crate::project_management::local_source_path(p);
-            !local.is_empty() && Path::new(&local) == project_root
-        })
-        .ok_or("Link this folder to a project before syncing its notes.")?;
+    let project = project_for_source(&projects, None, &project_root)?;
     let remote = validate_remote(&project.forge_remote)?;
     let dir = store_dir()?.join("notebook-outbox");
     let _lock = QUEUE.lock().map_err(|_| "Notebook queue unavailable")?;
@@ -79,7 +73,12 @@ fn queue(root: &str, key: &str, data: serde_json::Value) -> Result<(), String> {
 }
 
 fn push(snapshot: &Snapshot) -> Result<(), String> {
-    push_in(&store_dir()?, snapshot, &portable_remote(&snapshot.remote)?)
+    let projects = crate::project_management::list_projects(&crate::project_management::repo_now()?)?;
+    let project = projects.iter().find(|p| p.key == snapshot.project)
+        .ok_or("The notebook project is no longer registered")?;
+    let source = crate::project_management::local_source_path(project);
+    let route = desktop_remote(Path::new(&source), &snapshot.remote)?;
+    push_in(&store_dir()?, snapshot, &route)
 }
 fn push_in(root: &Path, snapshot: &Snapshot, remote: &str) -> Result<(), String> {
     let checkout = root.join(format!("notes-{}", snapshot.id));
@@ -113,7 +112,8 @@ fn push_in(root: &Path, snapshot: &Snapshot, remote: &str) -> Result<(), String>
             ticket: None,
             handle: "owner".into(),
             local_path: checkout.to_string_lossy().into(),
-            remote: remote.into(),
+            remote: portable_remote(remote)?,
+            desktop_remote: Some(remote.into()),
             worker_remote: None,
             worker: Default::default(),
             source_sha,
@@ -195,11 +195,12 @@ fn push_in(root: &Path, snapshot: &Snapshot, remote: &str) -> Result<(), String>
             ],
         )?;
     }
+    let desktop = transfer_desktop_remote(&transfer)?;
     git(
         &checkout,
         &[
             "push",
-            "origin",
+            &desktop,
             &format!("HEAD:refs/heads/{}", transfer.branch),
         ],
     )?;
@@ -254,6 +255,7 @@ pub async fn drain() {
                 handle: "owner".into(),
                 local_path: String::new(),
                 remote: snapshot.remote,
+                desktop_remote: None,
                 worker_remote: None,
                 worker: Default::default(),
                 source_sha: String::new(),

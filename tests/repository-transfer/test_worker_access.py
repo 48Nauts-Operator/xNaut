@@ -68,6 +68,19 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn('fixture-enrollment-secret', repr(commands))
         self.assertTrue(any('--advertise-tags=tag:workers' in c for c in commands))
 
+    def test_invalid_or_unauthorized_tags_return_actionable_codes_without_secrets(self):
+        with patch.object(access, 'reachable', return_value=False), patch.object(access, 'run') as run:
+            with self.assertRaisesRegex(access.SetupError, 'network_tags_invalid'):
+                access.network('private.example', 22, {'auth_key':'secret', 'tags':'workers'})
+            run.assert_not_called()
+        def denied(command, **kwargs):
+            if command[:3] == ['tailscale', 'status', '--json']:
+                return subprocess.CompletedProcess(command, 0, '{"BackendState":"NeedsLogin"}', '')
+            return subprocess.CompletedProcess(command, 1, '', 'requested tags [tag:workers] are invalid or not permitted; secret')
+        with patch.object(access, 'reachable', return_value=False), patch.object(access.shutil, 'which', return_value='/usr/bin/tailscale'), patch.object(access, 'run', side_effect=denied):
+            with self.assertRaisesRegex(access.SetupError, '^network_tags_denied$'):
+                access.network('private.example', 22, {'auth_key':'secret', 'tags':'tag:workers'})
+
     def test_missing_network_setup_and_existing_route_failure_are_distinct(self):
         with patch.object(access, 'reachable', return_value=False):
             with self.assertRaisesRegex(access.SetupError, 'network_setup_required'):

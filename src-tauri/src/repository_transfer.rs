@@ -19,6 +19,9 @@ pub struct Transfer {
     pub handle: String,
     pub local_path: String,
     pub remote: String,
+    /// Local SSH route; revalidated against the canonical destination on use.
+    #[serde(default)]
+    pub desktop_remote: Option<String>,
     /// Forge-provided SSH endpoint for the same repository. Legacy receipts
     /// keep using `remote`; desktop reconciliation always uses project setup.
     #[serde(default)]
@@ -151,34 +154,120 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&stdout).trim().into())
 }
 
-/// Resolve a machine-local SSH alias before shipping it to another machine.
-/// The key itself stays local; the VM must have its own access configured.
-pub(crate) fn portable_remote(remote: &str) -> Result<String, String> {
-    if remote.contains("://") {
-        return Ok(remote.into());
+/// SSH route on this desktop. The repository path always comes from project
+/// setup; an existing remote may supply an alias, never a different destination.
+#[derive(Clone, Debug)]
+struct SshRoute {
+    host: String,
+    user: Option<String>,
+    port: Option<u16>,
+    path: String,
+}
+impl SshRoute {
+    fn parse(remote: &str) -> Option<Self> {
+        if remote.starts_with("ssh://") {
+            let url = url::Url::parse(remote).ok()?;
+            Some(Self {
+                host: url.host_str()?.into(),
+                user: (!url.username().is_empty()).then(|| url.username().into()),
+                port: url.port(),
+                path: url.path().trim_start_matches('/').into(),
+            })
+        } else if !remote.contains("://") && validate_remote(remote).is_ok() {
+            let (host, path) = remote.split_once(':')?;
+            let (user, host) = match host.split_once('@') {
+                Some((user, host)) => (Some(user.into()), host),
+                None => (None, host),
+            };
+            Some(Self { host: host.into(), user, port: None, path: path.into() })
+        } else {
+            None
+        }
     }
-    let (host, path) = remote.split_once(':').ok_or("Invalid SSH repository")?;
-    let out = Command::new("ssh")
-        .args(["-G", host])
-        .output()
-        .map_err(|e| e.to_string())?;
+    fn url(&self) -> Result<String, String> {
+        let mut url = url::Url::parse("ssh://placeholder").unwrap();
+        url.set_host(Some(&self.host)).map_err(|_| "Invalid SSH hostname")?;
+        url.set_username(self.user.as_deref().unwrap_or("")).map_err(|_| "Invalid SSH user")?;
+        url.set_port(self.port).map_err(|_| "Invalid SSH port")?;
+        url.set_path(&self.path);
+        validate_remote(url.as_str())
+    }
+}
+
+/// Canonical endpoint for forge API matching and worker provisioning. Never
+/// use this expansion as the desktop Git route: that would lose IdentityFile,
+/// ProxyJump and other settings bound to an SSH alias.
+pub(crate) fn portable_remote(remote: &str) -> Result<String, String> {
+    let Some(route) = SshRoute::parse(remote) else { return Ok(remote.into()); };
+    let mut command = Command::new("ssh");
+    command.arg("-G");
+    if let Some(user) = &route.user { command.args(["-l", user]); }
+    if let Some(port) = route.port { command.args(["-p", &port.to_string()]); }
+    let out = command.args(["--", &route.host]).output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err("Cannot resolve the repository's SSH host.".into());
     }
     let config = String::from_utf8_lossy(&out.stdout);
     let get = |key: &str| {
-        config
-            .lines()
-            .find_map(|line| line.strip_prefix(&format!("{key} ")))
-            .unwrap_or("")
+        config.lines().find_map(|line| line.strip_prefix(&format!("{key} "))).unwrap_or("")
     };
     let hostname = get("hostname");
     let user = get("user");
-    let port = get("port");
-    if hostname.is_empty() || user.is_empty() || port.is_empty() {
+    let port = get("port").parse().map_err(|_| "Incomplete SSH host configuration")?;
+    if hostname.is_empty() || user.is_empty() {
         return Err("Incomplete SSH host configuration".into());
     }
-    validate_remote(&format!("ssh://{user}@{hostname}:{port}/{path}"))
+    SshRoute { host: hostname.into(), user: Some(user.into()), port: Some(port), ..route }.url()
+}
+
+fn select_desktop_remote(
+    configured: &str,
+    candidates: &[String],
+    resolve: impl Fn(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    let Some(route) = SshRoute::parse(configured) else { return Ok(configured.into()); };
+    let canonical = resolve(configured)?;
+    let target = SshRoute::parse(&canonical).ok_or("Invalid resolved SSH repository")?;
+    // An explicitly configured alias already names the owner's chosen route.
+    if !route.host.eq_ignore_ascii_case(&target.host) { return Ok(configured.into()); }
+    let mut matches = Vec::new();
+    for candidate in candidates {
+        if validate_remote(candidate).is_err() { continue; }
+        let Some(mut alias) = SshRoute::parse(candidate) else { continue; };
+        if alias.host.eq_ignore_ascii_case(&target.host) { continue; }
+        let Ok(resolved) = resolve(candidate) else { continue; };
+        let Some(endpoint) = SshRoute::parse(&resolved) else { continue; };
+        if endpoint.host.eq_ignore_ascii_case(&target.host)
+            && endpoint.user == target.user && endpoint.port == target.port
+            && endpoint.path.trim_end_matches(".git").eq_ignore_ascii_case(target.path.trim_end_matches(".git"))
+        {
+            // Preserve the configured path's spelling even on case-sensitive forges.
+            alias.path = target.path.clone();
+            matches.push(alias.url()?);
+        }
+    }
+    matches.sort();
+    matches.dedup();
+    match matches.as_slice() {
+        [] => Ok(configured.into()),
+        [route] => Ok(route.clone()),
+        _ => Err("Multiple SSH aliases match this repository. Set the intended SSH alias clone URL in Project settings.".into()),
+    }
+}
+
+pub(crate) fn desktop_remote(source: &Path, configured: &str) -> Result<String, String> {
+    if SshRoute::parse(configured).is_none() { return Ok(configured.into()); }
+    let mut candidates = Vec::new();
+    // Only credentials from this project's own remotes qualify. Never fall
+    // back to origin: it can be a mirror on an entirely different forge.
+    if let Ok(names) = git(source, &["remote"]) {
+        for name in names.lines() {
+            for args in [vec!["remote", "get-url", "--all", name], vec!["remote", "get-url", "--push", "--all", name]] {
+                if let Ok(urls) = git(source, &args) { candidates.extend(urls.lines().map(String::from)); }
+            }
+        }
+    }
+    select_desktop_remote(configured, &candidates, portable_remote)
 }
 
 pub(crate) fn store_dir() -> Result<PathBuf, String> {
@@ -240,7 +329,7 @@ pub fn repository_transfer_list(project: String) -> Result<Vec<Transfer>, String
         .collect())
 }
 
-fn project_for_source<'a>(
+pub(crate) fn project_for_source<'a>(
     projects: &'a [crate::project_management::ProjectRecord],
     ticket: Option<&str>,
     project_root: &Path,
@@ -283,7 +372,8 @@ pub fn prepare(
     }
     let source_sha = git(path, &["rev-parse", "HEAD"])?;
     let remote = portable_remote(&configured)?;
-    let refs = git(path, &["ls-remote", "--symref", &remote, "HEAD"])?;
+    let desktop = desktop_remote(path, &configured)?;
+    let refs = git(path, &["ls-remote", "--symref", &desktop, "HEAD"])?;
     let base = refs
         .lines()
         .find_map(|l| {
@@ -300,6 +390,7 @@ pub fn prepare(
         handle: handle.trim_start_matches('@').to_ascii_lowercase(),
         local_path: path.to_string_lossy().into(),
         remote,
+        desktop_remote: Some(desktop),
         worker_remote: None,
         worker: Default::default(),
         source_sha,
@@ -314,19 +405,28 @@ pub fn prepare(
     })
 }
 
+pub(crate) fn transfer_desktop_remote(t: &Transfer) -> Result<String, String> {
+    if let Some(route) = &t.desktop_remote {
+        if portable_remote(route)? == t.remote { return Ok(route.clone()); }
+        return Err("The desktop SSH alias now resolves to a different repository. Restore its configuration before retrying delivery.".into());
+    }
+    desktop_remote(Path::new(&t.local_path), &t.remote)
+}
+
 pub fn stage(transfer: &Transfer, access: &crate::worker_bootstrap::Access) -> Result<(), String> {
     // The common task bootstrap has already provisioned and checked Git/LFS
     // write access. Keep a separate SSH identity in THIS checkout's config.
     let input = format!("refs/heads/xnaut/inputs/{}", transfer.run_id);
+    let desktop = transfer_desktop_remote(transfer)?;
     git(
         Path::new(&transfer.local_path),
-        &["lfs", "push", &transfer.remote, &transfer.source_sha],
+        &["lfs", "push", &desktop, &transfer.source_sha],
     )?;
     git(
         Path::new(&transfer.local_path),
         &[
             "push",
-            &transfer.remote,
+            &desktop,
             &format!("{}:{input}", transfer.source_sha),
         ],
     )?;
@@ -392,10 +492,11 @@ fn fetch_result_in(
         git(&dir, &["init", "--bare"])?;
     }
     let reference = format!("refs/heads/{}", t.branch);
-    if git(&dir, &["ls-remote", &t.remote, &reference])?.is_empty() {
+    let desktop = transfer_desktop_remote(t)?;
+    if git(&dir, &["ls-remote", &desktop, &reference])?.is_empty() {
         return Ok(None);
     }
-    git(&dir, &["fetch", "--no-tags", &t.remote, &reference])?;
+    git(&dir, &["fetch", "--no-tags", &desktop, &reference])?;
     git(
         &dir,
         &["merge-base", "--is-ancestor", &t.source_sha, "FETCH_HEAD"],
@@ -580,6 +681,54 @@ pub fn spawn_reconciler(app: tauri::AppHandle) {
 mod tests {
     use super::*;
     #[test]
+    fn desktop_ssh_route_preserves_identity_and_exact_configured_destination() {
+        let configured = "ssh://git@forge.example:2222/Team/Repo.git";
+        let resolve = |remote: &str| -> Result<String, String> {
+            Ok(match remote {
+                "work:team/repo.git" | "ssh://work/Team/Repo.git" => configured.into(),
+                "mirror:team/repo.git" => "ssh://git@github.com:22/Team/Repo.git".into(),
+                "other-user:team/repo.git" => "ssh://other@forge.example:2222/Team/Repo.git".into(),
+                "other-port:team/repo.git" => "ssh://git@forge.example:22/Team/Repo.git".into(),
+                "other-repo:team/else.git" => "ssh://git@forge.example:2222/Team/else.git".into(),
+                "work2:team/repo.git" => configured.into(),
+                _ => remote.into(),
+            })
+        };
+        let wrong: Vec<String> = ["mirror:team/repo.git", "other-user:team/repo.git", "other-port:team/repo.git", "other-repo:team/else.git"].into_iter().map(String::from).collect();
+        assert_eq!(select_desktop_remote(configured, &wrong, resolve).unwrap(), configured);
+        let mut candidates = wrong;
+        candidates.extend(["work:team/repo.git".into(), "work:team/repo.git".into()]);
+        assert_eq!(select_desktop_remote(configured, &candidates, resolve).unwrap(), "ssh://work/Team/Repo.git");
+        assert_eq!(select_desktop_remote("work:team/repo.git", &[], resolve).unwrap(), "work:team/repo.git");
+        candidates.push("work2:team/repo.git".into());
+        assert!(select_desktop_remote(configured, &candidates, resolve).unwrap_err().contains("Multiple"));
+        assert_eq!(select_desktop_remote("https://forge.example/Team/Repo.git", &candidates, resolve).unwrap(), "https://forge.example/Team/Repo.git");
+    }
+
+    /// Explicit operator-only acceptance check: provisions repository access,
+    /// performs read/write-dry-run and empty LFS batch probes, starts no agent.
+    #[tokio::test]
+    #[ignore = "requires an explicitly selected live project and worker"]
+    async fn live_repository_access_preflight() {
+        let source = std::env::var("XNAUT_PREFLIGHT_SOURCE").expect("explicit source required");
+        let remote = validate_remote(&std::env::var("XNAUT_PREFLIGHT_REMOTE").expect("explicit remote required")).unwrap();
+        let desktop = desktop_remote(Path::new(&source), &remote).unwrap();
+        let refs = git(Path::new(&source), &["ls-remote", "--symref", &desktop, "HEAD"]).unwrap();
+        assert!(refs.contains("ref: refs/heads/"));
+        println!("desktop repository read: passed");
+        git(Path::new(&source), &["push", "--dry-run", &desktop, "HEAD:refs/heads/xnaut/preflight-access-check"]).unwrap();
+        println!("desktop repository write dry-run: passed");
+        let settings = crate::settings::load_or_default();
+        let access = crate::worker_bootstrap::prepare(
+            &crate::worker_bootstrap::Target::ExeDev,
+            &portable_remote(&remote).unwrap(), "xnaut/preflight-access-check",
+            &settings.forges, &settings.worker_network,
+        ).await.unwrap();
+        assert!(!access.ssh_command.is_empty());
+        println!("worker tools, network, repository read/write dry-run and LFS upload authorization: passed");
+    }
+
+    #[test]
     fn ticketless_tasks_resolve_a_project_registered_to_a_linked_worktree() {
         struct Scratch(PathBuf);
         impl Scratch { fn path(&self) -> &Path { &self.0 } }
@@ -653,6 +802,7 @@ mod tests {
             handle: "builder".into(),
             local_path: worker.to_string_lossy().into(),
             remote: remote.to_string_lossy().into(),
+            desktop_remote: None,
             worker_remote: None,
             worker: Default::default(),
             source_sha: source.clone(),
