@@ -873,16 +873,31 @@ pub async fn worker_clone_url(host: &ForgeHost, owner: &str, repo: &str) -> Resu
     Ok(remote)
 }
 
+/// OpenSSH public keys may carry a comment, including the one attached by
+/// our own worker bootstrap. Key identity is the algorithm and decoded blob.
+fn canonical_worker_key(public_key: &str) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let invalid = || "The worker returned an invalid public key.".to_string();
+    let key = public_key.trim();
+    if key.len() > 4096 || key.contains(['\r', '\n']) { return Err(invalid()); }
+    let mut parts = key.split_whitespace();
+    if parts.next() != Some("ssh-ed25519") { return Err(invalid()); }
+    let encoded = parts.next().ok_or_else(invalid)?;
+    let blob = STANDARD.decode(encoded).map_err(|_| invalid())?;
+    // SSH wire format: length + algorithm, length + 32-byte Ed25519 key.
+    if blob.len() != 51 || !blob.starts_with(b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20") {
+        return Err(invalid());
+    }
+    Ok(format!("ssh-ed25519 {}", STANDARD.encode(blob)))
+}
+
 /// Idempotent per-repository worker access. Only the PUBLIC key crosses this
 /// API. Never copy a desktop private key or broad forge token into the worker.
 pub async fn ensure_worker_key(host: &ForgeHost, owner: &str, repo: &str, public_key: &str) -> Result<(), String> {
     if !matches!(host.kind.as_str(), "github" | "forgejo") {
         return Err("Automatic worker access supports Forgejo and GitHub.".into());
     }
-    let parts: Vec<_> = public_key.split_whitespace().collect();
-    if parts.len() != 2 || parts[0] != "ssh-ed25519" || parts[1].len() > 256 {
-        return Err("The worker returned an invalid public key.".into());
-    }
+    let public_key = canonical_worker_key(public_key)?;
     let client = http_client()?;
     let token = token_for(host)?;
     let endpoint = format!("{}/repos/{owner}/{repo}/keys", api_base(host)?);
@@ -895,7 +910,7 @@ pub async fn ensure_worker_key(host: &ForgeHost, owner: &str, repo: &str, public
                 .map_err(|_| "Worker repository access could not be configured. The forge connection needs permission to manage this repository's deploy keys.".to_string())?;
             let rows = value.as_array().ok_or("Invalid deploy key list from forge")?;
             for row in rows {
-                if str_field(row, "key").split_whitespace().take(2).collect::<Vec<_>>() == parts {
+                if canonical_worker_key(&str_field(row, "key")).ok().as_deref() == Some(public_key.as_str()) {
                     return if row["read_only"].as_bool() == Some(false) { Ok(()) }
                     else { Err("This worker's repository deploy key is read-only. Enable write access in the repository's deploy-key settings.".into()) };
                 }
@@ -1270,6 +1285,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn worker_key_accepts_openssh_comments_but_rejects_malformed_material() {
+        let root = std::env::temp_dir().join(format!("xnaut-public-key-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("key");
+        assert!(std::process::Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-C", "xnaut-worker-fixture", "-f"]).arg(&path).status().unwrap().success());
+        let output = std::process::Command::new("ssh-keygen").args(["-y", "-f"]).arg(&path).output().unwrap();
+        assert!(output.status.success());
+        let public = String::from_utf8(output.stdout).unwrap();
+        let normalized = canonical_worker_key(&public).unwrap();
+        assert_eq!(normalized.split_whitespace().count(), 2);
+        assert_eq!(canonical_worker_key(&(normalized.clone() + " another comment")).unwrap(), normalized);
+        for bad in ["ssh-ed25519 AAAA", "ssh-rsa AAAA", "command=unsafe ssh-ed25519 AAAA", "ssh-ed25519 %%%"] {
+            assert!(canonical_worker_key(bad).is_err());
+        }
+        assert!(canonical_worker_key(&format!("{normalized}\n{normalized}")).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn worker_keys_are_repo_scoped_idempotent_and_write_enabled_on_both_forges() {
         use axum::{extract::State, Json, Router, routing::get};
@@ -1290,14 +1324,14 @@ mod tests {
             let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
             let config = host(kind, &format!("http://{address}"));
             assert_eq!(worker_clone_url(&config, "project-owner", "app").await.unwrap(), "ssh://git@forge.test:2222/project-owner/app.git");
-            for _ in 0..3 { ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAfixture").await.unwrap(); }
+            for comment in ["", " xnaut-worker-fixture", " changed comment with spaces"] { ensure_worker_key(&config, "project-owner", "app", &format!("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f{comment}")).await.unwrap(); }
             assert_eq!(rows.lock().unwrap().len(), 1);
             // A separate worker gets its own key. Repeated tasks never mint
             // duplicates, and a read-only key never passes a write preflight.
-            ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAanother").await.unwrap();
+            ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g").await.unwrap();
             assert_eq!(rows.lock().unwrap().len(), 2);
             rows.lock().unwrap()[0]["read_only"] = json!(true);
-            assert!(ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAfixture").await.unwrap_err().contains("read-only"));
+            assert!(ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f").await.unwrap_err().contains("read-only"));
             assert_eq!(rows.lock().unwrap().len(), 2);
             server.abort();
         }
