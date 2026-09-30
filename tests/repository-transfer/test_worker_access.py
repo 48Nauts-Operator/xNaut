@@ -8,6 +8,7 @@ from pathlib import Path
 import shlex
 import socketserver
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -76,7 +77,7 @@ class WorkerTests(unittest.TestCase):
                     access.network('private.example', 22, {'auth_key':'secret'})
                 self.assertEqual(run.call_count, 1)
 
-    def test_tools_are_installed_on_a_fresh_worker_and_rechecked_for_next_task(self):
+    def test_tools_install_and_recheck_with_a_provider_login_shell_exec_wrapper(self):
         binaries = self.root / 'bin'; binaries.mkdir()
         installed = self.root / 'installed'
         calls = self.root / 'package-calls'
@@ -85,12 +86,16 @@ class WorkerTests(unittest.TestCase):
             'apt-get': f'echo install >> {shlex.quote(str(calls))}; touch {shlex.quote(str(installed))}',
             'sudo': 'shift; exec "$@"',
             'python3': 'exit 0', 'tmux': 'exit 0', 'ssh-keygen': 'exit 0', 'ssh': 'exit 0', 'curl': 'exit 0',
+            'flock': f'exec {shlex.quote(sys.executable)} -c "import os; os.fstat(9)"',
         }
         for name, body in scripts.items():
             path = binaries / name; path.write_text('#!/bin/sh\n' + body + '\n'); path.chmod(0o755)
         env = {**os.environ, 'PATH':str(binaries) + ':/usr/bin:/bin'}
+        # Actual exe.dev login-shell customization. A bare `exec 9>...` loses
+        # the lock fd on return from this function, before flock is invoked.
+        script = 'exec() { if [ $# -eq 0 ]; then builtin exec; else builtin exec env "$@"; fi; };\n' + (SOURCE/'worker_tools.sh').read_text()
         for _ in range(2):
-            result = subprocess.run(['/bin/bash', str(SOURCE / 'worker_tools.sh')], env=env, text=True, capture_output=True)
+            result = subprocess.run(['/bin/bash', '-c', script], env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('XNAUT_BOOTSTRAP_TOOLS_READY', result.stdout)
         self.assertEqual(calls.read_text().splitlines(), ['install', 'install'])

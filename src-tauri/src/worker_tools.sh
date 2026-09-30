@@ -6,7 +6,10 @@ set -eu
 # Linux base images; package-manager locks remain the fallback elsewhere.
 if command -v flock >/dev/null; then
   mkdir -p "$HOME/.local/state/xnaut"
-  exec 9>"$HOME/.local/state/xnaut/tool-install.lock"
+  # Provider login shells may wrap `exec` in a function. A redirection on that
+  # function closes when it returns. `command exec` bypasses the function AND
+  # preserves exec's persistent-redirection semantics (`builtin exec` does not).
+  command exec 9>"$HOME/.local/state/xnaut/tool-install.lock"
   flock -w 540 9 || { echo XNAUT_BOOTSTRAP_INSTALL_FAILED; exit 21; }
 fi
 ready() {
