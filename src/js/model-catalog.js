@@ -6,6 +6,7 @@
   'use strict';
   const invoke = (...a) => window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(...a);
   const KEY = 'xnaut-model-catalog';
+  const VERSION = 2; // Fetch display metadata once when upgrading an ID-only cache.
   const DAY = 24 * 60 * 60 * 1000;
 
   let cache = null;
@@ -34,7 +35,7 @@
         flat.push(entry);
       });
       if (Array.isArray(list)) {
-        cache = { at: Date.now(), byProvider, flat };
+        cache = { version: VERSION, at: Date.now(), byProvider, flat };
         error = '';
         try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (_) {}
       }
@@ -43,7 +44,7 @@
     return cache;
   }
 
-  const stale = () => !cache || !cache.at || (Date.now() - cache.at) > DAY;
+  const stale = () => !cache || cache.version !== VERSION || !cache.at || (Date.now() - cache.at) > DAY;
 
   window.xnautModelCatalog = {
     all: () => (cache && cache.flat) || [],
