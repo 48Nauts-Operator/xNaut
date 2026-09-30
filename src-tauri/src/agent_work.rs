@@ -17,7 +17,7 @@ pub fn specs() -> Vec<Value> {
         ("start_repository_task", "Create your own isolated worktree and launch your coding runtime with the task. Use for audits, tests, commands or code changes, without asking the owner to create a worktree. Returns an actual launch receipt, not proof of completed work. Uses your configured local/exe.dev/GitVM environment; never attaches an idle terminal as a substitute. Reuse the same task_key on retries to avoid duplicate workers."),
     ].into_iter().map(|(name, description)| json!({"type":"function","function":{
         "name":name,"description":description,"parameters":{"type":"object","properties":{
-            "root":{"type":"string","description":"Exact authorized repository root from user text or registered-project context."},
+            "root":{"type":"string","description":"Absolute authorized repository root, or the exact registered project key/name named by the user."},
             "task_key":{"type":"string","description":"Stable task identity, preferably its ticket ID. Same key for create and start, and for retries. A new key means a separate run."},
             "task":{"type":"string","description":"Full work request and acceptance criteria, preserving the user's scope."},
             "ticket":{"type":"string","description":"Existing ticket ID when working a ticket. Its registered scope is included in the worker prompt."}
@@ -26,14 +26,7 @@ pub fn specs() -> Vec<Value> {
 }
 
 fn authorize_root(root: &str, allowed: &[PathBuf]) -> Result<PathBuf, String> {
-    let path = PathBuf::from(root)
-        .canonicalize()
-        .map_err(|e| format!("repository unavailable: {e}"))?;
-    if !allowed.contains(&path) {
-        return Err(
-            "Repository was not named by the user or resolved from a registered project.".into(),
-        );
-    }
+    let path = crate::repository_read::authorized_root(root, allowed)?;
     if !path.join(".git").exists() {
         return Err("A Git repository root is required; scratch folders are not worktrees.".into());
     }

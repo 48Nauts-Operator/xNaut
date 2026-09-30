@@ -12,7 +12,7 @@ pub fn specs() -> Vec<Value> {
         ("read_repository_file", "Read a UTF-8 documentation or source file from a local repository named by the user. Use relative paths returned by list_repository_files. Read-only; excludes private files and cannot escape the repository.", true),
     ].into_iter().map(|(name, description, read)| json!({"type":"function","function":{
         "name":name,"description":description,"parameters":{"type":"object","properties":{
-            "root":{"type":"string","description":"Exact absolute root supplied by the user or resolved in registered-project context."},
+            "root":{"type":"string","description":"Absolute authorized repository root, or the exact registered project key/name named by the user."},
             "path":{"type":"string","description":if read {"Relative file path."} else {"Relative directory, defaults to ."}},
             "offset":{"type":"integer","minimum":0,"description":if read {"Zero-based line offset."} else {"Zero-based entry offset."}},
             "limit":{"type":"integer","minimum":1,"maximum":200}
@@ -48,10 +48,14 @@ pub fn roots(messages: &[Value]) -> Vec<PathBuf> {
 /// Resolve user-named projects from xNaut's authoritative local registry.
 /// Assistant/tool text cannot grant access, and ambiguous names grant none.
 pub fn registered_context(messages: &[Value]) -> (Vec<PathBuf>, Vec<Value>) {
+    resolve_registered(messages, &registered_entries())
+}
+
+fn registered_entries() -> Vec<(String, String, String)> {
     let projects = crate::project_management::repo_now()
         .and_then(|repo| crate::project_management::list_projects(&repo))
         .unwrap_or_default();
-    let entries: Vec<_> = projects
+    projects
         .iter()
         .map(|p| {
             (
@@ -60,8 +64,41 @@ pub fn registered_context(messages: &[Value]) -> (Vec<PathBuf>, Vec<Value>) {
                 crate::project_management::local_source_path(p),
             )
         })
-        .collect();
-    resolve_registered(messages, &entries)
+        .collect()
+}
+
+/// Interpret names through the registry, never relative to the app's working
+/// directory. Resolving a name cannot grant access beyond the turn's roots.
+pub(crate) fn authorized_root(root: &str, allowed: &[PathBuf]) -> Result<PathBuf, String> {
+    resolve_authorized_root(root, allowed, &registered_entries())
+}
+
+fn resolve_authorized_root(
+    root: &str,
+    allowed: &[PathBuf],
+    entries: &[(String, String, String)],
+) -> Result<PathBuf, String> {
+    let requested = Path::new(root);
+    let path = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        let matches: Vec<_> = entries.iter().filter(|(key, name, _)| {
+            key.eq_ignore_ascii_case(root) || name.eq_ignore_ascii_case(root)
+        }).collect();
+        match matches.as_slice() {
+            [(_, _, path)] => PathBuf::from(path),
+            [] => return Err("Unknown repository name. Use an exact registered project key or an absolute repository root supplied by the user.".into()),
+            _ => return Err("Ambiguous repository name. Use the project's unique key or an authorized absolute root.".into()),
+        }
+    };
+    if !path.is_absolute() {
+        return Err("The registered project has no absolute local repository path. Set its local source folder in project settings.".into());
+    }
+    let canonical = path.canonicalize().map_err(|e| format!("Repository unavailable: {e}"))?;
+    if !allowed.contains(&canonical) {
+        return Err("Repository root was not supplied by the user or resolved from a registered project they named. Ask for the project name or path; do not guess or broaden it.".into());
+    }
+    Ok(canonical)
 }
 fn mentions(text: &str, name: &str) -> bool {
     if name.trim().is_empty() {
@@ -138,12 +175,7 @@ fn excluded(path: &Path) -> bool {
     })
 }
 fn inspect(name: &str, args: &Value, allowed: &[PathBuf]) -> Result<Value, String> {
-    let root = Path::new(args["root"].as_str().ok_or("root is required")?)
-        .canonicalize()
-        .map_err(|e| format!("Repository unavailable: {e}"))?;
-    if !allowed.contains(&root) {
-        return Err("Repository root was not supplied by the user or resolved from a registered project they named. Ask for the project path; do not guess or broaden it.".into());
-    }
+    let root = authorized_root(args["root"].as_str().ok_or("root is required")?, allowed)?;
     let relative = Path::new(args["path"].as_str().unwrap_or("."));
     if relative
         .components()
@@ -258,6 +290,25 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn project_alias_resolves_only_to_an_authorized_unambiguous_root() {
+        let tmp = Scratch::new();
+        // The registered folder need not have the project's name (a worktree).
+        let root = tmp.path().join("safety-net");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let entries = vec![("XNAUT".into(), "xnaut".into(), root.to_string_lossy().into_owned())];
+        let allowed = vec![canonical.clone()];
+        assert_eq!(resolve_authorized_root("xNAUT", &allowed, &entries).unwrap(), canonical);
+        assert!(resolve_authorized_root("xNAUT", &[], &entries).unwrap_err().contains("not supplied"));
+        assert!(resolve_authorized_root("safety-net", &allowed, &entries).unwrap_err().contains("Unknown"));
+        assert!(resolve_authorized_root("../xnaut", &allowed, &entries).is_err());
+        let mut ambiguous = entries.clone();
+        ambiguous.push(("OTHER".into(), "xnaut".into(), root.to_string_lossy().into_owned()));
+        assert!(resolve_authorized_root("xnaut", &allowed, &ambiguous).unwrap_err().contains("Ambiguous"));
+        assert_eq!(resolve_authorized_root(root.to_str().unwrap(), &allowed, &[]).unwrap(), canonical);
     }
 
     #[test]
