@@ -549,6 +549,14 @@ if [ -n "$APP_PID" ]; then
   # The sidebar's visibility persists across launches, and the previous walk
   # leaves it toggled off. The rail has to be on screen for the Projects step,
   # so bring it back first; the toggle step below then hides it again.
+  # The first AX request enables WKWebView accessibility asynchronously after
+  # an app restart. A cold tree is not proof the sidebar is hidden: toggling on
+  # that first miss hid an already-visible rail on Tron (20261001-chat-review).
+  # Wait for a persistent web control before making any visibility decision.
+  for probe in 1 2 3 4 5 6 7 8 9 10; do
+    "$AXUI" "$APP_PID" list -x "New terminal" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
   "$AXUI" "$APP_PID" list -x "Projects" >/dev/null 2>&1 || click_named "Toggle projects sidebar"
   for triple in \
     "Projects|Code|" \
