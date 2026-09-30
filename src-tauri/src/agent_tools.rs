@@ -1844,7 +1844,7 @@ fn preparation_only(performed: &[String]) -> bool {
             "attach_session" | "list_sessions" | "list_agents" | "list_tickets" |
             "create_ticket" | "update_ticket" | "read_handback" | "list_repository_files" |
             "connect_plugin" | "repair_plugin" | "inspect_package" | "search_packages" |
-            "aikido_login" | "swarm_plan" | "create_worktree")
+            "aikido_login" | "swarm_plan" | "create_worktree" | "request_repository_review")
     })
 }
 fn review_requested(messages: &[Value]) -> bool {
@@ -1854,6 +1854,7 @@ fn review_requested(messages: &[Value]) -> bool {
 }
 fn unverified_review_reply(text: String, review: bool, performed: &[String]) -> String {
     if review && preparation_only(performed) && crate::agent_profiles::unbacked_claim_notice(&text).is_some() {
+        if performed.iter().any(|call|call.starts_with("request_repository_review ")) {return "The existing PR review is queued or its saved review status was returned. This chat did not verify a new worker launch, completed tests, merge or release. Follow the review status in Project settings.".into();}
         return "The audit has not been verified as started. No successful scanner, source-inspection or worker-launch result was recorded. Attaching a terminal and updating a ticket do not launch the work. Use start_repository_task if commands are needed.".into();
     }
     text
@@ -2296,6 +2297,7 @@ async fn run_turn_with_roots(
 
     let action_requested = wants_action(&conversation);
     let mut retried_without_tools = false;
+    let mut review_queued = false;
     let mut omit_reasoning = false;
     for _ in 0..MAX_ROUNDS {
         // reasoning_effort is FORCED to none on a tool turn. Verified against
@@ -2394,7 +2396,7 @@ async fn run_turn_with_roots(
             // must not send the owner back to the path picker.
             let handoff = message["content"].as_str().unwrap_or("").trim_start()
                 .lines().next().is_some_and(|line| line.trim() == crate::composer::BUILD_MARKER);
-            if action_requested && (attempted.is_empty() || (review && preparation_only(&performed))) && !retried_without_tools && (!handoff || !repository_roots.is_empty()) && !read_only_panel {
+            if action_requested && !review_queued && (attempted.is_empty() || (review && preparation_only(&performed))) && !retried_without_tools && (!handoff || !repository_roots.is_empty()) && !read_only_panel {
                 retried_without_tools = true;
                 conversation.push(message);
                 conversation.push(json!({"role":"system","content":"The requested work has no execution or inspection evidence yet. No tool has run, or only preparation/navigation completed. Attaching a session, listing data, signing in and creating/updating a ticket do not execute an audit. Use the registered project context and read-only repository tools or an actual scanner. Do not repeat successful setup or retry a failed side effect. If commands or a worker are needed and no connected tool covers them, use start_repository_task for an authorized repository, or BUILD-REQUEST only if its location is unknown; this is a handoff, not a claim that work started. If blocked, report the actual error. Never claim an audit, verification or sign-off without evidence."}));
@@ -2489,6 +2491,7 @@ async fn run_turn_with_roots(
                     None => execute(&name, &args, canvas_key).await,
                 }
             };
+            if name == "request_repository_review" && result["ok"] == true {review_queued=true;}
             if name == "start_repository_task" && result["ok"] == true {
                 if let Some((app, request_id)) = stream_to {
                     let _ = tauri::Emitter::emit(app, "agent-task-started", json!({
@@ -2769,6 +2772,9 @@ mod tests {
         assert!(!guarded.contains("Security check started"));
         assert_eq!(unverified_review_reply(false_claim.clone(),false,&prep),false_claim);
         assert!(!preparation_only(&["read_repository_file {}".into()]));
+        let queued=vec!["request_repository_review {}".into()];
+        assert!(preparation_only(&queued));
+        assert!(unverified_review_reply("I started the review".into(),true,&queued).contains("saved review status"));
         assert!(review_requested(&[json!({"role":"user","content":"Cortana, can you please run a Security Check on JobUp"})]));
         assert!(!review_requested(&[json!({"role":"user","content":"Why did you say the audit started?"})]));
         assert_eq!(unverified_review_reply("BUILD-REQUEST\nRun the scanner.".into(),true,&prep),"BUILD-REQUEST\nRun the scanner.");
