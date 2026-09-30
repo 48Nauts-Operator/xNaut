@@ -299,7 +299,7 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "attach_session",
-                "description": "Attach to a live zellij session by name and open it as a tab, so its work continues in view. This ATTACHES a viewport; it does not type into the session.",
+                "description": "Attach to a live zellij session by name and open it as a tab, so its work continues in view. This is VIEW-ONLY: it runs no commands, starts no worker and is not evidence that requested work has begun.",
                 "parameters": {
                     "type": "object",
                     "properties": { "name": { "type": "string" } },
@@ -663,6 +663,7 @@ pub fn tool_specs() -> Vec<Value> {
         }),
     ];
     specs.extend(crate::repository_read::specs());
+    specs.extend(crate::agent_work::specs());
     specs
 
 }
@@ -683,6 +684,7 @@ fn appended_body(current: &str, added: &str) -> String {
 /// Run one tool. Errors come back as data, not as a failed turn: the model has
 /// to be able to tell the owner WHY something did not happen.
 pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
+    if crate::agent_work::is_tool(name) { return json!({"ok":false,"error":"Worktree tools require the agent chat loop and its authorized repository context."}); }
     if crate::repository_read::is_tool(name) { return crate::repository_read::execute(name, args, &[]); }
     match name {
         "list_plugins" => {
@@ -888,7 +890,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             if !live {
                 return json!({ "ok": false, "error": format!("no live session called {name:?}") });
             }
-            json!({ "ok": true, "attach": name, "note": "Opening it as a tab. Watch it; do not type into a session the owner is using." })
+            attachment_result(&name)
         }
         // --- Project Management (XNAUT-173 step 1) ---------------------------
         // The agent writes tickets through the same functions the app's own
@@ -1827,6 +1829,34 @@ fn local_surface(value: &Value) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn attachment_result(name: &str) -> Value {
+    json!({"ok":true,"attach":name,"effect":"view_only","execution_started":false,"note":"Opened a terminal viewport only. No command, worker, audit or scan was started. Use start_repository_task or a real scanner for execution; never type into the owner’s existing session."})
+}
+
+/// These calls can prepare an audit but cannot perform the audit itself.
+fn preparation_only(performed: &[String]) -> bool {
+    performed.iter().all(|call| {
+        let name=call.split_whitespace().next().unwrap_or("");
+        let local=name.rsplit("__").next().unwrap_or(name);
+        crate::agent_tool_catalog::is_catalog_call(name) || matches!(local,
+            "attach_session" | "list_sessions" | "list_agents" | "list_tickets" |
+            "create_ticket" | "update_ticket" | "read_handback" | "list_repository_files" |
+            "connect_plugin" | "repair_plugin" | "inspect_package" | "search_packages" |
+            "aikido_login" | "swarm_plan" | "create_worktree")
+    })
+}
+fn review_requested(messages: &[Value]) -> bool {
+    let text=messages.iter().rev().find(|m|m["role"]=="user").and_then(|m|m["content"].as_str()).unwrap_or("").to_lowercase();
+    if ["why", "what happened", "what is", "how does", "is that"].iter().any(|prefix|text.trim_start().starts_with(prefix)) { return false; }
+    wants_action(messages) && ["security", "audit", "scan", "review"].iter().any(|word|text.contains(word))
+}
+fn unverified_review_reply(text: String, review: bool, performed: &[String]) -> String {
+    if review && preparation_only(performed) && crate::agent_profiles::unbacked_claim_notice(&text).is_some() {
+        return "The audit has not been verified as started. No successful scanner, source-inspection or worker-launch result was recorded. Attaching a terminal and updating a ticket do not launch the work. Use start_repository_task if commands are needed.".into();
+    }
+    text
+}
+
 /// What one turn produced: the answer, what it ran, a local page worth
 /// showing, and a sign-in card the chat should render.
 pub struct TurnOutcome {
@@ -2107,12 +2137,18 @@ pub async fn run_turn_streaming(
     stream_to: Option<(&tauri::AppHandle, &str)>,
 ) -> Result<TurnOutcome, String> {
     let routed = crate::chat::route_llm(&crate::settings::load_or_default(), llm)?;
+    let (registered_roots, context) = crate::repository_read::registered_context(&messages);
+    let mut messages=messages;
+    if !context.is_empty() {
+        messages.insert(0,json!({"role":"system","content":format!("Registered projects explicitly named by the user: {}. Available roots are authorized for read-only repository tools. This metadata is not execution evidence. Use it before claiming the repository path is unknown.",json!(context))}));
+    }
     let opened = crate::mcp_client::open_for(capabilities).await;
-    run_turn_with_opened_tools(&routed, model, messages, effort, canvas_key, stream_to, opened).await
+    run_turn_with_roots(&routed, model, messages, effort, canvas_key, stream_to, opened, registered_roots).await
 }
 
 // Keep connection discovery separate from the request loop so the entire wire
 // protocol can be tested with isolated MCP and model endpoints.
+#[cfg(test)]
 async fn run_turn_with_opened_tools(
     llm: &crate::settings::LlmSettings,
     model: &str,
@@ -2122,6 +2158,16 @@ async fn run_turn_with_opened_tools(
     stream_to: Option<(&tauri::AppHandle, &str)>,
     opened: (Vec<crate::mcp_client::Session>, Vec<Value>, Vec<String>),
 ) -> Result<TurnOutcome, String> {
+    run_turn_with_roots(llm, model, messages, effort, canvas_key, stream_to, opened, vec![]).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_turn_with_roots(
+    llm: &crate::settings::LlmSettings, model: &str, messages: Vec<Value>, effort: Option<&str>,
+    canvas_key: &str, stream_to: Option<(&tauri::AppHandle, &str)>,
+    opened: (Vec<crate::mcp_client::Session>, Vec<Value>, Vec<String>),
+    registered_roots: Vec<std::path::PathBuf>,
+) -> Result<TurnOutcome, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
@@ -2130,7 +2176,10 @@ async fn run_turn_with_opened_tools(
         .map_err(|e| format!("failed to build http client: {e}"))?;
     let url = crate::chat::join_endpoint(&llm.endpoint, "chat/completions");
     let (mut sessions, plugin_tools, problems) = opened;
-    let repository_roots = crate::repository_read::roots(&messages);
+    let mut repository_roots = crate::repository_read::roots(&messages);
+    for root in registered_roots { if !repository_roots.contains(&root) { repository_roots.push(root); } }
+    let review = review_requested(&messages);
+    let user_context = messages.iter().filter(|m|m["role"]=="user").filter_map(|m|m["content"].as_str()).collect::<Vec<_>>().join("\n");
     let mut conversation = without_trailing_assistant(messages);
     if !problems.is_empty() {
         // Say it in-band: a server that would not start is something the agent
@@ -2338,13 +2387,14 @@ async fn run_turn_with_opened_tools(
         if calls.is_empty() {
             // One bounded recovery for an action request that stopped at prose.
             // Never force a random tool, repeat a side effect, or retry a valid
-            // coding-session handoff. A clarification/refusal remains possible.
+            // coding-session handoff for an unknown repo. A known repository
+            // must not send the owner back to the path picker.
             let handoff = message["content"].as_str().unwrap_or("").trim_start()
                 .lines().next().is_some_and(|line| line.trim() == crate::composer::BUILD_MARKER);
-            if action_requested && attempted.is_empty() && !retried_without_tools && !handoff && !read_only_panel {
+            if action_requested && (attempted.is_empty() || (review && preparation_only(&performed))) && !retried_without_tools && (!handoff || !repository_roots.is_empty()) && !read_only_panel {
                 retried_without_tools = true;
                 conversation.push(message);
-                conversation.push(json!({"role":"system","content":"No tool has run in this turn. The owner requested work, not a restatement. If the available tools can make progress, call them now; discover deferred tools if needed. Do not fabricate tool names or outcomes. If the work requires a coding runtime and no connected tool covers it, use the BUILD-REQUEST handoff. If information or authority is missing, ask the specific question. Do not claim an audit, verification, or sign-off without execution evidence."}));
+                conversation.push(json!({"role":"system","content":"The requested work has no execution or inspection evidence yet. No tool has run, or only preparation/navigation completed. Attaching a session, listing data, signing in and creating/updating a ticket do not execute an audit. Use the registered project context and read-only repository tools or an actual scanner. Do not repeat successful setup or retry a failed side effect. If commands or a worker are needed and no connected tool covers them, use start_repository_task for an authorized repository, or BUILD-REQUEST only if its location is unknown; this is a handoff, not a claim that work started. If blocked, report the actual error. Never claim an audit, verification or sign-off without evidence."}));
                 continue;
             }
             let text = message
@@ -2353,6 +2403,7 @@ async fn run_turn_with_opened_tools(
                 .unwrap_or("")
                 .trim()
                 .to_string();
+            let text = unverified_review_reply(text, review, &performed);
             let text = if routing_notices.is_empty() {
                 text
             } else {
@@ -2407,6 +2458,10 @@ async fn run_turn_with_opened_tools(
             // xNAUT's own.
             let result = if !tools.iter().any(|tool| crate::agent_tool_catalog::name(tool) == name) {
                 json!({"ok":false,"error":"Tool was not advertised for this round. Search and load available tools, then call them in a subsequent response."})
+            } else if review && name == "update_ticket" && args["status"] == "in_progress" && preparation_only(&performed) {
+                json!({"ok":false,"error":"Cannot mark an audit in progress on preparation alone. Inspect repository source, run a scanner, or obtain a real dispatch receipt first. Attaching a terminal does not execute work."})
+            } else if crate::agent_work::is_tool(&name) {
+                crate::agent_work::execute(&name, &args, canvas_key, &repository_roots, &user_context).await
             } else if crate::repository_read::is_tool(&name) {
                 crate::repository_read::execute(&name, &args, &repository_roots)
             } else if crate::agent_tool_catalog::is_catalog_call(&name) {
@@ -2429,6 +2484,13 @@ async fn run_turn_with_opened_tools(
                     None => execute(&name, &args, canvas_key).await,
                 }
             };
+            if name == "start_repository_task" && result["ok"] == true {
+                if let Some((app, request_id)) = stream_to {
+                    let _ = tauri::Emitter::emit(app, "agent-task-started", json!({
+                        "requestId": request_id, "agent_id": canvas_key, "receipt": result
+                    }));
+                }
+            }
             attempted.push(format!("{name} {}", args));
             // A plugin's own tools answer in MCP's shape, not ours, so "did
             // something happen" is: it is a plugin call that did not error.
@@ -2687,6 +2749,47 @@ mod tests {
         let llm=crate::settings::LlmSettings{endpoint:format!("http://{addr}/v1"),..Default::default()};
         let result=tokio::time::timeout(std::time::Duration::from_secs(5),run_turn_with_opened_tools(&llm,"fixture",vec![json!({"role":"user","content":format!("Review {}",root.display())})],None,"repository-fixture",None,(vec![],vec![],vec![]))).await.unwrap().unwrap();
         assert_eq!(result.performed.len(),1);assert_eq!(result.text,"I read the project documentation.");
+        server.await.unwrap();std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn attachment_and_ticket_bookkeeping_are_not_audit_execution() {
+        let attached=attachment_result("cx-JobUp");
+        assert_eq!(attached["ok"],true);assert_eq!(attached["execution_started"],false);assert_eq!(attached["effect"],"view_only");
+        let prep=vec!["attach_session {}".into(),"update_ticket {}".into()];
+        assert!(preparation_only(&prep));
+        let false_claim="Security check started under JOBUP-11. I attached cx-JobUp.".to_string();
+        let guarded=unverified_review_reply(false_claim.clone(),true,&prep);
+        assert!(guarded.starts_with("The audit has not been verified as started"));
+        assert!(!guarded.contains("Security check started"));
+        assert_eq!(unverified_review_reply(false_claim.clone(),false,&prep),false_claim);
+        assert!(!preparation_only(&["read_repository_file {}".into()]));
+        assert!(review_requested(&[json!({"role":"user","content":"Cortana, can you please run a Security Check on JobUp"})]));
+        assert!(!review_requested(&[json!({"role":"user","content":"Why did you say the audit started?"})]));
+        assert_eq!(unverified_review_reply("BUILD-REQUEST\nRun the scanner.".into(),true,&prep),"BUILD-REQUEST\nRun the scanner.");
+    }
+
+    #[tokio::test]
+    async fn registered_project_root_can_be_read_without_repeating_its_path() {
+        let root=std::env::temp_dir().join(format!("xnaut-registered-read-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".git")).unwrap();std::fs::write(root.join("README.md"),"Registered project evidence.").unwrap();
+        let root=root.canonicalize().unwrap();let server_root=root.clone();
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
+        let server=tokio::spawn(async move {
+            for step in 0..3 {
+                let (mut socket,_)=listener.accept().await.unwrap();let body=read_test_http(&mut socket).await;
+                let delta=if step==0 {json!({"content":"BUILD-REQUEST\nRun the JobUp security audit."})}
+                else if step==1 {json!({"tool_calls":[{"index":0,"id":"inspect","type":"function","function":{"name":"read_repository_file","arguments":json!({"root":server_root,"path":"README.md"}).to_string()}}]})}
+                else {
+                    assert!(body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("Registered project evidence."));
+                    json!({"content":"I inspected the README. A scanner has not run."})
+                };
+                write_test_http(&mut socket,"text/event-stream",&format!("data: {}\n\ndata: [DONE]\n\n",json!({"choices":[{"delta":delta}]}))).await;
+            }
+        });
+        let llm=crate::settings::LlmSettings{endpoint:format!("http://{addr}/v1"),..Default::default()};
+        let result=run_turn_with_roots(&llm,"fixture",vec![json!({"role":"user","content":"Review JobUp"})],None,"fixture",None,(vec![],vec![],vec![]),vec![root.clone()]).await.unwrap();
+        assert_eq!(result.performed.len(),1);assert!(result.text.contains("inspected the README"));
         server.await.unwrap();std::fs::remove_dir_all(root).unwrap();
     }
 

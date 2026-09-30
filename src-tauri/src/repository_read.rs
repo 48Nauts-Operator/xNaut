@@ -12,7 +12,7 @@ pub fn specs() -> Vec<Value> {
         ("read_repository_file", "Read a UTF-8 documentation or source file from a local repository named by the user. Use relative paths returned by list_repository_files. Read-only; excludes private files and cannot escape the repository.", true),
     ].into_iter().map(|(name, description, read)| json!({"type":"function","function":{
         "name":name,"description":description,"parameters":{"type":"object","properties":{
-            "root":{"type":"string","description":"Exact absolute repository root supplied by the user (quote paths containing spaces)."},
+            "root":{"type":"string","description":"Exact absolute root supplied by the user or resolved in registered-project context."},
             "path":{"type":"string","description":if read {"Relative file path."} else {"Relative directory, defaults to ."}},
             "offset":{"type":"integer","minimum":0,"description":if read {"Zero-based line offset."} else {"Zero-based entry offset."}},
             "limit":{"type":"integer","minimum":1,"maximum":200}
@@ -45,6 +45,76 @@ pub fn roots(messages: &[Value]) -> Vec<PathBuf> {
     }
     roots
 }
+/// Resolve user-named projects from xNaut's authoritative local registry.
+/// Assistant/tool text cannot grant access, and ambiguous names grant none.
+pub fn registered_context(messages: &[Value]) -> (Vec<PathBuf>, Vec<Value>) {
+    let projects = crate::project_management::repo_now()
+        .and_then(|repo| crate::project_management::list_projects(&repo))
+        .unwrap_or_default();
+    let entries: Vec<_> = projects
+        .iter()
+        .map(|p| {
+            (
+                p.key.clone(),
+                p.name.clone(),
+                crate::project_management::local_source_path(p),
+            )
+        })
+        .collect();
+    resolve_registered(messages, &entries)
+}
+fn mentions(text: &str, name: &str) -> bool {
+    if name.trim().is_empty() {
+        return false;
+    }
+    let text = text.to_lowercase();
+    let name = name.to_lowercase();
+    text.match_indices(&name).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + name.len()..].chars().next();
+        !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+            && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+fn resolve_registered(
+    messages: &[Value],
+    entries: &[(String, String, String)],
+) -> (Vec<PathBuf>, Vec<Value>) {
+    let mut allowed = Vec::new();
+    let mut context = Vec::new();
+    for (key, name, path) in entries {
+        let named = messages
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .filter_map(|m| m["content"].as_str())
+            .any(|text| {
+                mentions(text, key)
+                    || (mentions(text, name)
+                        && entries
+                            .iter()
+                            .filter(|(_, other, _)| other.eq_ignore_ascii_case(name))
+                            .count()
+                            == 1)
+            });
+        if !named {
+            continue;
+        }
+        let root = Path::new(path);
+        let valid = root.is_absolute() && root.join(".git").exists();
+        let canonical = valid
+            .then(|| root.canonicalize().ok())
+            .flatten()
+            .filter(|p| p.is_dir());
+        if let Some(root) = &canonical {
+            if !allowed.contains(root) {
+                allowed.push(root.clone());
+            }
+        }
+        context.push(json!({"project":key,"name":name,"repository":canonical.as_ref().map(|p|p.to_string_lossy().to_string()).unwrap_or_else(||path.clone()),"available_locally":canonical.is_some()}));
+    }
+    (allowed, context)
+}
+
 fn excluded(path: &Path) -> bool {
     path.components().any(|c| {
         let name = c.as_os_str().to_string_lossy().to_lowercase();
@@ -72,7 +142,7 @@ fn inspect(name: &str, args: &Value, allowed: &[PathBuf]) -> Result<Value, Strin
         .canonicalize()
         .map_err(|e| format!("Repository unavailable: {e}"))?;
     if !allowed.contains(&root) {
-        return Err("Repository root was not supplied by the user in this conversation. Ask for the project path; do not guess or broaden it.".into());
+        return Err("Repository root was not supplied by the user or resolved from a registered project they named. Ask for the project path; do not guess or broaden it.".into());
     }
     let relative = Path::new(args["path"].as_str().unwrap_or("."));
     if relative
@@ -188,6 +258,83 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn registered_projects_resolve_only_explicit_unambiguous_user_mentions() {
+        let tmp = Scratch::new();
+        let root = tmp.path().join("JobUp");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("README.md"), "evidence").unwrap();
+        let entries = vec![(
+            "JOBUP".into(),
+            "JobUp".into(),
+            root.to_string_lossy().to_string(),
+        )];
+        let (allowed, context) = resolve_registered(
+            &[json!({"role":"user","content":"Run a security check on JobUp"})],
+            &entries,
+        );
+        assert_eq!(allowed, vec![root.canonicalize().unwrap()]);
+        assert_eq!(context[0]["available_locally"], true);
+        assert_eq!(
+            execute(
+                "read_repository_file",
+                &json!({"root":root,"path":"README.md"}),
+                &allowed
+            )["content"],
+            "evidence"
+        );
+        for role in ["assistant", "tool", "system"] {
+            assert!(
+                resolve_registered(&[json!({"role":role,"content":"JobUp"})], &entries)
+                    .0
+                    .is_empty()
+            );
+        }
+        assert!(
+            resolve_registered(&[json!({"role":"user","content":"JobUpper"})], &entries)
+                .0
+                .is_empty()
+        );
+        assert_eq!(
+            resolve_registered(
+                &[json!({"role":"user","content":"Check JOBUP-11"})],
+                &entries
+            )
+            .0
+            .len(),
+            1
+        );
+        let ambiguous = vec![
+            (
+                "ONE".into(),
+                "Shared".into(),
+                root.to_string_lossy().to_string(),
+            ),
+            (
+                "TWO".into(),
+                "Shared".into(),
+                root.to_string_lossy().to_string(),
+            ),
+        ];
+        assert!(resolve_registered(
+            &[json!({"role":"user","content":"Review Shared"})],
+            &ambiguous
+        )
+        .0
+        .is_empty());
+        let missing = vec![(
+            "MISSING".into(),
+            "Missing".into(),
+            tmp.path().join("absent").to_string_lossy().to_string(),
+        )];
+        let (allowed, context) = resolve_registered(
+            &[json!({"role":"user","content":"Review Missing"})],
+            &missing,
+        );
+        assert!(allowed.is_empty());
+        assert_eq!(context[0]["available_locally"], false);
     }
 
     #[test]

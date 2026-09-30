@@ -1666,16 +1666,16 @@
 
     // A message is a QUESTION until proven otherwise. It goes to the agent's
     // own baseline model — no worktree, no zellij, no coding harness. The
-    // harness starts only when the agent says the request needs one and the
-    // owner names a repository (see buildHandshake).
+    // harness starts through a repository-task tool. The build handshake is
+    // the fallback when the repository cannot be resolved.
     // The placeholders are UI, not conversation. 'Thinking…' was missing from
     // this list, so every turn shipped a trailing assistant message and the
     // Anthropic lane rejected the whole request as a prefill (XNAUT-217).
     const PLACEHOLDERS = new Set(['Working…', 'Thinking…']);
     const chatHistory = () => (thread.messages || [])
-      .filter((message) => message.kind !== 'action' && !message.voiceTranscript && message.text && !PLACEHOLDERS.has(message.text))
+      .filter((message) => (message.executionReceipt || message.kind !== 'action') && !message.voiceTranscript && (message.text || message.executionReceipt) && !PLACEHOLDERS.has(message.text))
       .slice(-16)
-      .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: String(message.text) }));
+      .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.executionReceipt ? `Recorded worker launch (historical, not proof of completion): ${JSON.stringify(message.executionReceipt)}` : String(message.text) }));
 
     const submit = async (buildTask, buildPath, voiceRequest) => {
       const text = buildTask || voiceRequest?.text || composer.value.trim();
@@ -1742,6 +1742,28 @@
             if (payload.requestId !== requestId) return;
             paintLive(String(payload.delta || ''));
           });
+          const stopLaunch = await listen('agent-task-started', (event) => {
+            const payload = event.payload || {};
+            if (payload.requestId !== requestId || payload.agent_id !== profile.handle) return;
+            const receipt = payload.receipt?.receipt || payload.receipt;
+            const launch = receipt?.launch;
+            if (!receipt?.ok || !launch?.session_id) return;
+            sessionId = launch.session_id;
+            thread = updateThread(profile.handle, thread.id, (next) => {
+              next.session_id = launch.session_id;
+              next.workspace = receipt.worktree_path;
+              if (!next.messages.some((item) => item.executionReceipt?.launch?.session_id === launch.session_id)) {
+                next.messages.push({
+                  id: `launch-${launch.session_id}`, kind: 'action',
+                  label: 'Worker launched', detail: receipt.worktree_path,
+                  session_id: launch.session_id, executionReceipt: receipt, at: nowIso(),
+                });
+              }
+              return next;
+            });
+            terminalButton.hidden = false;
+            paintMessages();
+          });
           let reply;
           try {
             reply = String(await invoke('agent_chat_turn', {
@@ -1751,6 +1773,7 @@
             }) || '').trim();
           } finally {
             try { stopStream(); } catch (_) {}
+            try { stopLaunch(); } catch (_) {}
           }
           if (reply.startsWith('BUILD-REQUEST')) {
             const summary = reply.split('\n').slice(1).join('\n').trim();

@@ -430,3 +430,37 @@ test('Compute saves an explicit destination independently from the model', async
   await page.getByRole('button', { name:'Save changes', exact:true }).click();
   await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'agent_profile_update').at(-1)?.args.profile.execution)).toBe('exe-dev');
 });
+
+test('a worker launch receipt appears in chat, opens its session, and survives in follow-up context', async ({ page }) => {
+  await openBuilder(page);
+  await page.evaluate(() => {
+    window.__xnautStub.agent_chat_turn = new Promise((resolve) => { window.__launchAnswer = resolve; });
+  });
+  await page.getByLabel('Message @builder').fill('Run the JobUp security review in its own worktree.');
+  await page.getByLabel('Message @builder').press('Enter');
+  await expect(page.getByText('Thinking…', { exact:true })).toBeVisible();
+  await page.evaluate(() => {
+    const turn = window.__xnautInvokes.filter((i) => i.cmd === 'agent_chat_turn').at(-1);
+    const receipt = { ok:true, execution_started:true, worktree_path:'/tmp/JobUp/.worktrees/isolated', launch:{session_id:'smoke-agent',run_id:'audit-run'} };
+    window.__xnautEmit('agent-task-started', {requestId:'other-turn',agent_id:'builder',receipt});
+  });
+  await expect(page.getByText('Worker launched', {exact:true})).toHaveCount(0);
+  await page.evaluate(() => {
+    const turn = window.__xnautInvokes.filter((i) => i.cmd === 'agent_chat_turn').at(-1);
+    const receipt = { ok:true, execution_started:true, worktree_path:'/tmp/JobUp/.worktrees/isolated', launch:{session_id:'smoke-agent',run_id:'audit-run'} };
+    for (let i=0;i<2;i++) window.__xnautEmit('agent-task-started', {requestId:turn.args.requestId,agent_id:'builder',receipt});
+    window.__launchAnswer('Worker launched. Findings are not available yet.');
+  });
+  await expect(page.getByText('Worker launched', {exact:true})).toHaveCount(1);
+  await expect(page.locator('.as-build')).toHaveCount(0);
+  await page.locator('[data-open-session="smoke-agent"]').click();
+  await expect(page.locator('.terminal-output')).toBeVisible();
+  await page.evaluate(() => window.xnautOpenAgentSpace('builder'));
+  await page.evaluate(() => { window.__xnautStub.agent_chat_turn = 'I will check that run.'; });
+  await page.getByLabel('Message @builder').fill('What did the audit find?');
+  await page.getByLabel('Message @builder').press('Enter');
+  await expect(page.getByText('I will check that run.',{exact:true})).toBeVisible();
+  const context=await page.evaluate(() => window.__xnautInvokes.filter((i)=>i.cmd==='agent_chat_turn').at(-1).args.messages);
+  expect(context.some((m)=>m.content.includes('audit-run') && m.content.includes('not proof of completion'))).toBe(true);
+  expect(await page.evaluate(()=>window.__xnautErrors)).toEqual([]);
+});

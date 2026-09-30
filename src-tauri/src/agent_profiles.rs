@@ -1707,8 +1707,8 @@ pub async fn agent_build_workspace(
 /// every question was the wrong flow: it is slow, it burns a worktree and a
 /// CLI session on "what is the status", and it gave NautBot a coding runtime
 /// it was never meant to drive. The harness now starts only when the agent
-/// says the request needs one (`BUILD-REQUEST`) and the owner names a
-/// repository.
+/// calls start_repository_task against a user-named or registered repository.
+/// BUILD-REQUEST remains the fallback when the repository is unknown.
 #[tauri::command]
 pub async fn agent_chat_turn(
     app: tauri::AppHandle,
@@ -1931,7 +1931,13 @@ const ACTION_CLAIMS: &[&str] = &[
 pub fn unbacked_claim_notice(text: &str) -> Option<String> {
     if text.lines().next().is_some_and(|line| line.trim() == crate::composer::BUILD_MARKER) { return None; }
     let lower = text.to_ascii_lowercase();
-    let claimed = ACTION_CLAIMS.iter().find(|word| lower.contains(**word))?;
+    // Explanations and corrections about a previous false claim are not new
+    // execution claims. Check clauses so one negative clause cannot hide a
+    // separate affirmative claim in the same answer.
+    let claimed = lower.split(['.', '\n', ';']).find_map(|clause| {
+        if ["did not", "didn't", "not running", "not started", "not been", "nothing was", "no audit", "no scan", "no tools", "incorrect", "previous", "prior ", "should have", "would ", "could ", "cannot", "can't", "without", "not execute"].iter().any(|negation| clause.contains(negation)) { return None; }
+        ACTION_CLAIMS.iter().find(|word| clause.contains(**word)).copied()
+    })?;
     Some(format!(
         "\n\n---\n**No tools ran this turn**, so nothing was started, changed or looked up \
 above. The reply mentions \"{claimed}\", but there is no execution receipt. \
@@ -3432,6 +3438,13 @@ mod tests {
     /// crosses ssh's shell, the remote shell and a script file before the
     /// agent sees it. One unquoted word there is the whole failure: the agent
     /// starts, reads a truncated task, and nothing errors.
+    #[test]
+    fn correction_of_a_false_start_is_not_a_new_execution_claim() {
+        assert!(unbacked_claim_notice("I incorrectly treated attaching the session as starting an audit. Nothing was actually running. No audit evidence exists.").is_none());
+        assert!(unbacked_claim_notice("The audit has not been verified as started.").is_none());
+        assert!(unbacked_claim_notice("No scan ran earlier. I started the audit now.").is_some());
+    }
+
     #[test]
     fn every_word_of_a_remote_command_is_quoted() {
         let argv = [
