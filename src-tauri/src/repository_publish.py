@@ -47,7 +47,7 @@ def publish(exit_code=None):
     branch = metadata["branch"]
     if git("branch", "--show-current").stdout.strip() != branch:
         raise RuntimeError("run branch changed; refusing to publish another branch")
-    if git("remote", "get-url", "origin").stdout.strip() != metadata["remote"]:
+    if git("remote", "get-url", "origin").stdout.strip() != (metadata.get("worker_remote") or metadata["remote"]):
         raise RuntimeError("run repository changed; refusing to publish elsewhere")
     git("merge-base", "--is-ancestor", metadata["source_sha"], "HEAD")
     artifacts = Path(metadata["artifacts"])

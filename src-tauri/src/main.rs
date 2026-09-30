@@ -75,6 +75,7 @@ mod sweep;
 mod run_control;
 mod repository_transfer;
 mod repository_notes;
+mod worker_bootstrap;
 mod run_signals;
 mod jury;
 mod jev_usage;

@@ -105,5 +105,17 @@ class PublishTests(unittest.TestCase):
         self.cmd('git','remote','set-url','origin',str(self.root/'other.git'))
         self.assertNotEqual(self.publish(check=False).returncode,0)
 
+    def test_worker_ssh_endpoint_can_differ_from_project_http_endpoint(self):
+        metadata = self.repo/'.git/xnaut-transfer.json'
+        data = json.loads(metadata.read_text())
+        data['worker_remote'] = data['remote']
+        data['remote'] = 'https://forge.example/team/repository.git'
+        metadata.write_text(json.dumps(data))
+        (self.artifacts/'note.md').write_text('Task evidence')
+        self.publish()
+        self.assertEqual(self.cmd('git','--git-dir',str(self.remote),'rev-parse',self.branch).stdout.strip(), self.cmd('git','rev-parse','HEAD').stdout.strip())
+        self.cmd('git','remote','set-url','origin','https://forge.example/other/repository.git')
+        self.assertNotEqual(self.publish(check=False).returncode,0)
+
 if __name__ == '__main__':
     unittest.main()

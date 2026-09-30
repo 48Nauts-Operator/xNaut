@@ -2318,21 +2318,25 @@ async fn launch_on_exe_dev(
     let script = crate::repository_transfer::run_script(&transfer, &command, &crate::sandbox::launch_env::onboarding_seed(&cfg));
     crate::repository_transfer::save(&transfer)?;
     let staged = {
-        let snapshot = transfer.clone();
+        let mut snapshot = transfer.clone();
         let session = session.clone();
         let check_codex = uses_standard_codex_login(&cfg);
-        tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let settings = state.settings.lock().await.clone();
+        tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
             exe::ensure()?;
+            let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
+                &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
             if check_codex { exe::codex_auth_ready()?; }
-            crate::repository_transfer::stage(&snapshot)?;
+            snapshot.worker_remote = Some(access.remote.clone());
+            crate::repository_transfer::stage(&snapshot, &access)?;
             let relative = format!(".git/{session}.sh");
             exe::repository_file(&snapshot.workdir, &relative, &script)?;
             exe::repository_command(&format!("chmod +x {}", exe::shell_single_quote(&format!("{}/{relative}", snapshot.workdir))))?;
-            Ok(format!("{}/{relative}", snapshot.workdir))
+            Ok((format!("{}/{relative}", snapshot.workdir), access.remote))
         }).await.map_err(|error| format!("the exe.dev launch task did not finish: {error}"))?
     };
     let staged = match staged {
-        Ok(path) => path,
+        Ok((path, remote)) => { transfer.worker_remote = Some(remote); path },
         Err(error) => {
             transfer.state = "preparation_failed".into(); transfer.error = Some(error.clone());
             let _ = crate::repository_transfer::save(&transfer);
@@ -2450,14 +2454,23 @@ async fn launch_on_gitvm(
 ) -> Result<crate::agents::LaunchAgentResponse, String> {
     use crate::sandbox::cli;
 
+    let run_id = registry_run.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    let local = std::path::PathBuf::from(&req.worktree_path);
+    let root = crate::sandbox::launch_env::project_root(&local);
+    let ticket = req.ticket.clone();
+    let handle = profile.handle.clone();
+    let id = run_id.clone();
+    let mut transfer = tokio::task::spawn_blocking(move || crate::repository_transfer::prepare(&local, &root, ticket, &handle, &id))
+        .await.map_err(|e| e.to_string())??;
+    transfer.worker = crate::worker_bootstrap::Target::GitVm { local_path: req.worktree_path.clone().into() };
+    // Keep results under /workspace so the existing safe-pull-before-reap
+    // contract preserves a pending outbox even if the sandbox is later reaped.
+    transfer.workdir = format!("/workspace/.xnaut-runs/{run_id}");
+    let prompt = Some(format!("{}{}", prompt.unwrap_or_default(), crate::repository_transfer::instructions(&transfer)));
     let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
-    let run_id = uuid::Uuid::new_v4().simple().to_string();
     let session = crate::sandbox::launch_env::session_name(&profile.handle, &run_id);
-    let script = cli::run_script(
-        &command,
-        &session,
-        &crate::sandbox::launch_env::onboarding_seed(&cfg),
-    );
+    let script = crate::repository_transfer::run_script(&transfer, &command, &crate::sandbox::launch_env::onboarding_seed(&cfg));
+    crate::repository_transfer::save(&transfer)?;
 
     // The beacon (XNAUT-307). Everything it needs is decided here, on this
     // side: the VM cannot discover which run it is, where the hook server
@@ -2482,18 +2495,20 @@ async fn launch_on_gitvm(
             agent_binary: cfg.detect_cmd.clone(),
             capture_path: crate::beacon::capture_path(&session),
             agent_session: session.clone(),
-            workspace: "/workspace".into(),
+            workspace: transfer.workdir.clone(),
             interval_secs: 60,
         }
     });
 
     // warm-up, rsync and ssh are seconds apiece and all of them block.
-    let (guest, staged, beacon_started) = {
+    let preparation = {
         let dir = std::path::PathBuf::from(&req.worktree_path);
         let session = session.clone();
         let beacon = beacon.clone();
         let check_codex = uses_standard_codex_login(&cfg);
-        tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String, bool), String> {
+        let settings = state.settings.lock().await.clone();
+        let mut snapshot = transfer.clone();
+        tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String, bool, String), String> {
             // A state file left behind by a reaped sandbox makes `warm-up`
             // refuse, which would wedge this worktree forever. The CLI cannot
             // tell; the control plane can, and `state_is_stale` asks it.
@@ -2504,13 +2519,19 @@ async fn launch_on_gitvm(
             // failed sync and a failed staging read as three different
             // sentences rather than one shrug.
             cli::warm_up(&dir)?;
+            let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
+                &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
             if check_codex {
-                let auth = cli::run(&dir, "timeout 15s codex login status >/dev/null 2>&1")?;
+                let auth = cli::ssh(&dir, "timeout 15s codex login status >/dev/null 2>&1")?;
                 if !auth.status.success() { return Err("Codex authentication is unavailable in GitVM; configure or sync authentication before dispatching. No agent was started.".into()); }
             }
-            cli::push(&dir)?;
+            snapshot.worker_remote = Some(access.remote.clone());
+            crate::repository_transfer::stage(&snapshot, &access)?;
             let guest = cli::guest(&dir)?;
-            let staged = cli::stage_script(&dir, &session, &script)?;
+            let relative = format!(".git/{session}.sh");
+            snapshot.worker.file(&snapshot.workdir, &relative, &script)?;
+            let staged = format!("{}/{relative}", snapshot.workdir);
+            snapshot.worker.command(&format!("chmod +x {}", crate::sandbox::exe::shell_single_quote(&staged)))?;
             let beacon_started = match beacon.as_ref() {
                 // BEST EFFORT, and deliberately so. A sandbox whose beacon
                 // could not start is a sandbox the reaper will refuse to
@@ -2530,11 +2551,25 @@ async fn launch_on_gitvm(
                 },
                 None => false,
             };
-            Ok((guest, staged, beacon_started))
+            Ok((guest, staged, beacon_started, access.remote))
         })
         .await
-        .map_err(|error| format!("the sandbox launch task did not finish: {error}"))??
+        .map_err(|error| format!("the sandbox launch task did not finish: {error}"))?
     };
+    let (guest, staged, beacon_started, remote) = match preparation {
+        Ok(value) => value,
+        Err(error) => {
+            transfer.state = "preparation_failed".into(); transfer.error = Some(error.clone());
+            let _ = crate::repository_transfer::save(&transfer);
+            if let (Some(id), Ok(registry)) = (registry_run.as_deref(), crate::agents::registry_dir()) {
+                let _ = crate::run_control::update_in(&registry, id, |run| { run.state = crate::run_control::RunState::Failed; run.last_signal = error.clone(); });
+            }
+            return Err(error);
+        }
+    };
+    transfer.worker_remote = Some(remote);
+    transfer.state = "running".into();
+    crate::repository_transfer::save(&transfer)?;
 
     let pty_config = crate::pty::PtyConfig {
         shell: None,
@@ -2557,6 +2592,8 @@ async fn launch_on_gitvm(
     let session_id = crate::pty::create_pty_session(app.clone(), state.clone(), pty_config)
         .await
         .map_err(|error| {
+            transfer.state = "launch_failed".into(); transfer.error = Some(error.to_string());
+            let _ = crate::repository_transfer::save(&transfer);
             format!("could not open a viewport onto the sandboxed run {session}: {error}")
         })?;
     let env_key = crate::sandbox::launch_env::LaunchEnv::GitVm.key();
@@ -2591,14 +2628,15 @@ async fn launch_on_gitvm(
         let registry = crate::agents::registry_dir()?;
         crate::run_control::update_in(&registry, run_id, |run| {
             run.pty_session = Some(session_id.clone());
-            run.state = crate::run_control::RunState::Running;
+            run.state = crate::run_control::RunState::Starting;
+            run.branch = transfer.branch.clone();
             run.output_path = Some(crate::beacon::capture_path(&session));
             // The clock starts at the launch, not at the first pong: a beacon
             // that never starts must lapse, not sit at zero forever.
             run.last_seen_at = crate::run_control::now_ms();
             run.last_progress_at = run.last_seen_at;
             run.last_signal = if beacon_started {
-                "sandbox launched; beacon reporting".into()
+                "sandbox viewport opened; awaiting worker execution evidence".into()
             } else {
                 // Named, because it changes what the reaper will do with this
                 // machine and the owner should not have to infer that from a

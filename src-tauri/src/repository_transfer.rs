@@ -19,6 +19,12 @@ pub struct Transfer {
     pub handle: String,
     pub local_path: String,
     pub remote: String,
+    /// Forge-provided SSH endpoint for the same repository. Legacy receipts
+    /// keep using `remote`; desktop reconciliation always uses project setup.
+    #[serde(default)]
+    pub worker_remote: Option<String>,
+    #[serde(default)]
+    pub worker: crate::worker_bootstrap::Target,
     pub source_sha: String,
     pub base: String,
     pub branch: String,
@@ -212,6 +218,20 @@ fn list() -> Result<Vec<Transfer>, String> {
     Ok(rows)
 }
 
+/// A copied workspace alone does not preserve the worker's ability to retry
+/// an upload: its deploy key lives outside the workspace. Keep the sandbox
+/// until repository reconciliation has confirmed delivery.
+pub fn guard_worker_teardown(local_path: &Path) -> Result<(), String> {
+    for transfer in list()? {
+        if let crate::worker_bootstrap::Target::GitVm { local_path: worker_path } = &transfer.worker {
+            if worker_path == local_path && transfer.state == "running" {
+                return Err(format!("Task {} still has unconfirmed repository delivery; retain its worker for upload retry.", transfer.run_id));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn repository_transfer_list(project: String) -> Result<Vec<Transfer>, String> {
     Ok(list()?
@@ -262,6 +282,8 @@ pub fn prepare(
         handle: handle.trim_start_matches('@').to_ascii_lowercase(),
         local_path: path.to_string_lossy().into(),
         remote,
+        worker_remote: None,
+        worker: Default::default(),
         source_sha,
         base,
         branch: format!("xnaut/runs/{run_id}"),
@@ -274,11 +296,9 @@ pub fn prepare(
     })
 }
 
-pub fn stage(transfer: &Transfer) -> Result<(), String> {
-    use crate::sandbox::exe;
-    // Verify VM access BEFORE publishing the input ref or dispatching an agent.
-    exe::repository_command(&format!("command -v python3 >/dev/null && git lfs version >/dev/null && GIT_TERMINAL_PROMPT=0 git ls-remote {} HEAD >/dev/null", quote(&transfer.remote)))
-        .map_err(|_| "The exe.dev worker needs Python 3, Git LFS, and access to this project's repository. No agent was started.".to_string())?;
+pub fn stage(transfer: &Transfer, access: &crate::worker_bootstrap::Access) -> Result<(), String> {
+    // The common task bootstrap has already provisioned and checked Git/LFS
+    // write access. Keep a separate SSH identity in THIS checkout's config.
     let input = format!("refs/heads/xnaut/inputs/{}", transfer.run_id);
     git(
         Path::new(&transfer.local_path),
@@ -293,23 +313,23 @@ pub fn stage(transfer: &Transfer) -> Result<(), String> {
         ],
     )?;
     // A fresh directory per run, with real history. Never delete an earlier run.
-    let command = format!("set -e; export GIT_TERMINAL_PROMPT=0; test ! -e {dir}; mkdir -p agents/runs; git clone --no-checkout -- {remote} {dir}; cd {dir}; git lfs install --local; git fetch origin {input}; test \"$(git rev-parse FETCH_HEAD)\" = {sha}; git checkout -b {branch} {sha}; git push --dry-run origin HEAD:refs/heads/{branch}; test ! -L .xnaut; test ! -L .xnaut/runs; mkdir -p {artifacts}",
-        dir=quote(&transfer.workdir), remote=quote(&transfer.remote), input=quote(&input), sha=quote(&transfer.source_sha), branch=quote(&transfer.branch), artifacts=quote(&transfer.artifacts));
-    exe::repository_command(&command)?;
+    let command = format!("set -e; export GIT_TERMINAL_PROMPT=0; test ! -e {dir}; mkdir -p {parent}; git -c core.sshCommand={ssh} clone --no-checkout -- {remote} {dir}; cd {dir}; git config --local core.sshCommand {ssh}; git config --local user.name xNAUT; git config --local user.email xnaut@localhost; git lfs install --local; git fetch origin {input}; test \"$(git rev-parse FETCH_HEAD)\" = {sha}; git checkout -b {branch} {sha}; git push --dry-run origin HEAD:refs/heads/{branch}; test ! -L .xnaut; test ! -L .xnaut/runs; mkdir -p {artifacts}",
+        dir=quote(&transfer.workdir), parent=quote(Path::new(&transfer.workdir).parent().ok_or("Invalid worker directory")?.to_str().ok_or("Invalid worker directory")?), remote=quote(&access.remote), ssh=quote(&access.ssh_command), input=quote(&input), sha=quote(&transfer.source_sha), branch=quote(&transfer.branch), artifacts=quote(&transfer.artifacts));
+    transfer.worker.command(&command)?;
     let metadata = serde_json::to_string_pretty(transfer).map_err(|e| e.to_string())?;
-    exe::repository_file(&transfer.workdir, ".git/xnaut-transfer.json", &metadata)?;
-    exe::repository_file(&transfer.workdir, ".git/xnaut-publish.py", PUBLISHER)?;
+    transfer.worker.file(&transfer.workdir, ".git/xnaut-transfer.json", &metadata)?;
+    transfer.worker.file(&transfer.workdir, ".git/xnaut-publish.py", PUBLISHER)?;
     let attrs = MEDIA
         .iter()
         .flat_map(|ext| [ext.to_string(), ext.to_uppercase()])
         .map(|ext| format!("*.{ext} filter=lfs diff=lfs merge=lfs -text\n"))
         .collect::<String>();
-    exe::repository_file(
+    transfer.worker.file(
         &transfer.workdir,
         &format!("{}/.gitattributes", transfer.artifacts),
         &attrs,
     )?;
-    exe::repository_file(
+    transfer.worker.file(
         &transfer.workdir,
         &format!("{}/run.json", transfer.artifacts),
         &metadata,
@@ -327,7 +347,8 @@ pub fn instructions(t: &Transfer) -> String {
 }
 
 pub fn run_script(t: &Transfer, command: &str, seed: &str) -> String {
-    format!("#!/bin/bash -l\ncd \"$HOME\"/{} || exit 1\n{}\nprintf '%s\\n' 'xNAUT: repository-backed run; results are retained until uploaded.'\necho $$ > .git/xnaut-supervisor.pid\nprintf running > .git/xnaut-phase\nenv {}\ncode=$?\nprintf uploading > .git/xnaut-phase\npython3 .git/xnaut-publish.py --finish \"$code\" --retry\nexit \"$code\"\n", quote(&t.workdir), seed, command)
+    let directory = if Path::new(&t.workdir).is_absolute() { quote(&t.workdir) } else { format!("\"$HOME\"/{}", quote(&t.workdir)) };
+    format!("#!/bin/bash -l\ncd {} || exit 1\n{}\nprintf '%s\\n' 'xNAUT: repository-backed run; results are retained until uploaded.'\necho $$ > .git/xnaut-supervisor.pid\nprintf running > .git/xnaut-phase\nenv {}\ncode=$?\nprintf uploading > .git/xnaut-phase\npython3 .git/xnaut-publish.py --finish \"$code\" --retry\nexit \"$code\"\n", directory, seed, command)
 }
 
 #[derive(Debug, Deserialize)]
@@ -397,7 +418,7 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
         let snapshot = t.clone();
         // Liveness evidence comes from the worker, never from opening a viewport.
         if let Ok(Ok(proof)) = tokio::task::spawn_blocking(move || {
-            crate::sandbox::exe::repository_probe(&snapshot.workdir)
+            snapshot.worker.probe(&snapshot.workdir)
         })
         .await
         {
@@ -589,6 +610,8 @@ mod tests {
             handle: "builder".into(),
             local_path: worker.to_string_lossy().into(),
             remote: remote.to_string_lossy().into(),
+            worker_remote: None,
+            worker: Default::default(),
             source_sha: source.clone(),
             base: "main".into(),
             branch: "xnaut/runs/fixture".into(),

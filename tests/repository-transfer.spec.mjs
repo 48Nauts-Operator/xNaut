@@ -43,6 +43,22 @@ test('settings keep the local folder separate from the required repository and s
   await page.screenshot({path:'test-results/repository-settings.png'});
 });
 
+test('fleet network access is saved once and retained for every task', async ({page}) => {
+  await page.evaluate(async () => {
+    window.__xnautStub.settings_get.worker_network={auth_key:'existing-fixture-key',tags:'tag:workers'};
+    window.__xnautStub.settings_get.sandboxes=[{kind:'exe-dev',base_url:'',api_key:null}];
+    const host=document.createElement('div');host.id='worker-settings-fixture';host.style.cssText='position:fixed;inset:10px;z-index:99999;overflow:auto;background:#111';document.body.appendChild(host);
+    await window.xnautRenderTasksModeSettings(host);
+  });
+  await expect(page.getByLabel('Tailscale enrollment key')).toHaveAttribute('type','password');
+  await expect(page.getByLabel('Tailscale enrollment key')).toHaveValue('existing-fixture-key');
+  await page.getByLabel('Tailscale enrollment key').fill('replacement-fixture-key');
+  await page.getByLabel('Worker network tags').fill('tag:new-workers');
+  await page.locator('#tm-save').click();
+  await expect.poll(()=>page.evaluate(()=>window.__xnautStub.settings_get.worker_network)).toEqual({auth_key:'replacement-fixture-key',tags:'tag:new-workers'});
+  expect(await page.evaluate(()=>window.__xnautStub.settings_get.sandboxes)).toEqual([{kind:'exe-dev',base_url:'',api_key:null}]);
+});
+
 test('project notes queue a copy for Git while local saves survive queue errors', async ({page}) => {
   await page.evaluate(async()=>{
     const invoke=window.__TAURI__.core.invoke;

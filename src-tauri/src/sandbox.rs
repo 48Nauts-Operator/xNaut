@@ -866,6 +866,7 @@ spend-ceiling.json.",
                 return Ok(());
             }
             let dir = Path::new(&entry.dir);
+            crate::repository_transfer::guard_worker_teardown(dir)?;
             if !dir.is_dir() {
                 // The worktree is gone, so there is nothing to pull work back
                 // into. `stop` would still be right, but it is the CLI's own
@@ -2360,6 +2361,25 @@ pub mod cli {
             .map_err(|e| format!("ssh to the sandbox: {e}"))
     }
 
+    pub fn repository_exchange(dir: &Path, command: &str, input: &[u8], seconds: u32) -> Result<std::process::Output, String> {
+        use std::io::Write;
+        use std::process::Stdio;
+        let guest = guest(dir)?;
+        let mut child = std::process::Command::new("ssh")
+            .args(ssh_opts(&guest)).args(KEEPALIVE).args(["-o", "BatchMode=yes"])
+            .arg(format!("root@{}", guest.ip))
+            .arg(as_user(&format!("timeout {seconds}s bash -lc {}", super::exe::shell_single_quote(command))))
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+            .spawn().map_err(|_| "Could not connect to the sandbox for automatic setup.".to_string())?;
+        if let Some(mut stdin) = child.stdin.take() {
+            if stdin.write_all(input).is_err() {
+                let _ = child.kill(); let _ = child.wait();
+                return Err("Sandbox setup connection closed before receiving configuration.".into());
+            }
+        }
+        child.wait_with_output().map_err(|_| "Sandbox setup connection failed.".into())
+    }
+
     /// Run something as the sandbox's `user`, in /workspace, under a login
     /// shell — exactly what `gitvm run` wraps its command in.
     fn as_user(command: &str) -> String {
@@ -2835,7 +2855,34 @@ pub mod exe {
         else { Err("Repository preparation on exe.dev failed; check worker repository access and Git LFS. Existing runs were preserved.".into()) }
     }
 
+    /// Bootstrap payloads can carry a fleet enrollment credential. Use stdin,
+    /// never argv, base64 command text, debug logs, or task artifacts.
+    pub fn repository_exchange(command: &str, input: &[u8], seconds: u32) -> Result<std::process::Output, String> {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = std::process::Command::new("ssh")
+            .args(SSH_OPTS)
+            .args(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"])
+            .arg(vm_host())
+            .arg(format!("timeout {seconds}s bash -lc {}", shell_single_quote(command)))
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+            .spawn().map_err(|_| "Could not connect to the worker for automatic setup.".to_string())?;
+        if let Some(mut stdin) = child.stdin.take() {
+            if stdin.write_all(input).is_err() {
+                let _ = child.kill(); let _ = child.wait();
+                return Err("Worker setup connection closed before receiving configuration.".into());
+            }
+        }
+        child.wait_with_output().map_err(|_| "Worker setup connection failed.".into())
+    }
+
     pub fn repository_probe(workdir: &str) -> Result<serde_json::Value, String> {
+        let out = ssh(&vm_host(), &repository_probe_command(workdir))?;
+        if !out.status.success() { return Err("Could not read worker progress; existing data is retained.".into()); }
+        serde_json::from_slice(&out.stdout).map_err(|_| "Invalid worker progress".into())
+    }
+
+    pub fn repository_probe_command(workdir: &str) -> String {
         let script = r#"import json, pathlib, subprocess, sys
 p = pathlib.Path.home() / sys.argv[1]
 phase = (p / '.git/xnaut-phase').read_text().strip()
@@ -2847,10 +2894,7 @@ if phase == 'running':
 head = subprocess.run(['git', '-C', str(p), 'rev-parse', 'HEAD'], capture_output=True, text=True, timeout=5).stdout.strip()
 print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase}))
 "#;
-        let command = format!("timeout 20s python3 -c {} {}", shell_single_quote(script), shell_single_quote(workdir));
-        let out = ssh(&vm_host(), &command)?;
-        if !out.status.success() { return Err("Could not read worker progress; existing data is retained.".into()); }
-        serde_json::from_slice(&out.stdout).map_err(|_| "Invalid worker progress".into())
+        format!("timeout 20s python3 -c {} {}", shell_single_quote(script), shell_single_quote(workdir))
     }
 
     pub fn repository_file(workdir: &str, relative: &str, body: &str) -> Result<(), String> {

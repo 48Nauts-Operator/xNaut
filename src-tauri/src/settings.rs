@@ -437,12 +437,30 @@ pub struct Settings {
     /// First entry is the default; mirrors the `forges` pattern.
     #[serde(default)]
     pub sandboxes: Vec<SandboxProviderSettings>,
+    /// Fleet enrollment, reused automatically by every new task worker.
+    /// Repository deploy keys are minted separately; forge tokens stay local.
+    #[serde(default)]
+    pub worker_network: WorkerNetworkSettings,
     /// Keys written by other xNaut versions/branches. Round-tripping them
     /// prevents one version's save from silently deleting another version's
     /// config (this bit us: an older dev build stripped mcp_token/loops/
     /// sandboxes from a live settings.json).
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct WorkerNetworkSettings {
+    #[serde(default)]
+    pub auth_key: String,
+    #[serde(default)]
+    pub tags: String,
+}
+
+impl std::fmt::Debug for WorkerNetworkSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerNetworkSettings").field("configured", &!self.auth_key.is_empty()).field("tags", &self.tags).finish()
+    }
 }
 
 /// One configured sandbox backend for the Sandbox Verify module. `kind` selects
@@ -537,6 +555,7 @@ impl Default for Settings {
             mcp_port: default_mcp_port(),
             mcp_token: String::new(),
             sandboxes: Vec::new(),
+            worker_network: WorkerNetworkSettings::default(),
             extra: serde_json::Map::new(),
         }
     }

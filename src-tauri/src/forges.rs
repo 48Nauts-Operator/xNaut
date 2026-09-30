@@ -610,7 +610,8 @@ pub fn parse_remote(remote: &str) -> Option<ParsedRemote> {
 pub fn host_for_remote<'a>(hosts: &'a [ForgeHost], remote: &str) -> Option<(&'a ForgeHost, ParsedRemote)> {
     let parsed = parse_remote(remote)?;
     let bare = parsed.host.split(':').next().unwrap_or(&parsed.host);
-    let matched = hosts.iter().find(|host| {
+    let remote_url = url::Url::parse(remote).ok().filter(|u| matches!(u.scheme(), "http" | "https"));
+    let matches: Vec<_> = hosts.iter().filter(|host| {
         let configured = host
             .base_url
             .split_once("://")
@@ -618,11 +619,19 @@ pub fn host_for_remote<'a>(hosts: &'a [ForgeHost], remote: &str) -> Option<(&'a 
             .unwrap_or(&host.base_url);
         let configured = configured.split('/').next().unwrap_or(configured);
         let configured_bare = configured.split(':').next().unwrap_or(configured);
-        configured_bare == bare
+        let same_service = configured_bare == bare && remote_url.as_ref().is_none_or(|remote_url| {
+            url::Url::parse(&host.base_url).ok().is_some_and(|configured_url| {
+                configured_url.scheme() == remote_url.scheme() && configured_url.port_or_known_default() == remote_url.port_or_known_default()
+            })
+        });
+        same_service
             // api.github.com is configured for remotes written github.com.
-            || (host.kind == "github" && bare == "github.com")
-    })?;
-    Some((matched, parsed))
+            || (host.kind == "github" && bare == "github.com" && matches!(configured_bare, "api.github.com" | "github.com" | "www.github.com"))
+    }).collect();
+    // Two services on the same SSH hostname cannot be disambiguated by the
+    // hostname alone. Require the project's explicit HTTP(S) endpoint.
+    if matches.len() != 1 { return None; }
+    Some((matches[0], parsed))
 }
 
 /// Read small, same-origin issue attachments. Cross-origin URLs and oversized
@@ -844,6 +853,69 @@ pub async fn ensure_pr(host: &ForgeHost, repo: &str, head: &str, base: &str, tit
         if rows.len() < 50 { return create_pr(host, repo, head, base, title, body).await; }
     }
     Err("Could not finish checking existing PRs; creation deferred to avoid a duplicate.".into())
+}
+
+/// The forge is authoritative for its SSH clone endpoint, including custom
+/// SSH ports. Project setup remains the source of truth for owner/repository.
+pub async fn worker_clone_url(host: &ForgeHost, owner: &str, repo: &str) -> Result<String, String> {
+    if !matches!(host.kind.as_str(), "github" | "forgejo") {
+        return Err("Automatic worker access supports Forgejo and GitHub.".into());
+    }
+    let client = http_client()?;
+    let value = request_json(&client, reqwest::Method::GET,
+        &format!("{}/repos/{owner}/{repo}", api_base(host)?), host, &token_for(host)?, None).await
+        .map_err(|_| "Could not read the configured repository. Check its forge connection in Settings → Forges.".to_string())?;
+    let remote = crate::repository_transfer::validate_remote(&str_field(&value, "ssh_url"))?;
+    let parsed = parse_remote(&remote).ok_or("The forge did not return an SSH clone URL.")?;
+    if parsed.owner != owner || parsed.repo != repo || !(remote.starts_with("ssh://") || !remote.contains("://")) {
+        return Err("The forge returned a different repository; worker setup refused.".into());
+    }
+    Ok(remote)
+}
+
+/// Idempotent per-repository worker access. Only the PUBLIC key crosses this
+/// API. Never copy a desktop private key or broad forge token into the worker.
+pub async fn ensure_worker_key(host: &ForgeHost, owner: &str, repo: &str, public_key: &str) -> Result<(), String> {
+    if !matches!(host.kind.as_str(), "github" | "forgejo") {
+        return Err("Automatic worker access supports Forgejo and GitHub.".into());
+    }
+    let parts: Vec<_> = public_key.split_whitespace().collect();
+    if parts.len() != 2 || parts[0] != "ssh-ed25519" || parts[1].len() > 256 {
+        return Err("The worker returned an invalid public key.".into());
+    }
+    let client = http_client()?;
+    let token = token_for(host)?;
+    let endpoint = format!("{}/repos/{owner}/{repo}/keys", api_base(host)?);
+    // Check again after a racing POST (two tasks on the same fresh worker).
+    for attempt in 0..2 {
+        let mut exhausted = false;
+        for page in 1..=100 {
+            let value = request_json(&client, reqwest::Method::GET,
+                &format!("{endpoint}?limit=50&per_page=50&page={page}"), host, &token, None).await
+                .map_err(|_| "Worker repository access could not be configured. The forge connection needs permission to manage this repository's deploy keys.".to_string())?;
+            let rows = value.as_array().ok_or("Invalid deploy key list from forge")?;
+            for row in rows {
+                if str_field(row, "key").split_whitespace().take(2).collect::<Vec<_>>() == parts {
+                    return if row["read_only"].as_bool() == Some(false) { Ok(()) }
+                    else { Err("This worker's repository deploy key is read-only. Enable write access in the repository's deploy-key settings.".into()) };
+                }
+            }
+            if rows.len() < 50 { exhausted = true; break; }
+        }
+        if !exhausted { return Err("Could not finish checking repository deploy keys; setup deferred.".into()); }
+        if attempt == 0 {
+            use sha2::{Digest, Sha256};
+            let fingerprint = format!("{:x}", Sha256::digest(public_key.as_bytes()));
+            let body = json!({"title": format!("xNAUT worker {}", &fingerprint[..16]), "key": public_key, "read_only": false});
+            let (status, _) = send(&client, reqwest::Method::POST, &endpoint, host, &token, Some(&body)).await
+                .map_err(|_| "Could not register worker repository access; retry setup.".to_string())?;
+            if status.is_success() { return Ok(()); }
+            if !matches!(status.as_u16(), 409 | 422) {
+                return Err("The forge refused worker access. Its connection needs permission to add a write-enabled deploy key to this repository.".into());
+            }
+        }
+    }
+    Err("Worker repository key registration was not confirmed; no task was launched.".into())
 }
 
 /// Open a PR (merge request on GitLab); returns its html_url.
@@ -1196,6 +1268,54 @@ mod tests {
             assert_eq!(first, second); assert_eq!(rows.lock().unwrap().len(), 1);
             server.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn worker_keys_are_repo_scoped_idempotent_and_write_enabled_on_both_forges() {
+        use axum::{extract::State, Json, Router, routing::get};
+        use std::sync::{Arc, Mutex};
+        async fn listing(State(rows): State<Arc<Mutex<Vec<Value>>>>) -> Json<Value> { Json(json!(*rows.lock().unwrap())) }
+        async fn create(State(rows): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>) -> Json<Value> {
+            assert_eq!(body["read_only"], false);
+            assert!(body["title"].as_str().unwrap().starts_with("xNAUT worker "));
+            rows.lock().unwrap().push(body.clone()); Json(body)
+        }
+        async fn repo() -> Json<Value> { Json(json!({"ssh_url":"ssh://git@forge.test:2222/project-owner/app.git"})) }
+        for kind in ["forgejo", "github"] {
+            let rows = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let route = if kind == "forgejo" { "/api/v1/repos/project-owner/app" } else { "/repos/project-owner/app" };
+            let router = Router::new().route(route, get(repo)).route(&format!("{route}/keys"), get(listing).post(create)).with_state(rows.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+            let config = host(kind, &format!("http://{address}"));
+            assert_eq!(worker_clone_url(&config, "project-owner", "app").await.unwrap(), "ssh://git@forge.test:2222/project-owner/app.git");
+            for _ in 0..3 { ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAfixture").await.unwrap(); }
+            assert_eq!(rows.lock().unwrap().len(), 1);
+            // A separate worker gets its own key. Repeated tasks never mint
+            // duplicates, and a read-only key never passes a write preflight.
+            ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAanother").await.unwrap();
+            assert_eq!(rows.lock().unwrap().len(), 2);
+            rows.lock().unwrap()[0]["read_only"] = json!(true);
+            assert!(ensure_worker_key(&config, "project-owner", "app", "ssh-ed25519 AAAAfixture").await.unwrap_err().contains("read-only"));
+            assert_eq!(rows.lock().unwrap().len(), 2);
+            server.abort();
+        }
+    }
+
+    #[test]
+    fn github_cloud_never_uses_an_enterprise_connection() {
+        let hosts = vec![host("github", "https://enterprise.example/api/v3"), host("github", "https://api.github.com")];
+        let (matched, _) = host_for_remote(&hosts, "https://github.com/team/repo").unwrap();
+        assert_eq!(matched.base_url, "https://api.github.com");
+    }
+
+    #[test]
+    fn repository_host_matching_preserves_http_port_and_refuses_ambiguous_ssh() {
+        let hosts = vec![host("forgejo", "http://forge.test:3000"), host("forgejo", "http://forge.test:4000")];
+        let (matched, _) = host_for_remote(&hosts, "http://forge.test:4000/team/repo").unwrap();
+        assert_eq!(matched.base_url, "http://forge.test:4000");
+        assert!(host_for_remote(&hosts, "ssh://git@forge.test:2222/team/repo.git").is_none());
     }
 
 }

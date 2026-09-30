@@ -441,6 +441,20 @@ window.xnautAttachTasksTab = (opts) =>
         <button class="btn" id="tm-add-forge" style="font-size:12px; margin-top:4px;">+ Add forge</button>
       </div>
 
+      <h3>Worker access</h3>
+      <div class="settings-group">
+        <p style="color:var(--text-secondary); font-size:12px; margin:0 0 8px;">Every repository task automatically prepares its tools and repository access using the project's forge connection. Private networks can be configured once here for all new workers.</p>
+        <div class="settings-row">
+          <label for="tm-worker-network-key">Tailscale enrollment key</label>
+          <input type="password" id="tm-worker-network-key" autocomplete="off" placeholder="Optional reusable, preauthorized auth key">
+        </div>
+        <div class="settings-row">
+          <label for="tm-worker-network-tags">Worker network tags</label>
+          <input type="text" id="tm-worker-network-tags" placeholder="Optional, e.g. tag:xnaut-worker">
+        </div>
+        <p style="color:var(--text-secondary); font-size:12px; margin:8px 0 0;">Leave these empty when workers can already reach the repository. The enrollment key stays outside task files; repository access uses a separate deploy key.</p>
+      </div>
+
       <button id="tm-save" class="btn btn-primary" style="width:100%; margin-top:8px;">Save Tasks Mode Settings</button>
       <div id="tm-status" style="font-size:12px; margin-top:6px; color:var(--text-secondary); text-align:center;"></div>
       <style>
@@ -458,6 +472,8 @@ window.xnautAttachTasksTab = (opts) =>
     `;
 
     const $ = (id) => document.getElementById(id);
+    $('tm-worker-network-key').value = s.worker_network?.auth_key || '';
+    $('tm-worker-network-tags').value = s.worker_network?.tags || '';
     $('tm-llm-endpoint').value = s.llm.endpoint || '';
     $('tm-llm-model').value = s.llm.model || '';
     $('tm-llm-key').value = s.llm.api_key || '';
@@ -649,6 +665,11 @@ window.xnautAttachTasksTab = (opts) =>
           },
         },
         editor: $('tm-editor').value.trim(),
+        worker_network: {
+          ...(s.worker_network || {}),
+          auth_key: $('tm-worker-network-key').value.trim(),
+          tags: $('tm-worker-network-tags').value.trim(),
+        },
         forges: Array.from(forgesEl.querySelectorAll('.tm-forge-row')).map((row) => ({
           kind: row.querySelector('.tm-f-kind').value,
           base_url: row.querySelector('.tm-f-url').value.trim(),

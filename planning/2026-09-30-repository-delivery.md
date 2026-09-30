@@ -6,13 +6,23 @@ files, but must configure a repository before a repository-backed exe.dev run or
 notebook upload can proceed. The configured destination wins; the transport does
 not guess `origin` or push to both GitHub and Forgejo.
 
-## Task runs on exe.dev
+## Task runs on exe.dev and GitVM
 
-1. Start from a clean, committed checkout. Preflight the worker's Codex login
-   when applicable, Python 3, Git LFS, and repository access.
+1. Start from a clean, committed checkout. Every task runs the common worker
+   bootstrap before any input push or agent launch. Missing Python 3.9+, Git,
+   Git LFS, OpenSSH, tmux and curl are installed automatically on supported
+   Linux images (apt, dnf, apk; root or passwordless sudo). Warm workers are
+   checked again. The worker's Codex login is also checked when applicable.
+   The configured forge connection registers a write-enabled deploy key for
+   that worker and repository, reusing it on subsequent tasks. Fresh workers
+   and different repositories get distinct keys; concurrent tasks share the
+   same key safely. Desktop tokens and private keys are never copied.
+   Git read, task-branch write (dry run), and LFS upload authorization must
+   all pass before dispatch. Failures name the failed requirement.
 2. Push the exact source commit to `xnaut/inputs/<run-id>`. Clone real history on
    the worker, verify that commit, and create `xnaut/runs/<run-id>`. Each run gets
-   a separate checkout under `~/agents/runs/`; existing runs are preserved.
+   a separate checkout under `~/agents/runs/` on exe.dev or
+   `/workspace/.xnaut-runs/` on GitVM; existing runs are preserved.
 3. The agent commits its authorized source changes and writes reports, notes,
    screenshots, pictures and videos under `.xnaut/runs/<run-id>/`. The launcher
    installs media LFS rules there. Other artifacts at least 8 MiB also use LFS.
@@ -38,6 +48,9 @@ branch. The process exit code is recorded separately from handback quality.
 The run registry waits for worker process evidence before marking a dispatched
 viewport as running. A worker/VM reboot preserves files but can stop tmux;
 restart its publisher with the command above if necessary.
+The GitVM idle reaper refuses teardown while repository delivery is unconfirmed;
+its existing pull-before-teardown safeguard also remains in place. Provider
+lease expiry is separate and cannot be prevented by the desktop reaper.
 
 Credentials, launcher scripts, caches and local control receipts are outside
 the publication directory. Do not place secrets in task reports or artifacts.
@@ -60,10 +73,25 @@ bidirectional merging of another device's notebook edits.
 ## Setup and visibility
 
 The desktop needs Git access to the configured repository plus its corresponding
-forge connection/token for PR creation. The worker needs its own repository
-credentials and network access. SSH aliases are resolved to portable host/user/
-port URLs; desktop private keys are never forwarded or copied by this transport.
+forge connection/token, with permission to create PRs and manage repository deploy
+keys. Workers use the SSH clone endpoint returned by that forge for the exact
+same owner/repository; the configured project URL remains the desktop destination.
+The worker SSH identity is stored outside task files and selected in each
+checkout's local Git config. No global SSH/Git rewrite can redirect another
+project. A forge must support SSH deploy keys and Git LFS authentication.
 The repository must have a default branch with an initial commit and support LFS.
+
+Private networking is a fleet setup, never a per-task login. Settings → Worker
+access accepts an optional reusable, preauthorized Tailscale enrollment key and
+network tags. When the repository is unreachable, new workers install/start the
+network client and enroll automatically; workers with working routes skip that
+step. The key is sent over SSH stdin, used via a temporary owner-only file, and
+removed after enrollment. It never enters argv, task metadata, commits or logs.
+Already-enrolled workers with broken routes are not forcibly re-enrolled.
+Leave the setting empty for worker-reachable Forgejo/GitHub endpoints. Missing
+fleet credentials, expired keys, device approval or denied routes stop dispatch
+with a setup-specific error; a repository URL alone cannot grant private-network
+membership. Network policies must allow both SSH and the forge/LFS HTTP service.
 
 Project settings show queued, prepared, running, pushed and review transfers,
 errors, and PR links. Use **Refresh transfers** after changing connectivity.
@@ -74,6 +102,7 @@ results safely pushed while the PR awaits the next attempt.
 [Some LFS media does not render inline in GitHub PRs](https://docs.github.com/en/repositories/working-with-files/managing-large-files/collaboration-with-git-large-file-storage);
 reviewers can fetch the branch with LFS to retrieve the original files.
 
-This replaces rsync for exe.dev **agent launches**. The existing sandbox verify
-and GitVM transfer paths remain separate. Existing runs and JOBUP-11's earlier
+This replaces rsync as the task source/results transport for exe.dev and GitVM
+**agent launches**. The existing sandbox verification path remains separate.
+Existing runs and JOBUP-11's earlier
 macOS `.git` pointer are not automatically migrated or declared recovered.
