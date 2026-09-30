@@ -12,13 +12,16 @@
   try { cache = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (_) { cache = null; }
 
   let pending = null;
+  let error = '';
+  const announce = () => window.dispatchEvent(new CustomEvent('xnaut-model-catalog-update'));
   function refresh() {
     if (!pending) pending = fetchCatalog().finally(() => { pending = null; });
     return pending;
   }
   async function fetchCatalog() {
     try {
-      const list = (await invoke('chat_list_provider_models')) || [];
+      const list = await invoke('chat_list_provider_models');
+      if (!Array.isArray(list)) throw new Error('Model catalog is unavailable');
       const byProvider = {};
       const flat = [];
       list.forEach((m) => {
@@ -32,10 +35,11 @@
       });
       if (Array.isArray(list)) {
         cache = { at: Date.now(), byProvider, flat };
+        error = '';
         try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (_) {}
-        try { window.dispatchEvent(new CustomEvent('xnaut-model-catalog-update')); } catch (_) {}
       }
-    } catch (_) { /* keep the previous cache on failure */ }
+    } catch (failure) { error = String(failure); /* retain the last successful cache and date */ }
+    announce();
     return cache;
   }
 
@@ -45,16 +49,22 @@
     all: () => (cache && cache.flat) || [],
     forProvider: (p) => (cache && cache.byProvider && cache.byProvider[String(p)]) || [],
     at: () => (cache && cache.at) || 0,
+    error: () => error,
     refresh,
     refreshIfStale: () => (stale() ? refresh() : Promise.resolve(cache)),
   };
 
-  // Refresh on start if stale, then once a day at a random offset (so every
-  // install doesn't hammer providers at the same instant).
+  // Check on startup and after sleep/backgrounding. Timers alone can leave a
+  // suspended desktop app showing yesterday's catalog when it wakes.
   function start() {
     window.xnautModelCatalog.refreshIfStale();
     const firstDelay = Math.max(60000, Math.floor(Math.random() * DAY));
     setTimeout(function daily() { refresh(); setTimeout(daily, DAY); }, firstDelay);
+    window.addEventListener('focus', () => window.xnautModelCatalog.refreshIfStale());
+    window.addEventListener('online', () => window.xnautModelCatalog.refreshIfStale());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) window.xnautModelCatalog.refreshIfStale();
+    });
   }
   if (window.__TAURI__ && window.__TAURI__.core) start();
   else setTimeout(start, 3000);

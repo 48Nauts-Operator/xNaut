@@ -21,6 +21,7 @@ pub struct ChatMessage {
 pub struct ProviderModel {
     pub provider: String,
     pub model: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone)]
@@ -814,6 +815,25 @@ pub async fn chat_list_models(
 }
 
 async fn list_models_for(llm: &crate::settings::LlmSettings) -> Result<Vec<String>, String> {
+    Ok(list_model_entries_for(llm).await?.into_iter().map(|entry| entry.model).collect())
+}
+
+fn model_entries(value: &serde_json::Value, provider: &str) -> Result<Vec<ProviderModel>, String> {
+    let data = value["data"].as_array().ok_or("Model catalog response has no data array")?;
+    let mut models: Vec<_> = data.iter().filter_map(|item| {
+        let id = item["id"].as_str()?.trim();
+        if id.is_empty() { return None; }
+        let label = ["nautgate_display", "name", "display_name"].iter()
+            .filter_map(|key| item[*key].as_str().map(str::trim))
+            .find(|name| !name.is_empty()).unwrap_or(id);
+        Some(ProviderModel { provider: provider.into(), model: id.into(), label: label.into() })
+    }).collect();
+    models.sort_by(|a, b| a.model.cmp(&b.model));
+    models.dedup_by(|a, b| a.model == b.model);
+    Ok(models)
+}
+
+async fn list_model_entries_for(llm: &crate::settings::LlmSettings) -> Result<Vec<ProviderModel>, String> {
     if llm.endpoint.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -839,18 +859,7 @@ async fn list_models_for(llm: &crate::settings::LlmSettings) -> Result<Vec<Strin
     }
     let value: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("invalid model list JSON ({e}): {}", body_excerpt(&body)))?;
-    let mut models: Vec<String> = value["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item["id"].as_str())
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .collect();
-    models.sort();
-    models.dedup();
-    Ok(models)
+    model_entries(&value, &llm.provider)
 }
 
 #[tauri::command]
@@ -892,22 +901,22 @@ pub async fn chat_list_provider_models(
             system_prompt: None,
             harness_local: false,
         };
-        list_models_for(&llm)
-            .await
-            .ok()
-            .map(|models| (name, models))
+        (name, list_model_entries_for(&llm).await)
     });
-    let mut result = futures_util::future::join_all(requests)
-        .await
-        .into_iter()
-        .flatten()
-        .flat_map(|(provider, models)| {
-            models.into_iter().map(move |model| ProviderModel {
-                provider: provider.clone(),
-                model,
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut result = Vec::new();
+    let mut failed = Vec::new();
+    let mut succeeded = 0;
+    for (name, models) in futures_util::future::join_all(requests).await {
+        match models {
+            Ok(models) => { succeeded += 1; result.extend(models); }
+            Err(_) => failed.push(name),
+        }
+    }
+    // An outage is not an authoritative empty catalog. Let the frontend retain
+    // its last successful result and timestamp instead of marking it fresh.
+    if succeeded == 0 && !failed.is_empty() {
+        return Err(format!("Model catalog refresh failed for {}", failed.join(", ")));
+    }
     result.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
     result.dedup_by(|a, b| a.provider == b.provider && a.model == b.model);
     Ok(result)
@@ -978,6 +987,22 @@ pub async fn net_fetch_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_catalog_preserves_provider_display_names_and_exact_request_ids() {
+        let entries = model_entries(&serde_json::json!({"data":[
+            {"id":"vendor/model-v2", "name":"Vendor Model Two"},
+            {"id":"gateway/model", "nautgate_display":"Gateway Model", "name":"Ignored"},
+            {"id":"plain-model"}, {"id":" "}
+        ]}), "fixture").unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].model, "gateway/model");
+        assert_eq!(entries[0].label, "Gateway Model");
+        assert_eq!(entries[1].label, "plain-model");
+        assert_eq!(entries[2].label, "Vendor Model Two");
+        assert!(model_entries(&serde_json::json!({"error":"unavailable"}), "fixture").is_err());
+        assert!(model_entries(&serde_json::json!({"data":[]}), "fixture").unwrap().is_empty());
+    }
 
     /// The screenshot that started this: a composer labelled "nautgate . auto"
     /// timing out against http://localhost:1238 with a model nobody selected.

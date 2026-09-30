@@ -18,6 +18,13 @@
     return 'nautgate';
   }
   const choices = () => (window.xnautModelCatalog?.all()||[]);
+  function watchCatalog(element, paint) {
+    const update = () => {
+      if (element.isConnected) paint();
+      else window.removeEventListener('xnaut-model-catalog-update', update);
+    };
+    window.addEventListener('xnaut-model-catalog-update', update);
+  }
   function option(select,value,label) {const o=document.createElement('option');o.value=value;o.textContent=label;select.appendChild(o);return o;}
   function mountSettings(host,settings) {
     const endpoint=host.querySelector('#tm-llm-endpoint'),model=host.querySelector('#tm-llm-model'),key=host.querySelector('#tm-llm-key');
@@ -50,6 +57,7 @@
     if(!route.value)route.value='codex';
     const pickerRow=document.createElement('div');pickerRow.className='settings-row';pickerRow.innerHTML='<label for="tm-llm-picker">Available models</label><select id="tm-llm-picker" aria-label="Available chat models"></select><button class="btn-test" type="button" data-refresh-chat-models>Refresh models</button>';
     row.after(pickerRow);const picker=pickerRow.querySelector('select');
+    const catalogStatus=document.createElement('p');catalogStatus.dataset.modelCatalogStatus='';catalogStatus.style.cssText='color:var(--text-secondary);font-size:12px;line-height:1.5';pickerRow.after(catalogStatus);
     const hint=document.createElement('p');hint.style.cssText='color:var(--text-secondary);font-size:12px;line-height:1.5';hint.textContent='Codex / OpenAI and Claude models use your configured NautGate routes. Subscription coverage and account availability are controlled by the gateway, not the model name. OpenRouter uses API billing. Pick any discovered model, or enter an exact model ID below.';pickerRow.after(hint);
     function paint() {
       const selected=model.value;picker.replaceChildren();option(picker,'','Choose a model…');
@@ -57,6 +65,8 @@
       for(const m of list) option(picker,m.id,m.name||m.id);
       if(selected&&!list.some(m=>m.id===selected)) option(picker,selected,`${selected} (current / custom)`);
       picker.value=selected;
+      const catalog=window.xnautModelCatalog,at=catalog?.at(),failure=catalog?.error?.();
+      catalogStatus.textContent=`Provider catalog: ${at?'last updated '+new Date(at).toLocaleString():'not loaded yet'}. ${failure?'Refresh failed; showing the previous list. '+failure:'Refreshes daily while xNaut is running and checks again on wake.'}`;
       hint.textContent=useGateway?'Chat and agent model requests use NautGate. A failed gateway request will not fall back to a direct provider. Account and subscription availability are controlled by your gateway.':'xNaut calls the selected endpoint directly using its API key. OpenAI API billing is separate from a Codex subscription. Astra uses native Responses; the endpoint must support it.';
     }
     route.onchange=()=>{
@@ -73,7 +83,8 @@
     picker.onchange=()=>{if(picker.value)model.value=picker.value;};
     model.addEventListener('change',()=>{if(useGateway&&route.value==='openrouter'&&model.value&&!model.value.startsWith('openrouter/'))model.value='openrouter/'+model.value;paint();});
     pickerRow.querySelector('button').onclick=async event=>{event.target.disabled=true;try{await window.xnautModelCatalog.refresh();paint();}finally{event.target.disabled=false;}};
-    paint();void window.xnautModelCatalog.refresh().then(()=>{if(host.isConnected)paint();});
+    watchCatalog(host,paint);
+    paint();void window.xnautModelCatalog.refreshIfStale().then(()=>{if(host.isConnected)paint();});
     return {provider:()=>provider, gatewayEnabled:()=>useGateway};
   }
   function mountChat(parent,{get,onChange}) {
@@ -92,7 +103,8 @@
       select.value=value;
     }
     select.onchange=()=>{const [provider,model]=select.value?JSON.parse(select.value):['',''];onChange({provider,model});};
-    paint();void window.xnautModelCatalog.refresh().then(()=>{if(parent.isConnected)paint();});
+    watchCatalog(parent,paint);
+    paint();void window.xnautModelCatalog.refreshIfStale().then(()=>{if(parent.isConnected)paint();});
     return select;
   }
   window.xnautChatModelPicker={mountSettings,mountChat};

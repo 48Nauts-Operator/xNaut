@@ -2549,48 +2549,6 @@ function loadSettingsSection(section) {
 }
 
 // Settings save functions
-const MODEL_OPTIONS = {
-  anthropic: [
-    { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
-    { id: 'claude-opus-4-1-20250805', name: 'Claude Opus 4.1' },
-    { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
-    { id: 'claude-opus-4-20250514', name: 'Claude Opus 4' },
-    { id: 'claude-3-7-sonnet-20250219', name: 'Claude Sonnet 3.7' },
-    { id: 'claude-3-5-haiku-20241022', name: 'Claude Haiku 3.5' },
-  ],
-  openai: [
-    { id: 'gpt-4o', name: 'GPT-4o' },
-    { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
-    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
-    { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
-    { id: 'o1', name: 'o1' },
-    { id: 'o1-mini', name: 'o1 Mini' },
-  ],
-  openrouter: [
-    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
-    { id: 'anthropic/claude-3-opus', name: 'Claude 3 Opus' },
-    { id: 'openai/gpt-4o', name: 'GPT-4o' },
-    { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B' },
-    { id: 'google/gemini-pro-1.5', name: 'Gemini Pro 1.5' },
-    { id: 'mistralai/mistral-large-latest', name: 'Mistral Large' },
-  ],
-  perplexity: [
-    { id: 'sonar', name: 'Sonar' },
-    { id: 'sonar-pro', name: 'Sonar Pro' },
-    { id: 'sonar-reasoning', name: 'Sonar Reasoning' },
-    { id: 'sonar-reasoning-pro', name: 'Sonar Reasoning Pro' },
-    { id: 'sonar-deep-research', name: 'Sonar Deep Research' },
-  ],
-  nautgate: [
-    { id: 'auto', name: 'Auto (NautGate routes)' },
-    { id: 'openrouter/google/gemini-pro', name: 'Gemini Pro' },
-    { id: 'openrouter/google/gemini-flash', name: 'Gemini Flash' },
-    { id: 'openrouter/moonshotai/kimi-k2-thinking', name: 'Kimi K2 Thinking' },
-    { id: 'openrouter/moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
-    { id: 'openrouter/deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-  ],
-};
-
 window.updateModelDropdown = async function() {
   const provider = document.getElementById('set-default-provider')?.value || 'anthropic';
   const select = document.getElementById('set-default-model');
@@ -2627,13 +2585,30 @@ window.updateModelDropdown = async function() {
     return;
   }
 
-  // Static model lists for cloud providers
-  const live = (window.xnautModelCatalog && window.xnautModelCatalog.forProvider(provider)) || [];
-  const models = live.length ? live : (MODEL_OPTIONS[provider] || []); // live catalog first, hardcoded only as fallback
-  select.innerHTML = models.map(m =>
-    '<option value="' + m.id + '"' + (settings.llmModel === m.id ? ' selected' : '') + '>' + m.name + '</option>'
-  ).join('');
+  // Use the provider catalog; an old baked-in list is not discovery evidence.
+  const models = (window.xnautModelCatalog?.all() || []).filter(m => {
+    if (m.provider === provider) return true;
+    if (m.provider !== 'nautgate') return false;
+    if (provider === 'openai') return /^(gpt-|o[134](?:-|$)|codex)/.test(m.id);
+    if (provider === 'anthropic') return /^(claude-|anthropic\/)/.test(m.id);
+    if (provider === 'openrouter') return m.id.startsWith('openrouter/');
+    return false;
+  });
+  const selected = select.value || settings.llmModel;
+  select.replaceChildren();
+  const add = (id, name) => {
+    const option = document.createElement('option');option.value = id;option.textContent = name;select.appendChild(option);
+  };
+  for (const model of models) add(model.id, model.name || model.id);
+  if (selected && !models.some(m => m.id === selected)) add(selected, `${selected} (current / custom)`);
+  if (!select.options.length) add('', 'No discovered models — check provider access');
+  if (selected) select.value = selected;
 };
+
+window.addEventListener('xnaut-model-catalog-update', () => {
+  const provider = document.getElementById('set-default-provider')?.value;
+  if (provider && !['ollama', 'lmstudio'].includes(provider)) void window.updateModelDropdown();
+});
 
 function normalizeOpenAIEndpoint(url) {
   const base = String(url || '').trim().replace(/\/+$/, '');

@@ -6,6 +6,57 @@ async function models(page){
   await window.xnautModelCatalog.refresh();
  });
 }
+test('catalog refresh updates an open picker with display names and preserves selection',async({page})=>{
+ await models(page);await page.evaluate(()=>window.xnautAttachChatTab({title:'Live catalog',chatKey:'live-catalog'}));
+ const select=page.getByRole('combobox',{name:'Chat model',exact:true});
+ await select.selectOption(JSON.stringify(['nautgate','claude-fable-5']));
+ await page.evaluate(async()=>{
+  window.__xnautStub.chat_list_provider_models=[{provider:'nautgate',model:'claude-fable-5',label:'Claude Fable 5'},{provider:'nautgate',model:'gpt-fixture-new',label:'Newly discovered model'}];
+  await window.xnautModelCatalog.refresh();
+ });
+ await expect(select.locator('option',{hasText:'Newly discovered model'})).toHaveCount(1);
+ await expect(select.locator('option',{hasText:'Claude Fable 5'})).toHaveCount(1);
+ await expect(select).toHaveValue(JSON.stringify(['nautgate','claude-fable-5']));
+ await expect(select.locator('option',{hasText:'gemini-3.7'})).toHaveCount(0);
+});
+test('catalog failure keeps the last successful list and timestamp',async({page})=>{
+ await models(page);
+ const before=await page.evaluate(()=>({at:window.xnautModelCatalog.at(),all:window.xnautModelCatalog.all()}));
+ await page.evaluate(async()=>{
+  const invoke=window.__TAURI__.core.invoke;
+  window.__TAURI__.core.invoke=(name,...args)=>name==='chat_list_provider_models'?Promise.reject(new Error('Fixture provider unavailable')):invoke(name,...args);
+  await window.xnautModelCatalog.refresh();
+ });
+ expect(await page.evaluate(()=>({at:window.xnautModelCatalog.at(),all:window.xnautModelCatalog.all()}))).toEqual(before);
+ expect(await page.evaluate(()=>window.xnautModelCatalog.error())).toContain('Fixture provider unavailable');
+});
+test('legacy cloud settings use refreshed discovery instead of a baked-in model list',async({page})=>{
+ await models(page);
+ await page.evaluate(()=>{
+  const provider=document.createElement('select');provider.id='set-default-provider';provider.innerHTML='<option value="openai">OpenAI</option>';
+  const model=document.createElement('select');model.id='set-default-model';document.body.append(provider,model);
+  window.updateModelDropdown();
+ });
+ const select=page.locator('#set-default-model');
+ await expect(select.locator('option[value="gpt-5.6-sol"]')).toHaveCount(1);
+ await expect(select.locator('option[value="gpt-3.5-turbo"]')).toHaveCount(0);
+ await page.evaluate(async()=>{
+  window.__xnautStub.chat_list_provider_models=[{provider:'nautgate',model:'gpt-fixture-new',label:'Fresh model label'}];
+  await window.xnautModelCatalog.refresh();
+ });
+ await expect(select.locator('option[value="gpt-fixture-new"]')).toHaveText('Fresh model label');
+});
+test('a stale catalog checks again when the app returns to the foreground',async({page})=>{
+ await page.addInitScript(()=>localStorage.setItem('xnaut-model-catalog',JSON.stringify({at:Date.now()-2*86400000,flat:[],byProvider:{}})));
+ await page.goto('/?stub=1');await page.waitForSelector('#btn-help');
+ await page.evaluate(async()=>{
+  await window.xnautModelCatalog.refresh();
+  window.__xnautStub.chat_list_provider_models=[{provider:'nautgate',model:'wake-model',label:'Wake model'}];
+  const now=Date.now;Date.now=()=>now()+2*86400000;
+  window.dispatchEvent(new Event('focus'));
+ });
+ await expect.poll(()=>page.evaluate(()=>window.xnautModelCatalog.all().some(m=>m.id==='wake-model'))).toBe(true);
+});
 test('all gateway and local models are available and per-chat selection survives reopen',async({page})=>{
  await models(page);await page.evaluate(()=>window.xnautAttachChatTab({title:'Model test',chatKey:'model-test'}));
  const select=page.getByRole('combobox',{name:'Chat model',exact:true});
