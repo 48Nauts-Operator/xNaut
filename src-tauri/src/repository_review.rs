@@ -531,6 +531,111 @@ fn pr_number(t: &Transfer) -> Result<u64, String> {
         .and_then(|u| u.path_segments()?.next_back()?.parse().ok())
         .ok_or("PR identity unavailable".into())
 }
+pub(crate) fn chat_spec() -> Value {
+    json!({"type":"function","function":{"name":"request_repository_review","description":"Queue independent testing and review of an existing published task PR using its saved run_id from registered project context. Use this for PR reviews instead of starting a duplicate repository task. Requires the owner's saved automatic-review permission; cannot enable review or merge permissions. Returns durable queue/current status, not a claim that a worker has started or completed.","parameters":{"type":"object","properties":{"run_id":{"type":"string","description":"Saved parent run_id for the user-referenced PR, supplied in registered project context."}},"required":["run_id"],"additionalProperties":false}}})
+}
+/// Match a PR reference in USER text only. A bare number must identify exactly
+/// one known parent task; qualified project names and exact PR URLs disambiguate.
+pub(crate) fn referenced_tasks(messages: &[Value], rows: &[Transfer]) -> Vec<Transfer> {
+    static PR: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = PR.get_or_init(|| {
+        regex::Regex::new(r"(?i)\b(?:PR|pull\s+request)\s*(?:\\?#\s*)?([0-9]+)\b").unwrap()
+    });
+    let mut found = Vec::new();
+    for text in crate::repository_read::user_texts(messages) {
+        let clean = text.replace('*', "");
+        let candidates: Vec<_> = rows
+            .iter()
+            .filter(|t| t.review_parent.is_none() && t.pr_url.is_some())
+            .collect();
+        for t in &candidates {
+            let url = t.pr_url.as_deref().unwrap();
+            if clean.split_whitespace().any(|word| {
+                word.trim_matches(|c: char| {
+                    ['(', ')', '[', ']', '<', '>', '`', '.', ','].contains(&c)
+                })
+                .split(['?', '#'])
+                .next()
+                    == Some(url)
+            }) && !found.iter().any(|v: &Transfer| v.run_id == t.run_id)
+            {
+                found.push((*t).clone());
+            }
+        }
+        for capture in re.captures_iter(&clean) {
+            let Some(number) = capture[1].parse::<u64>().ok() else {
+                continue;
+            };
+            let matches: Vec<_> = candidates
+                .iter()
+                .copied()
+                .filter(|t| pr_number(t).ok() == Some(number))
+                .collect();
+            let qualified: Vec<_> = matches
+                .iter()
+                .copied()
+                .filter(|t| crate::repository_read::mentions(&clean, &t.project))
+                .collect();
+            let named_other = rows
+                .iter()
+                .any(|t| crate::repository_read::mentions(&clean, &t.project));
+            let selected = if !qualified.is_empty() {
+                qualified
+            } else if named_other {
+                vec![]
+            } else {
+                matches
+            };
+            if let [t] = selected.as_slice() {
+                if !found.iter().any(|v: &Transfer| v.run_id == t.run_id) {
+                    found.push((*t).clone());
+                }
+            }
+        }
+    }
+    found
+}
+pub(crate) fn chat_references(messages: &[Value]) -> Vec<Transfer> {
+    let Ok(rows) = transfer::list() else {
+        return vec![];
+    };
+    let Ok(projects) = crate::project_management::repo_now()
+        .and_then(|r| crate::project_management::list_projects(&r))
+    else {
+        return vec![];
+    };
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|t| {
+            projects.iter().any(|p| {
+                p.key == t.project
+                    && transfer::portable_remote(&p.forge_remote).ok().as_deref()
+                        == Some(t.remote.as_str())
+            })
+        })
+        .collect();
+    referenced_tasks(messages, &rows)
+}
+pub(crate) fn request_from_chat(args: &Value, allowed: &[PathBuf], messages: &[Value]) -> Value {
+    let result: Result<Transfer, String> = (|| {
+        if crate::switches::load().read_only {
+            return Err("The read_only kill-switch is engaged".into());
+        }
+        let run_id = args["run_id"]
+            .as_str()
+            .ok_or("Saved task run_id is required")?;
+        let task=chat_references(messages).into_iter().find(|t|t.run_id==run_id).ok_or("This PR was not uniquely identified by the user's request. Name its registered project and PR number, or its full PR URL; no filesystem path is needed.")?;
+        crate::repository_read::authorized_root(&task.project, allowed)?;
+        repository_review_request(task.run_id)
+    })();
+    match result {
+        Ok(t) => {
+            json!({"ok":true,"execution_started":false,"effect":"review_queue","run_id":t.run_id,"project":t.project,"pr_url":t.pr_url,"review":t.quality,"note":"The existing PR review is queued or its existing status is returned. No duplicate task was created. Queueing alone is not worker launch, test completion, merge or release evidence. The desktop reconciler applies saved project permissions and worker gates."})
+        }
+        Err(error) => json!({"ok":false,"error":error}),
+    }
+}
+
 /// Explicit owner action for pre-existing PRs and failed, fully stopped reviews.
 #[tauri::command]
 pub fn repository_review_request(run_id: String) -> Result<Transfer, String> {
@@ -551,7 +656,7 @@ pub fn repository_review_request(run_id: String) -> Result<Transfer, String> {
     }
     if let Some(q) = &t.quality {
         if !["blocked", "changes_requested"].contains(&q.state.as_str()) {
-            return Err("Review is already queued, ready, or completed".into());
+            return Ok(t); // stable retries return the existing queue/run, never another worker
         }
         if q.attempts >= 3 {
             return Err("Review retry limit reached; owner attention required".into());
@@ -864,6 +969,62 @@ mod tests {
         assert!(path.with_extension("revision-2.json").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn chat_pr_scope_requires_user_reference_and_never_guesses_between_projects() {
+        let task = |project: &str, id: &str| -> Transfer {
+            serde_json::from_value(json!({"run_id":id,"project":project,"ticket":null,"handle":"author","local_path":"/fixture","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/fixture","state":"review","pr_url":format!("https://forge.test/team/{project}/pulls/105"),"error":null})).unwrap()
+        };
+        let a = task("XNAUT", "a");
+        let b = task("JOBUP", "b");
+        for text in [
+            "verify smoke-test PR #105",
+            r"verify **PR \#105**",
+            "review pull request 105",
+        ] {
+            let refs = referenced_tasks(&[json!({"role":"user","content":text})], &[a.clone()]);
+            assert_eq!(refs.len(), 1, "{text}");
+            assert_eq!(refs[0].run_id, "a");
+        }
+        for role in ["assistant", "tool", "system"] {
+            assert!(referenced_tasks(
+                &[json!({"role":role,"content":"Review XNAUT PR #105"})],
+                &[a.clone()]
+            )
+            .is_empty());
+        }
+        assert!(referenced_tasks(
+            &[json!({"role":"user","content":"Review PR #105"})],
+            &[a.clone(), b.clone()]
+        )
+        .is_empty());
+        let scoped = referenced_tasks(
+            &[json!({"role":"user","content":"Review xNAUT PR #105"})],
+            &[a.clone(), b.clone()],
+        );
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].project, "XNAUT");
+        let url = referenced_tasks(
+            &[json!({"role":"user","content":b.pr_url})],
+            &[a.clone(), b.clone()],
+        );
+        assert_eq!(url.len(), 1);
+        assert_eq!(url[0].run_id, "b");
+        assert!(referenced_tasks(
+            &[json!({"role":"user","content":"Review PR #1050"})],
+            &[a.clone()]
+        )
+        .is_empty());
+        let child = Transfer {
+            review_parent: Some("parent".into()),
+            ..a
+        };
+        assert!(referenced_tasks(
+            &[json!({"role":"user","content":"Review PR #105"})],
+            &[child]
+        )
+        .is_empty());
+    }
+
     #[test]
     fn policy_never_grants_implicit_authority() {
         let p = Policy::default();

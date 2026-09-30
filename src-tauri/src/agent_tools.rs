@@ -663,6 +663,7 @@ pub fn tool_specs() -> Vec<Value> {
         }),
     ];
     specs.extend(crate::repository_read::specs());
+    specs.push(crate::repository_review::chat_spec());
     specs.extend(crate::agent_work::specs());
     specs
 
@@ -686,6 +687,7 @@ fn appended_body(current: &str, added: &str) -> String {
 pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
     if crate::agent_work::is_tool(name) { return json!({"ok":false,"error":"Worktree tools require the agent chat loop and its authorized repository context."}); }
     if crate::repository_read::is_tool(name) { return crate::repository_read::execute(name, args, &[]); }
+    if name == "request_repository_review" {return json!({"ok":false,"error":"PR review requires the chat loop and its user-authorized task context"});}
     match name {
         "list_plugins" => {
             let plugins = crate::plugins::catalog_snapshot();
@@ -2140,7 +2142,7 @@ pub async fn run_turn_streaming(
     let (registered_roots, context) = crate::repository_read::registered_context(&messages);
     let mut messages=messages;
     if !context.is_empty() {
-        messages.insert(0,json!({"role":"system","content":format!("Registered projects explicitly named by the user: {}. Available roots are authorized for read-only repository tools. This metadata is not execution evidence. Use it before claiming the repository path is unknown.",json!(context))}));
+        messages.insert(0,json!({"role":"system","content":format!("Registered projects named by the user or resolved from their saved PR references: {}. Available roots are authorized for read-only repository tools. This metadata is not execution evidence. Use it before claiming the repository path is unknown. When review_task is present and the user requests a PR review, call request_repository_review with that run_id. This queues the existing PR through Ralph and the saved project gates; do not start a duplicate generic task or request a filesystem path.",json!(context))}));
     }
     let opened = crate::mcp_client::open_for(capabilities).await;
     run_turn_with_roots(&routed, model, messages, effort, canvas_key, stream_to, opened, registered_roots).await
@@ -2179,7 +2181,8 @@ async fn run_turn_with_roots(
     let mut repository_roots = crate::repository_read::roots(&messages);
     for root in registered_roots { if !repository_roots.contains(&root) { repository_roots.push(root); } }
     let review = review_requested(&messages);
-    let user_context = messages.iter().filter(|m|m["role"]=="user").filter_map(|m|m["content"].as_str()).collect::<Vec<_>>().join("\n");
+    let user_context = crate::repository_read::user_texts(&messages).join("\n");
+    let scope_messages:Vec<Value>=messages.iter().filter(|m|m["role"]=="user").cloned().collect();
     let mut conversation = without_trailing_assistant(messages);
     if !problems.is_empty() {
         // Say it in-band: a server that would not start is something the agent
@@ -2460,6 +2463,8 @@ async fn run_turn_with_roots(
                 json!({"ok":false,"error":"Tool was not advertised for this round. Search and load available tools, then call them in a subsequent response."})
             } else if review && name == "update_ticket" && args["status"] == "in_progress" && preparation_only(&performed) {
                 json!({"ok":false,"error":"Cannot mark an audit in progress on preparation alone. Inspect repository source, run a scanner, or obtain a real dispatch receipt first. Attaching a terminal does not execute work."})
+            } else if name == "request_repository_review" {
+                crate::repository_review::request_from_chat(&args,&repository_roots,&scope_messages)
             } else if crate::agent_work::is_tool(&name) {
                 crate::agent_work::execute(&name, &args, canvas_key, &repository_roots, &user_context).await
             } else if crate::repository_read::is_tool(&name) {

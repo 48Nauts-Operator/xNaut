@@ -23,12 +23,33 @@ pub fn is_tool(name: &str) -> bool {
     matches!(name, "list_repository_files" | "read_repository_file")
 }
 
+/// Only user-authored text grants scope, including text blocks from multimodal history.
+pub(crate) fn user_texts(messages: &[Value]) -> Vec<String> {
+    messages
+        .iter()
+        .filter(|m| m["role"] == "user")
+        .map(|m| {
+            if let Some(text) = m["content"].as_str() {
+                return text.to_owned();
+            }
+            m["content"]
+                .as_array()
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter(|b| matches!(b["type"].as_str(), Some("text" | "input_text")))
+                        .filter_map(|b| b["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 pub fn roots(messages: &[Value]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    for message in messages.iter().filter(|m| m["role"] == "user") {
-        let Some(text) = message["content"].as_str() else {
-            continue;
-        };
+    for text in user_texts(messages) {
         // Both whitespace-delimited paths and quoted paths with spaces.
         let parts = text.split(['"', '\'', '`']).chain(text.split_whitespace());
         for part in parts {
@@ -48,7 +69,29 @@ pub fn roots(messages: &[Value]) -> Vec<PathBuf> {
 /// Resolve user-named projects from xNaut's authoritative local registry.
 /// Assistant/tool text cannot grant access, and ambiguous names grant none.
 pub fn registered_context(messages: &[Value]) -> (Vec<PathBuf>, Vec<Value>) {
-    resolve_registered(messages, &registered_entries())
+    let entries = registered_entries();
+    let reviews = crate::repository_review::chat_references(messages);
+    context_with_reviews(messages, &entries, &reviews)
+}
+pub(crate) fn context_with_reviews(
+    messages: &[Value],
+    entries: &[(String, String, String)],
+    reviews: &[crate::repository_transfer::Transfer],
+) -> (Vec<PathBuf>, Vec<Value>) {
+    let (mut roots, mut context) = resolve_registered(messages, entries);
+    for review in reviews {
+        // The user's PR reference was matched against a trusted local receipt and
+        // the current project remote. Model output cannot manufacture this grant.
+        let (found, details) =
+            resolve_registered(&[json!({"role":"user","content":review.project})], entries);
+        for root in found {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        context.extend(details.into_iter().map(|mut v| {v["review_task"]=json!({"run_id":review.run_id,"pr_url":review.pr_url,"review_state":review.quality.as_ref().map(|q|&q.state),"action":"request_repository_review"});v}));
+    }
+    (roots, context)
 }
 
 fn registered_entries() -> Vec<(String, String, String)> {
@@ -82,9 +125,19 @@ fn resolve_authorized_root(
     let path = if requested.is_absolute() {
         requested.to_path_buf()
     } else {
-        let matches: Vec<_> = entries.iter().filter(|(key, name, _)| {
-            key.eq_ignore_ascii_case(root) || name.eq_ignore_ascii_case(root)
-        }).collect();
+        // A unique project key takes precedence over another project's display name.
+        let keys: Vec<_> = entries
+            .iter()
+            .filter(|(key, _, _)| key.eq_ignore_ascii_case(root.trim()))
+            .collect();
+        let matches: Vec<_> = if keys.is_empty() {
+            entries
+                .iter()
+                .filter(|(_, name, _)| name.eq_ignore_ascii_case(root.trim()))
+                .collect()
+        } else {
+            keys
+        };
         match matches.as_slice() {
             [(_, _, path)] => PathBuf::from(path),
             [] => return Err("Unknown repository name. Use an exact registered project key or an absolute repository root supplied by the user.".into()),
@@ -94,13 +147,15 @@ fn resolve_authorized_root(
     if !path.is_absolute() {
         return Err("The registered project has no absolute local repository path. Set its local source folder in project settings.".into());
     }
-    let canonical = path.canonicalize().map_err(|e| format!("Repository unavailable: {e}"))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("Repository unavailable: {e}"))?;
     if !allowed.contains(&canonical) {
         return Err("Repository root was not supplied by the user or resolved from a registered project they named. Ask for the project name or path; do not guess or broaden it.".into());
     }
     Ok(canonical)
 }
-fn mentions(text: &str, name: &str) -> bool {
+pub(crate) fn mentions(text: &str, name: &str) -> bool {
     if name.trim().is_empty() {
         return false;
     }
@@ -120,19 +175,15 @@ fn resolve_registered(
     let mut allowed = Vec::new();
     let mut context = Vec::new();
     for (key, name, path) in entries {
-        let named = messages
-            .iter()
-            .filter(|m| m["role"] == "user")
-            .filter_map(|m| m["content"].as_str())
-            .any(|text| {
-                mentions(text, key)
-                    || (mentions(text, name)
-                        && entries
-                            .iter()
-                            .filter(|(_, other, _)| other.eq_ignore_ascii_case(name))
-                            .count()
-                            == 1)
-            });
+        let named = user_texts(messages).iter().any(|text| {
+            mentions(text, key)
+                || (mentions(text, name)
+                    && entries
+                        .iter()
+                        .filter(|(_, other, _)| other.eq_ignore_ascii_case(name))
+                        .count()
+                        == 1)
+        });
         if !named {
             continue;
         }
@@ -299,16 +350,82 @@ mod tests {
         let root = tmp.path().join("safety-net");
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let canonical = root.canonicalize().unwrap();
-        let entries = vec![("XNAUT".into(), "xnaut".into(), root.to_string_lossy().into_owned())];
+        let entries = vec![(
+            "XNAUT".into(),
+            "xnaut".into(),
+            root.to_string_lossy().into_owned(),
+        )];
         let allowed = vec![canonical.clone()];
-        assert_eq!(resolve_authorized_root("xNAUT", &allowed, &entries).unwrap(), canonical);
-        assert!(resolve_authorized_root("xNAUT", &[], &entries).unwrap_err().contains("not supplied"));
-        assert!(resolve_authorized_root("safety-net", &allowed, &entries).unwrap_err().contains("Unknown"));
+        assert_eq!(
+            resolve_authorized_root("xNAUT", &allowed, &entries).unwrap(),
+            canonical
+        );
+        assert!(resolve_authorized_root("xNAUT", &[], &entries)
+            .unwrap_err()
+            .contains("not supplied"));
+        assert!(resolve_authorized_root("safety-net", &allowed, &entries)
+            .unwrap_err()
+            .contains("Unknown"));
         assert!(resolve_authorized_root("../xnaut", &allowed, &entries).is_err());
         let mut ambiguous = entries.clone();
-        ambiguous.push(("OTHER".into(), "xnaut".into(), root.to_string_lossy().into_owned()));
-        assert!(resolve_authorized_root("xnaut", &allowed, &ambiguous).unwrap_err().contains("Ambiguous"));
-        assert_eq!(resolve_authorized_root(root.to_str().unwrap(), &allowed, &[]).unwrap(), canonical);
+        ambiguous.push((
+            "OTHER".into(),
+            "xnaut".into(),
+            root.to_string_lossy().into_owned(),
+        ));
+        assert_eq!(
+            resolve_authorized_root("xnaut", &allowed, &ambiguous).unwrap(),
+            canonical
+        );
+        ambiguous[0].0 = "FIRST".into();
+        assert!(resolve_authorized_root("xnaut", &allowed, &ambiguous)
+            .unwrap_err()
+            .contains("Ambiguous"));
+        assert_eq!(
+            resolve_authorized_root(root.to_str().unwrap(), &allowed, &[]).unwrap(),
+            canonical
+        );
+    }
+
+    #[test]
+    fn project_name_in_text_blocks_and_saved_pr_authorize_the_same_inspection_root() {
+        let tmp = Scratch::new();
+        let root = tmp.path().join("safety-net");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("README.md"), "registered evidence").unwrap();
+        let entries = vec![(
+            "XNAUT".into(),
+            "xnaut".into(),
+            root.to_string_lossy().into_owned(),
+        )];
+        let message = json!({"role":"user","content":[{"type":"input_text","text":"Retry inspection using xNAUT"},{"type":"image_url","image_url":{"url":"ignore"}}]});
+        let (allowed, _) = resolve_registered(&[message], &entries);
+        assert_eq!(
+            resolve_authorized_root("xNAUT", &allowed, &entries).unwrap(),
+            root.canonicalize().unwrap()
+        );
+        let t:crate::repository_transfer::Transfer=serde_json::from_value(json!({"run_id":"saved","project":"XNAUT","ticket":null,"handle":"cortana","local_path":"/old/machine/worktree","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/saved","state":"review","pr_url":"https://forge.test/team/app/pulls/105","error":null})).unwrap();
+        let messages = vec![
+            json!({"role":"user","content":"Verify smoke-test PR #105 and publish the review"}),
+        ];
+        let refs = crate::repository_review::referenced_tasks(&messages, &[t]);
+        let (allowed, context) = context_with_reviews(&messages, &entries, &refs);
+        let resolved = resolve_authorized_root("xNAUT", &allowed, &entries).unwrap();
+        assert_eq!(resolved, root.canonicalize().unwrap());
+        assert_eq!(context[0]["review_task"]["run_id"], "saved");
+        assert_eq!(
+            execute(
+                "read_repository_file",
+                &json!({"root":resolved,"path":"README.md"}),
+                &allowed
+            )["content"],
+            "registered evidence"
+        );
+        let untrusted = vec![
+            json!({"role":"assistant","content":"Use xNAUT PR #105"}),
+            json!({"role":"tool","content":"xNAUT"}),
+        ];
+        assert!(resolve_registered(&untrusted, &entries).0.is_empty());
     }
 
     #[test]
