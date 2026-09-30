@@ -450,8 +450,9 @@ window.xnautAttachTasksTab = (opts) =>
         </div>
         <div class="settings-row">
           <label for="tm-worker-network-tags">Worker network tags</label>
-          <input type="text" id="tm-worker-network-tags" placeholder="Optional, e.g. tag:xnaut-worker">
+          <input type="text" id="tm-worker-network-tags" aria-describedby="tm-worker-network-tags-help" placeholder="Optional, e.g. tag:xnaut-worker">
         </div>
+        <p id="tm-worker-network-tags-help" style="color:var(--text-secondary); font-size:12px; margin:4px 0 8px;">Example: <code>tag:xnaut-worker</code> — include the <code>tag:</code> prefix. Separate multiple authorized tags with commas, or leave empty if your enrollment key already assigns them.</p>
         <p style="color:var(--text-secondary); font-size:12px; margin:8px 0 0;">For a private Tailscale network, configure enrollment once for all new workers. The enrollment key stays outside task files; repository access uses a separate deploy key.</p>
         <p style="font-size:12px; margin:8px 0 0;"><a id="tm-worker-access-docs" href="https://docs.xnaut.dev/docs/agents/worker-access" target="_blank" rel="noopener noreferrer">Worker access setup guide — with or without Tailscale</a></p>
       </div>
