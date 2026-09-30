@@ -74,6 +74,7 @@ mod spend;
 mod sweep;
 mod run_control;
 mod repository_transfer;
+mod repository_review;
 mod repository_notes;
 mod worker_bootstrap;
 mod run_signals;
@@ -579,6 +580,9 @@ async fn main() {
             project_management::pm_module_sync,
             project_management::pm_project_list,
             repository_transfer::repository_transfer_list,
+            repository_review::repository_review_policy_get,
+            repository_review::repository_review_policy_save,
+            repository_review::repository_review_request,
             repository_notes::repository_notebook_queue,
             project_management::pm_project_import_existing,
             project_management::pm_project_create,

@@ -382,6 +382,222 @@ pub async fn get_issue_for(
     }
 }
 
+/// Recover a published review after an interrupted response without posting twice.
+pub async fn ensure_repository_comment(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    marker: &str,
+    body: &str,
+) -> Result<String, String> {
+    if !["forgejo", "github"].contains(&host.kind.as_str()) {
+        return Err("Repository review supports Forgejo and GitHub".into());
+    }
+    let client = http_client()?;
+    let token = token_for(host)?;
+    let base = api_base(host)?;
+    for page in 1..=100 {
+        let rows=request_json(&client,reqwest::Method::GET,&format!("{base}/repos/{owner}/{repo}/issues/{number}/comments?limit=100&per_page=100&page={page}"),host,&token,None).await?;
+        let rows = rows.as_array().ok_or("Invalid comment listing")?;
+        for row in rows {
+            if row["body"].as_str().is_some_and(|s| s.starts_with(marker)) {
+                return row["html_url"]
+                    .as_str()
+                    .map(String::from)
+                    .ok_or("Published comment has no URL".into());
+            }
+        }
+        if rows.is_empty() {
+            return add_issue_comment_for(host, owner, repo, number, body).await;
+        }
+    }
+    Err("Review comment listing exceeds recovery budget".into())
+}
+
+pub async fn repository_pr(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<Value, String> {
+    if !["forgejo", "github"].contains(&host.kind.as_str()) {
+        return Err("Automatic merging supports Forgejo and GitHub".into());
+    }
+    request_json(
+        &http_client()?,
+        reqwest::Method::GET,
+        &format!("{}/repos/{owner}/{repo}/pulls/{number}", api_base(host)?),
+        host,
+        &token_for(host)?,
+        None,
+    )
+    .await
+}
+fn validate_merge_pr(
+    pr: &Value,
+    head: &str,
+    base: &str,
+    branch: &str,
+    target: &str,
+) -> Result<(), String> {
+    if pr["head"]["sha"] != head
+        || pr["base"]["sha"] != base
+        || pr["head"]["ref"] != branch
+        || pr["base"]["ref"] != target
+    {
+        return Err("PR identity or tested commits changed; review again".into());
+    }
+    if pr["state"] != "open"
+        || pr["merged"] == true
+        || pr["draft"] != false
+        || pr["mergeable"] != true
+    {
+        return Err("PR is closed, draft, conflicting, or mergeability is unknown".into());
+    }
+    // Only the task branch in this same repository can be authorized by its owner.
+    if pr["head"]["repo"]["id"].as_u64().is_none()
+        || pr["head"]["repo"]["id"] != pr["base"]["repo"]["id"]
+    {
+        return Err("Cross-repository PR requires owner review".into());
+    }
+    Ok(())
+}
+fn protected_against_stale_base(kind: &str, p: &Value) -> bool {
+    match kind {
+        "github" => {
+            p["required_status_checks"]["strict"] == true && p["enforce_admins"]["enabled"] == true
+        }
+        "forgejo" => p["block_on_outdated_branch"] == true && p["apply_to_admins"] == true,
+        _ => false,
+    }
+}
+/// Preflight requires server enforcement because merge APIs compare the head SHA,
+/// but do not atomically compare the tested target SHA. Never bypass protection.
+pub async fn repository_merge_preflight(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    head: &str,
+    base: &str,
+    branch: &str,
+    target: &str,
+) -> Result<(), String> {
+    let pr = repository_pr(host, owner, repo, number).await?;
+    validate_merge_pr(&pr, head, base, branch, target)?;
+    let client = http_client()?;
+    let token = token_for(host)?;
+    let api = api_base(host)?;
+    let target_encoded: String = url::form_urlencoded::byte_serialize(target.as_bytes()).collect();
+    let protection_url = if host.kind == "github" {
+        format!("{api}/repos/{owner}/{repo}/branches/{target_encoded}/protection")
+    } else {
+        format!("{api}/repos/{owner}/{repo}/branch_protections/{target_encoded}")
+    };
+    let protection = request_json(
+        &client,
+        reqwest::Method::GET,
+        &protection_url,
+        host,
+        &token,
+        None,
+    )
+    .await
+    .map_err(|_| "Cannot verify target branch protection; owner merge required")?;
+    if !protected_against_stale_base(&host.kind, &protection) {
+        return Err(
+            "Automatic merge requires up-to-date branch protection enforced for administrators too"
+                .into(),
+        );
+    }
+    let status = request_json(
+        &client,
+        reqwest::Method::GET,
+        &format!("{api}/repos/{owner}/{repo}/commits/{head}/status"),
+        host,
+        &token,
+        None,
+    )
+    .await?;
+    let count = status["total_count"]
+        .as_u64()
+        .ok_or("Missing CI status count")?;
+    if status["sha"] != head || (count > 0 && status["state"] != "success") {
+        return Err("CI status is failing, pending, or identifies a different commit".into());
+    }
+    if host.kind == "github" {
+        let checks = request_json(
+            &client,
+            reqwest::Method::GET,
+            &format!("{api}/repos/{owner}/{repo}/commits/{head}/check-runs?per_page=100"),
+            host,
+            &token,
+            None,
+        )
+        .await?;
+        let rows = checks["check_runs"]
+            .as_array()
+            .ok_or("Missing CI check runs")?;
+        if checks["total_count"].as_u64() != Some(rows.len() as u64)
+            || rows.iter().any(|c| {
+                c["head_sha"] != head
+                    || c["status"] != "completed"
+                    || !["success", "neutral", "skipped"]
+                        .contains(&c["conclusion"].as_str().unwrap_or(""))
+            })
+        {
+            return Err("CI checks are incomplete or unsuccessful".into());
+        }
+    }
+    Ok(())
+}
+/// One immediate head-CAS merge request. No force, queued merge, or branch deletion.
+pub async fn repository_merge(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    head: &str,
+) -> Result<Value, String> {
+    let (method, body) = if host.kind == "github" {
+        (
+            reqwest::Method::PUT,
+            json!({"sha":head,"merge_method":"merge"}),
+        )
+    } else if host.kind == "forgejo" {
+        (
+            reqwest::Method::POST,
+            json!({"Do":"merge","head_commit_id":head,"force_merge":false,"merge_when_checks_succeed":false,"delete_branch_after_merge":false}),
+        )
+    } else {
+        return Err("Unsupported merge forge".into());
+    };
+    let (status, _) = send(
+        &http_client()?,
+        method,
+        &format!(
+            "{}/repos/{owner}/{repo}/pulls/{number}/merge",
+            api_base(host)?
+        ),
+        host,
+        &token_for(host)?,
+        Some(&body),
+    )
+    .await?;
+    if !status.is_success() {
+        return Err(format!(
+            "Forge refused merge (HTTP {}); inspect the PR before retrying",
+            status.as_u16()
+        ));
+    }
+    let result = repository_pr(host, owner, repo, number).await?;
+    if result["merged"] != true || result["head"]["sha"] != head {
+        return Err("Merge response is unconfirmed; inspect the PR before retrying".into());
+    }
+    Ok(result)
+}
+
 /// Append a comment to an issue without modifying the reporter's original body.
 pub async fn add_issue_comment(
     host: &ForgeHost,
@@ -1335,6 +1551,44 @@ mod tests {
             assert_eq!(rows.lock().unwrap().len(), 2);
             server.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn task_merge_checks_both_forges_and_sends_only_head_cas() {
+        use axum::{extract::State, Json, Router, routing::get};
+        use std::sync::{Arc,Mutex};
+        #[derive(Clone)] struct Fixture {kind:String,pr:Arc<Mutex<Value>>,protection:Arc<Mutex<Value>>,status:Arc<Mutex<Value>>,bodies:Arc<Mutex<Vec<Value>>>}
+        async fn pr(State(f):State<Fixture>)->Json<Value>{Json(f.pr.lock().unwrap().clone())}
+        async fn protection(State(f):State<Fixture>)->Json<Value>{Json(f.protection.lock().unwrap().clone())}
+        async fn status(State(f):State<Fixture>)->Json<Value>{Json(f.status.lock().unwrap().clone())}
+        async fn checks()->Json<Value>{Json(json!({"total_count":0,"check_runs":[]}))}
+        async fn merge(State(f):State<Fixture>,Json(body):Json<Value>)->Json<Value>{
+            if f.kind=="github" {assert_eq!(body,json!({"sha":"head","merge_method":"merge"}));}
+            else {assert_eq!(body,json!({"Do":"merge","head_commit_id":"head","force_merge":false,"merge_when_checks_succeed":false,"delete_branch_after_merge":false}));}
+            f.bodies.lock().unwrap().push(body); f.pr.lock().unwrap()["merged"]=json!(true);Json(json!({"merged":true}))
+        }
+        for kind in ["forgejo","github"] {
+            let f=Fixture{kind:kind.into(),pr:Arc::new(Mutex::new(json!({"head":{"sha":"head","ref":"task","repo":{"id":1}},"base":{"sha":"base","ref":"main","repo":{"id":1}},"draft":false,"state":"open","mergeable":true,"merged":false}))),protection:Arc::new(Mutex::new(json!({"required_status_checks":{"strict":true},"enforce_admins":{"enabled":true},"block_on_outdated_branch":true,"apply_to_admins":true}))),status:Arc::new(Mutex::new(json!({"sha":"head","total_count":1,"state":"success"}))),bodies:Arc::new(Mutex::new(vec![]))};
+            let route=if kind=="forgejo" {"/api/v1/repos/team/app"} else {"/repos/team/app"};
+            let router=Router::new().route(&format!("{route}/pulls/7"),get(pr)).route(&format!("{route}/pulls/7/merge"),axum::routing::post(merge).put(merge)).route(&format!("{route}/branch_protections/main"),get(protection)).route(&format!("{route}/branches/main/protection"),get(protection)).route(&format!("{route}/commits/head/status"),get(status)).route(&format!("{route}/commits/head/check-runs"),get(checks)).with_state(f.clone());
+            let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+            let server=tokio::spawn(async move{axum::serve(listener,router).await.unwrap();});let config=host(kind,&format!("http://{address}"));
+            repository_merge_preflight(&config,"team","app",7,"head","base","task","main").await.unwrap();
+            for bad in ["pending","failure"] {f.status.lock().unwrap()["state"]=json!(bad);assert!(repository_merge_preflight(&config,"team","app",7,"head","base","task","main").await.is_err());}
+            f.status.lock().unwrap()["state"]=json!("success");
+            assert!(repository_merge_preflight(&config,"team","app",7,"stale","base","task","main").await.is_err());
+            assert!(repository_merge_preflight(&config,"team","app",7,"head","stale","task","main").await.is_err());
+            for field in ["draft","mergeable"] {let old=f.pr.lock().unwrap()[field].clone();f.pr.lock().unwrap()[field]=Value::Null;assert!(repository_merge_preflight(&config,"team","app",7,"head","base","task","main").await.is_err());f.pr.lock().unwrap()[field]=old;}
+            let protected=f.protection.lock().unwrap().clone();*f.protection.lock().unwrap()=json!({});assert!(repository_merge_preflight(&config,"team","app",7,"head","base","task","main").await.is_err());*f.protection.lock().unwrap()=protected;
+            assert_eq!(f.bodies.lock().unwrap().len(),0);
+            let merged=repository_merge(&config,"team","app",7,"head").await.unwrap();assert_eq!(merged["merged"],true);assert_eq!(f.bodies.lock().unwrap().len(),1);server.abort();
+        }
+    }
+    #[test] fn task_merge_refuses_cross_repo_and_unprotected_admins() {
+        assert!(!protected_against_stale_base("github",&json!({"required_status_checks":{"strict":true},"enforce_admins":{"enabled":false}})));
+        assert!(!protected_against_stale_base("forgejo",&json!({"block_on_outdated_branch":true,"apply_to_admins":false})));
+        let pr=json!({"head":{"sha":"h","ref":"task","repo":{"id":2}},"base":{"sha":"b","ref":"main","repo":{"id":1}},"draft":false,"state":"open","mergeable":true,"merged":false});
+        assert!(validate_merge_pr(&pr,"h","b","task","main").is_err());
     }
 
     #[test]

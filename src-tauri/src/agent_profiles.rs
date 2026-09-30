@@ -838,20 +838,23 @@ fn default_librarian_profile(runtime_id: &str, timestamp: &str) -> AgentProfile 
 /// the build on a clean machine and writes the RC record. It never closes work
 /// and never approves a release, because the agent that validates and the agent
 /// that ships must not be the same agent.
+const RALPH_OLD_BRIEF: &str = "Take a branch or a build and prove it works somewhere that is not the machine it was written on. Install it, launch it, exercise the change, and record the result: the commit SHA, what you ran, and what you saw. Report failures with the output attached. You never close a ticket and never approve a release; you produce the record someone else acts on.";
+const RALPH_LEGACY_BRIEF: &str = "Verify handed-back work by running it in a fresh sandbox: install, build, test, and the acceptance gate. Weigh what actually ran over what the agent said about itself. Say which step failed and quote its output. You never close work and never approve a release.";
+
 fn default_ralph_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
     AgentProfile {
         handle: "ralph".to_string(),
         display_name: "Ralph".to_string(),
-        tagline: "Runs it on a clean machine and writes down what happened.".to_string(),
-        purpose: "Take a branch or a build and prove it works somewhere that is not the machine it was written on. Install it, launch it, exercise the change, and record the result: the commit SHA, what you ran, and what you saw. Report failures with the output attached. You never close a ticket and never approve a release; you produce the record someone else acts on.".to_string(),
+        tagline: "Tests the exact commit and reviews it independently.".to_string(),
+        purpose: "Independently test and review completed task pull requests at their exact commit SHA in an isolated worker. Read the original task, inspect the full diff, run the relevant tests and acceptance checks, and review correctness, regressions, security, and scope. Record commands, exit codes, evidence, findings with file references, coverage gaps, and an explicit pass, changes_requested, or blocked verdict. Never treat compilation or the author's claims as sufficient evidence. Never edit application source to make your own review pass, review your own implementation, merge a branch, close a ticket, or publish a release. Return actionable findings to the author; hand passing evidence to the release stage.".to_string(),
         runtime_id: runtime_id.to_string(),
         provider: "nautgate".to_string(),
-        model: "gpt-5.6-sol".to_string(),
+        model: String::new(),
         chat_provider: String::new(),
-        chat_model: String::new(),
+        chat_model: "gpt-5.6-sol".to_string(),
         reasoning_effort: "high".to_string(),
         max_parallel: default_max_parallel(),
-        execution: AgentExecution::Local,
+        execution: AgentExecution::Sandbox,
         role: "validator".to_string(),
         // `collab:` chips are the only part of the loop the app actually
         // carries between agents: they name, in the prompt, who this station
@@ -859,6 +862,7 @@ fn default_ralph_profile(runtime_id: &str, timestamp: &str) -> AgentProfile {
         capabilities: vec![
             "terminal".to_string(),
             "test".to_string(),
+            "review".to_string(),
             "report".to_string(),
             "collab:otto".to_string(),
             "collab:librarian".to_string(),
@@ -1112,6 +1116,23 @@ fn reconcile_profiles(
 
     for default in defaults {
         let handle = default.handle.clone();
+        if handle == "ralph" {
+            if let Some(profile) = store.profiles.iter_mut().find(|p| p.handle == handle) {
+                if profile.role == "validator" && [RALPH_OLD_BRIEF, RALPH_LEGACY_BRIEF].contains(&profile.purpose.as_str()) {
+                    profile.purpose = default.purpose.clone();
+                    profile.tagline = default.tagline.clone();
+                    if !profile.capabilities.iter().any(|c| c == "review") { profile.capabilities.push("review".into()); }
+                    // The old seed mixed a chat model into a Claude CLI launch.
+                    // Preserve the chat choice and let that CLI choose its native default.
+                    if profile.runtime_id == "claude" && profile.model == "gpt-5.6-sol" {
+                        if profile.chat_model.is_empty() { profile.chat_model = profile.model.clone(); }
+                        profile.model.clear();
+                    }
+                    notes.push(MergeNote { agent_id: handle.clone(), message: "upgraded the shipped Ralph brief to independent testing and PR review; kept custom runtime, compute and policy settings".into() });
+                    changed = true;
+                }
+            }
+        }
         match store.profiles.iter().find(|p| p.handle == handle) {
             Some(existing) => {
                 for drift in profile_drift(existing, &default) {
@@ -3866,6 +3887,19 @@ accent_color = "#f5b840"
     /// this build seeds it on `claude`. Silently correcting that would move his
     /// Librarian to a different CLI without asking.
     #[test]
+    fn ralph_review_upgrade_preserves_custom_profiles_and_deliberate_deletion() {
+        for purpose in [RALPH_OLD_BRIEF,RALPH_LEGACY_BRIEF,"My custom validation process"] {
+            let mut r=default_ralph_profile("claude","fixture");r.purpose=purpose.into();r.model="gpt-5.6-sol".into();r.execution=AgentExecution::Local;
+            let mut store=AgentProfileStore{version:PROFILE_STORE_VERSION,seed_revision:PROFILE_SEED_REVISION,seeded:vec!["ralph".into()],profiles:vec![r]};
+            reconcile_profiles(&mut store,vec![default_ralph_profile("claude","new")],&["claude".into()]);
+            let r=&store.profiles[0];assert_eq!(r.execution,AgentExecution::Local);
+            if purpose=="My custom validation process" {assert_eq!(r.purpose,purpose);assert_eq!(r.model,"gpt-5.6-sol");} else {assert!(r.capabilities.contains(&"review".into()));assert!(r.model.is_empty());assert!(r.purpose.contains("exact"));}
+        }
+        let mut store=AgentProfileStore{version:PROFILE_STORE_VERSION,seed_revision:PROFILE_SEED_REVISION,seeded:vec!["ralph".into()],profiles:vec![]};
+        reconcile_profiles(&mut store,vec![default_ralph_profile("claude","new")],&["claude".into()]);assert!(store.profiles.is_empty());
+    }
+
+    #[test]
     fn a_runtime_difference_is_reported_not_applied() {
         let mut store = AgentProfileStore {
             version: PROFILE_STORE_VERSION,
@@ -3998,6 +4032,10 @@ accent_color = ""
             agents: vec![runtime("codex"), runtime("claude")],
         };
         let defaults = default_profiles(&registry, "2026-09-13T00:00:00Z").unwrap();
+        let ralph = defaults.iter().find(|p| p.handle == "ralph").expect("Ralph ships with NautBot");
+        assert!(ralph.capabilities.contains(&"review".into()));
+        assert_eq!(ralph.role,"validator");
+        assert!(ralph.model.is_empty());
         let nautbot = defaults
             .iter()
             .find(|p| p.handle == RESERVED_NAUTBOT_HANDLE)

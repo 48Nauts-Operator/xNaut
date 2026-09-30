@@ -123,3 +123,51 @@ assert liveness from an unlinked ledger entry. The project selection step also
 normalizes a registered linked worktree to its common repository root, matching
 the launcher's identity. Without a ticket, multiple projects for one repository
 are refused as ambiguous instead of publishing to the first match.
+
+## Project-authorized review and merge follow-up
+
+Project settings now separately authorize automatic independent testing/review
+and Otto's merge stage. Both are off by default. The owner-only settings commands
+use revision checks and retain policy revisions locally; they are deliberately
+absent from agent/MCP tools. Changing a project's repository revokes its old
+agreement, including a later switch back.
+
+Ralph is a baseline identity shipped alongside NautBot. His shipped brief now
+covers exact-commit tests and independent PR review; the validator role remains
+compatible. Existing shipped briefs are migrated, including removal of the old
+GPT model override from Claude CLI launches. Custom briefs, compute/policies and
+deliberately deleted identities remain preserved. If Ralph authored a task,
+Reviewer supplies the independent review.
+
+Successful task delivery queues an isolated reviewer through the normal harness,
+with existing access/spend/concurrency gates. The durable reservation prevents
+blind launch retries. Review children publish their own evidence branch without
+opening recursive PRs. Legacy receipts need an explicit Review action. The owner
+must keep the desktop running for reconciliation. Review validates the author,
+reviewer, parent run, source commit, target commit, regular-file logs and final
+artifact-only diff. Changed refs, missing evidence, nonzero tests, findings and
+coverage gaps block approval. Results are summarized on the original PR.
+
+Otto is a deterministic desktop merge stage under the saved agreement, not another
+LLM worker. It checks the exact head/base, independent roles, the existing risk
+threshold, open/non-draft/mergeable PR state and CI. Native forge protection must
+block outdated branches and apply to administrators, because the merge APIs only
+atomically constrain the head SHA. No protection is silently installed or bypassed.
+The request never forces, deletes a branch or queues a deferred merge. Ambiguous
+outcomes require inspection before another attempt; merging does not release.
+
+Jev's additional guard batches coverage, scope and serious-risk judgments through
+NautGate's System One endpoint using `jev-latest`. Missing/invalid/uncertain/error
+answers fail closed. Initial thresholds (coverage/scope >= .90, risk <= .10) need
+real-project evaluation and are not a correctness guarantee. Inputs are bounded
+report/review/log excerpts and file statistics, not the whole repository. Decisions
+retain the returned model, probabilities, policy revision, usage and exact commits
+in Decisions history, with a merge-specific inspector and PR comment.
+
+Validation: full Rust suite 1,511 passed / 54 live or opt-in tests ignored, followed
+by final focused repository-review, forge, transfer and Jev suites after provenance
+and receipt refinements. Real temporary Git fixtures reject source edits, symlink
+logs and target movement; mock Forgejo/GitHub tests exercise head-CAS payloads,
+failed/pending CI, missing admin protection and wrong commits. Browser tests cover
+explicit project consent and merge-decision receipts. No live review worker or
+automatic merge has been run for this feature; project permission stays off.

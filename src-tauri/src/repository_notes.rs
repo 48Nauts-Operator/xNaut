@@ -107,6 +107,8 @@ fn push_in(root: &Path, snapshot: &Snapshot, remote: &str) -> Result<(), String>
         let source_sha = git(&checkout, &["rev-parse", "HEAD"])?;
 
         let t = Transfer {
+            review_parent: None,
+            quality: None,
             run_id: snapshot.id.clone(),
             project: snapshot.project.clone(),
             ticket: None,
@@ -249,6 +251,8 @@ pub async fn drain() {
                 .and_then(|p| std::fs::read(p.join(format!("{}.json", snapshot.id))).ok())
                 .and_then(|b| serde_json::from_slice::<Transfer>(&b).ok());
             let mut transfer = existing.unwrap_or(Transfer {
+                review_parent: None,
+                quality: None,
                 run_id: snapshot.id.clone(),
                 project: snapshot.project,
                 ticket: None,

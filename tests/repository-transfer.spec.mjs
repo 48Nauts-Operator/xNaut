@@ -79,3 +79,30 @@ test('project notes queue a copy for Git while local saves survive queue errors'
   await expect.poll(()=>page.evaluate(()=>window.__noteUploads.at(-1)?.data.notes[0].body)).toContain('Keep the recording');
   expect(await page.evaluate(()=>JSON.parse(window.xnautConversationStorage.getItem(window.__noteUploads.at(-1).key)).notes[0].title)).toBe('Review reminders');
 });
+
+test('project review and merge permissions default off, require review, and save a revision', async ({page}) => {
+  await page.evaluate(() => {
+    const project={key:'REVIEW',name:'Review Fixture',purpose:'Quality gates',source_path:'/tmp/review',source_repo:'/tmp/review',forge_remote:'https://github.com/team/app.git',revision:1,flow_type:'standard'};
+    window.__xnautStub.pm_module_status={enabled:true,configured:true,valid:true,repo_path:'/tmp/control',git_repository:true};
+    window.__xnautStub.project_mcp_info={url:'http://127.0.0.1:5000',token:'fixture',read_token:'fixture-read'};
+    window.__xnautStub.pm_project_import_existing=[project];window.__xnautStub.pm_project_list=[project];
+    window.__xnautStub.repository_review_policy_get={revision:0,remote:project.forge_remote,automatic_review:false,otto_merge:false};
+    window.__xnautStub.repository_review_policy_save={revision:1,remote:project.forge_remote,automatic_review:true,otto_merge:true};
+    window.__xnautStub.repository_transfer_list=[{run_id:'legacy',state:'review',pr_url:'https://github.com/team/app/pull/7'},{run_id:'blocked',state:'review',pr_url:'https://github.com/team/app/pull/8',quality:{state:'blocked',message:'Jev unavailable; owner review required'}}];
+    const host=document.createElement('div');host.id='review-settings';document.body.append(host);
+    window.xnautCreateProjectManagementPanel('review-test',host,{project:'REVIEW',section:'settings'});
+  });
+  const pane=page.locator('#review-settings');
+  const review=pane.getByLabel('Automatically ask Ralph');const merge=pane.getByLabel('I authorize Otto');
+  await expect(review).not.toBeChecked();await expect(merge).not.toBeChecked();await expect(merge).toBeDisabled();
+  await review.check();await expect(merge).toBeEnabled();await merge.check();
+  await review.uncheck();await expect(merge).not.toBeChecked();await expect(merge).toBeDisabled();
+  await review.check();await merge.check();
+  await pane.getByRole('button',{name:'Save review permissions',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.__xnautInvokes.filter(x=>x.cmd==='repository_review_policy_save').at(-1)?.args)).toEqual({projectKey:'REVIEW',expectedRevision:0,automaticReview:true,ottoMerge:true});
+  await expect(pane.locator('.pmw-review-status')).toContainText('Saved: Otto may merge after every gate passes.');
+  await expect(pane.locator('.pmw-transfers')).toContainText('Jev unavailable; owner review required');
+  await pane.getByRole('button',{name:'Review',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.__xnautInvokes.filter(x=>x.cmd==='repository_review_request').at(-1)?.args)).toEqual({runId:'legacy'});
+  await pane.locator('.pmw-review-auto').scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/repository-review-settings.png'});
+});

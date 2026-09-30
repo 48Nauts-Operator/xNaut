@@ -1861,6 +1861,7 @@ pub async fn pm_project_update(
             request.expected_revision, record.revision
         ));
     }
+    let previous_remote = record.forge_remote.clone();
     let source_repo = request.source_repo.trim();
     record.name = name.into();
     record.purpose = request.purpose.trim().into();
@@ -1893,6 +1894,9 @@ pub async fn pm_project_update(
         record.forge_remote = crate::repository_transfer::validate_remote(remote)?;
     } else if record.forge_remote.is_empty() && crate::repository_transfer::validate_remote(source_repo).is_ok() {
         record.forge_remote = source_repo.into();
+    }
+    if previous_remote != record.forge_remote {
+        crate::repository_review::revoke_for_repository_change(&key)?;
     }
     record.revision += 1;
     write_json_atomic(&manifest, &record)?;

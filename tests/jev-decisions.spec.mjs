@@ -38,3 +38,17 @@ test('selection settings persist explicit mode and preserve future fields withou
  expect(await page.evaluate(()=>window.savedDecisionConfig)).toMatchObject({mode:'active',future:'preserved'});
  expect(await page.evaluate(()=>window.__xnautInvokes.some(c=>c.cmd==='jev_decisions_probe'))).toBe(false);
 });
+
+test('merge guard receipts show probabilities and exact commits without tool-schema counters',async({page})=>{
+ await setup(page);
+ await page.evaluate(()=>{
+  const invoke=window.__TAURI__.core.invoke;
+  const r={id:'merge-1',kind:'merge',status:'blocked',at:'2026-09-30T12:00:00Z',context:'XNAUT',request:'Otto project merge guard',head:'a'.repeat(40),base:'b'.repeat(40),permission_revision:2,model:'jev-fixture',reason:'Coverage is uncertain',policy:{coverage_min:.9,scope_min:.9,serious_risk_max:.1},answers:{coverage:{noul:.5},scope:{noul:.99},serious_risk:{noul:.01}}};
+  window.__TAURI__.core.invoke=(cmd,args)=>cmd==='jev_decisions_list'?Promise.resolve({rows:[r],total:1,page:0}):cmd==='jev_decision_get'?Promise.resolve(r):invoke(cmd,args);
+ });
+ await page.getByRole('button',{name:'Refresh decisions'}).click();
+ await expect(page.locator('[data-jd-rows]')).toContainText('Project merge guard');await expect(page.locator('[data-jd-rows]')).not.toContainText('NaN');
+ await page.locator('[data-jd-open]').first().click();
+ const detail=page.getByRole('region',{name:'Decision details'});
+ await expect(detail).toContainText('Project merge guard receipt');await expect(detail).toContainText('50%');await expect(detail).toContainText('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');await expect(detail).not.toContainText('SCHEMAS SENT');
+});

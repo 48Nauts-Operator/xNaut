@@ -19,6 +19,10 @@ pub struct Transfer {
     pub handle: String,
     pub local_path: String,
     pub remote: String,
+    #[serde(default)]
+    pub review_parent: Option<String>,
+    #[serde(default)]
+    pub quality: Option<crate::repository_review::Review>,
     /// Local SSH route; revalidated against the canonical destination on use.
     #[serde(default)]
     pub desktop_remote: Option<String>,
@@ -287,7 +291,7 @@ pub(crate) fn save_at(dir: &Path, transfer: &Transfer) -> Result<(), String> {
 pub fn save(transfer: &Transfer) -> Result<(), String> {
     save_at(&store_dir()?, transfer)
 }
-fn list() -> Result<Vec<Transfer>, String> {
+pub(crate) fn list() -> Result<Vec<Transfer>, String> {
     let dir = store_dir()?;
     if !dir.exists() {
         return Ok(vec![]);
@@ -383,7 +387,11 @@ pub fn prepare(
         })
         .ok_or("The configured repository needs a default branch with an initial commit.")?;
     git(path, &["check-ref-format", &format!("refs/heads/{base}")])?;
+    let review_parent = crate::repository_review::parent_for_workspace(path)?;
+    let quality = review_parent.is_none().then(crate::repository_review::Review::default);
     Ok(Transfer {
+        review_parent,
+        quality,
         run_id: run_id.into(),
         project: project.key.clone(),
         ticket,
@@ -569,7 +577,7 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
     };
     t.state = "pushed".into();
     let mut pr_error = None;
-    if t.pr_url.is_none() {
+    if t.pr_url.is_none() && t.review_parent.is_none() {
         let opened: Result<String, String> = async {
         let (host, parsed) = crate::forges::host_for_remote(hosts, &t.remote).ok_or("Results pushed. Configure this repository's forge connection in Settings to open its PR.")?;
         let mut host = host.clone();
@@ -670,6 +678,13 @@ pub fn spawn_reconciler(app: tauri::AppHandle) {
                 {
                     t.error = reconcile(&mut t, &hosts).await.err();
                     let _ = save(&t);
+                }
+            }
+            // Quality workers use the same task launcher and repository delivery,
+            // but their output never opens another task PR or review cycle.
+            if let Ok(rows) = list() {
+                for mut t in rows.iter().filter(|t| t.state == "review" && t.review_parent.is_none() && t.quality.is_some()).cloned() {
+                    let _ = crate::repository_review::advance(&app, &mut t, &rows, &hosts).await;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -796,6 +811,8 @@ mod tests {
         git(&worker, &["commit", "-m", "base"]).unwrap();
         let source = git(&worker, &["rev-parse", "HEAD"]).unwrap();
         let t = Transfer {
+            review_parent: None,
+            quality: None,
             run_id: "fixture".into(),
             project: "TEST".into(),
             ticket: Some("TEST-1".into()),
