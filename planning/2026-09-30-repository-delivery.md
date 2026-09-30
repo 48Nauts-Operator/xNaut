@@ -171,3 +171,17 @@ logs and target movement; mock Forgejo/GitHub tests exercise head-CAS payloads,
 failed/pending CI, missing admin protection and wrong commits. Browser tests cover
 explicit project consent and merge-decision receipts. No live review worker or
 automatic merge has been run for this feature; project permission stays off.
+
+### Tron verification: source branch selection (1 October)
+
+Tron's live inspection found that PR #105 added five artifacts relative to its
+launch commit, yet showed 431 changed files against `main`: the launcher always
+selected the forge default branch. Forgejo issue #112 records that mismatch.
+New tasks now prefer the registered checkout's published branch when it contains
+the launch commit. A detached checkout can use a uniquely matching published
+branch. A default branch is used only when it already contains the launch
+revision. Unpublished or ambiguous sources stop with setup guidance; internal
+input/run refs are excluded. Review children retain the original PR's target.
+The regression uses real Git repositories and verifies that the full task PR
+diff contains the report while the incorrect main-based diff contains app code.
+Existing PR #105 was inspected, not retargeted, force-pushed or merged.
