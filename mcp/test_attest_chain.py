@@ -12,7 +12,8 @@ import json
 import pathlib
 
 spec = importlib.util.spec_from_file_location(
-    "attest", pathlib.Path(__file__).with_name("securosys-attest.py"))
+    "attest", pathlib.Path(__file__).with_name("securosys-attest.py")
+)
 attest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(attest)
 
@@ -24,13 +25,18 @@ def chain(n, subject="test"):
     rows = []
     for i in range(n):
         seq, prev = attest.chain_tail(rows)
-        rows.append({
-            "seq": seq, "prev": prev,
-            "ts": f"2026-08-20T00:0{i}:00+00:00",
-            "subject": subject, "digest": f"{i:064x}",
-            "key_name": "K", "algorithm": "SHA256_WITH_RSA",
-            "signature": f"sig{i}",
-        })
+        rows.append(
+            {
+                "seq": seq,
+                "prev": prev,
+                "ts": f"2026-08-20T00:0{i}:00+00:00",
+                "subject": subject,
+                "digest": f"{i:064x}",
+                "key_name": "K",
+                "algorithm": "SHA256_WITH_RSA",
+                "signature": f"sig{i}",
+            }
+        )
     return rows
 
 
@@ -58,10 +64,20 @@ assert not attest.verify_chain(rows[2:])["ok"], "a truncated head must break the
 
 # Receipts written before the chain existed stay readable, and the chain starts
 # after them rather than claiming to cover them.
-legacy = [{"ts": "2026-08-18T19:25:07+00:00", "subject": "old", "digest": "a" * 64,
-           "key_name": "K", "algorithm": "SHA256_WITH_RSA", "signature": "old"}]
+legacy = [
+    {
+        "ts": "2026-08-18T19:25:07+00:00",
+        "subject": "old",
+        "digest": "a" * 64,
+        "key_name": "K",
+        "algorithm": "SHA256_WITH_RSA",
+        "signature": "old",
+    }
+]
 seq, prev = attest.chain_tail(legacy)
-assert (seq, prev) == (0, GENESIS), "the chain starts at genesis after unchained receipts"
+assert (seq, prev) == (0, GENESIS), (
+    "the chain starts at genesis after unchained receipts"
+)
 mixed = legacy + chain(2)
 assert attest.verify_chain(mixed)["ok"]
 assert attest.verify_chain(mixed)["unchained"] == 1
@@ -70,14 +86,17 @@ assert attest.verify_chain(mixed)["unchained"] == 1
 # published subset must equal the link computed from the full local receipt.
 full = dict(rows[1], tsb_url="https://tsb.example", meta={"ticket": "XNAUT-211"})
 published = {k: full[k] for k in attest.LINK_FIELDS if k in full}
-assert attest.link_hash(full) == attest.link_hash(published), \
+assert attest.link_hash(full) == attest.link_hash(published), (
     "publish() drops local-only fields; they must not be part of the link"
+)
 
 # And that the published row still carries what a walk needs.
 assert {"seq", "prev"} <= set(published), "publish must carry seq and prev"
 
 # Canonical form is stable regardless of key order in the dict.
 shuffled = dict(reversed(list(full.items())))
-assert attest.link_hash(shuffled) == attest.link_hash(full), "link must not depend on key order"
+assert attest.link_hash(shuffled) == attest.link_hash(full), (
+    "link must not depend on key order"
+)
 
 print("attest chain ok:", json.dumps(attest.verify_chain(rows)))

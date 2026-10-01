@@ -5,6 +5,7 @@ STT/parakeet_tdt_handler.py::process, TTS/qwen3_tts_handler.py::process.
 Unlike its conversation server, this adapter sends supplied text directly to
 TTS. Authentication, bounded framing and transport cancellation are Xnaut code.
 """
+
 import argparse
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -25,10 +26,16 @@ RATE = 16000
 MAX_FRAME = 16384
 MAX_AUDIO = RATE * 2 * 120
 CAPABILITIES = {
-    "version": 1, "recognition": True, "synthesis": True,
-    "streaming_input": False, "streaming_output": True,
-    "format": "pcm_s16le", "sample_rate": RATE, "channels": 1,
-    "max_text_bytes": 4096, "max_input_seconds": 120,
+    "version": 1,
+    "recognition": True,
+    "synthesis": True,
+    "streaming_input": False,
+    "streaming_output": True,
+    "format": "pcm_s16le",
+    "sample_rate": RATE,
+    "channels": 1,
+    "max_text_bytes": 4096,
+    "max_input_seconds": 120,
 }
 
 
@@ -41,7 +48,10 @@ def pack_audio(request_id, sequence, pcm):
 def unpack_audio(frame, request_id, sequence):
     if len(frame) < 22 or len(frame) > MAX_FRAME + 20 or (len(frame) - 20) % 2:
         raise ValueError("invalid PCM frame")
-    if frame[:16] != uuid.UUID(request_id).bytes or struct.unpack(">I", frame[16:20])[0] != sequence:
+    if (
+        frame[:16] != uuid.UUID(request_id).bytes
+        or struct.unpack(">I", frame[16:20])[0] != sequence
+    ):
         raise ValueError("stale or out-of-order PCM frame")
     return frame[20:]
 
@@ -59,6 +69,7 @@ class Cancellation:
 
 class SpeechEngines:
     """Created/used on one dedicated thread; never instantiate the LLM pipeline."""
+
     def __init__(self, args):
         self.args = args
         self.stt = self.tts = None
@@ -72,12 +83,22 @@ class SpeechEngines:
     def _run(self, operation, payload, cancelled):
         import numpy as np
         from speech_to_speech.pipeline.messages import TTSInput, VADAudio
+
         if operation == "transcribe":
             if self.stt is None:
-                from speech_to_speech.STT.parakeet_tdt_handler import ParakeetTDTSTTHandler
-                self.stt = ParakeetTDTSTTHandler(Event(), Queue(), Queue(), setup_kwargs={
-                    "model_name": self.args.stt_model, "device": "mps",
-                })
+                from speech_to_speech.STT.parakeet_tdt_handler import (
+                    ParakeetTDTSTTHandler,
+                )
+
+                self.stt = ParakeetTDTSTTHandler(
+                    Event(),
+                    Queue(),
+                    Queue(),
+                    setup_kwargs={
+                        "model_name": self.args.stt_model,
+                        "device": "mps",
+                    },
+                )
             if cancelled.stopped.is_set():
                 return
             audio = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768
@@ -88,12 +109,21 @@ class SpeechEngines:
             if self.tts is None:
                 from speech_to_speech.TTS.qwen3_tts_handler import Qwen3TTSHandler
                 from speech_to_speech.pipeline.cancel_scope import CancelScope
-                self.tts = Qwen3TTSHandler(Event(), Queue(), Queue(), setup_kwargs={
-                    "should_listen": Event(), "model_name": self.args.tts_model,
-                    "device": "mps", "ref_audio": self.args.reference,
-                    "ref_text": self.args.reference_text, "streaming_chunk_size": 8,
-                    "cancel_scope": CancelScope(),
-                })
+
+                self.tts = Qwen3TTSHandler(
+                    Event(),
+                    Queue(),
+                    Queue(),
+                    setup_kwargs={
+                        "should_listen": Event(),
+                        "model_name": self.args.tts_model,
+                        "device": "mps",
+                        "ref_audio": self.args.reference,
+                        "ref_text": self.args.reference_text,
+                        "streaming_chunk_size": 8,
+                        "cancel_scope": CancelScope(),
+                    },
+                )
             cancelled.scope = self.tts.cancel_scope
             cancelled.scope.new_response()
             if cancelled.stopped.is_set():
@@ -103,15 +133,20 @@ class SpeechEngines:
                 # every block here, not only the outer generation iterator.
                 if cancelled.stopped.is_set():
                     break
-                pcm = block if isinstance(block, bytes) else np.asarray(block, dtype="<i2").tobytes()
+                pcm = (
+                    block
+                    if isinstance(block, bytes)
+                    else np.asarray(block, dtype="<i2").tobytes()
+                )
                 for offset in range(0, len(pcm), MAX_FRAME):
                     if cancelled.stopped.is_set():
                         return
-                    yield pcm[offset:offset + MAX_FRAME]
+                    yield pcm[offset : offset + MAX_FRAME]
 
 
 class SyntheticEngine:
     """Explicit test mode; never advertised as actual speech recognition."""
+
     def run(self, operation, payload, cancelled):
         if operation == "transcribe":
             yield {"type": "transcript.final", "text": "Synthetic transcript"}
@@ -127,16 +162,20 @@ def create_app(token, engine, *, synthetic=False):
         raise ValueError("a token of at least 32 characters is required")
     busy = asyncio.Lock()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="xnaut-speech")
+
     @contextlib.asynccontextmanager
     async def lifespan(_app):
         try:
             yield
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
     def authorized(headers):
-        return not headers.get("origin") and hmac.compare_digest(headers.get("authorization", ""), "Bearer " + token)
+        return not headers.get("origin") and hmac.compare_digest(
+            headers.get("authorization", ""), "Bearer " + token
+        )
 
     @app.get("/voice/v1/capabilities")
     async def capabilities(request: Request):
@@ -162,7 +201,9 @@ def create_app(token, engine, *, synthetic=False):
             request_id = str(uuid.UUID(request["id"]))
             operation = request["type"]
             if busy.locked():
-                raise ValueError("speech engine busy; try again after the current utterance")
+                raise ValueError(
+                    "speech engine busy; try again after the current utterance"
+                )
             await busy.acquire()
             acquired = True
             if operation == "transcribe":
@@ -177,7 +218,9 @@ def create_app(token, engine, *, synthetic=False):
                     if message["type"] == "websocket.disconnect":
                         raise WebSocketDisconnect()
                     if message.get("bytes") is not None:
-                        audio.extend(unpack_audio(message["bytes"], request_id, sequence))
+                        audio.extend(
+                            unpack_audio(message["bytes"], request_id, sequence)
+                        )
                         sequence += 1
                         if len(audio) > MAX_AUDIO:
                             raise ValueError("recording exceeds 120 seconds")
@@ -186,7 +229,10 @@ def create_app(token, engine, *, synthetic=False):
                         if len(raw) > 1024:
                             raise ValueError("control frame too large")
                         commit = json.loads(raw)
-                        if commit.get("type") != "input.commit" or commit.get("id") != request_id:
+                        if (
+                            commit.get("type") != "input.commit"
+                            or commit.get("id") != request_id
+                        ):
                             raise ValueError("expected input.commit for this utterance")
                         break
                 if len(audio) < RATE * 2 * 0.3:
@@ -194,8 +240,14 @@ def create_app(token, engine, *, synthetic=False):
                 payload = bytes(audio)
             elif operation == "synthesize":
                 payload = request.get("text")
-                if not isinstance(payload, str) or not payload.strip() or len(payload.encode()) > CAPABILITIES["max_text_bytes"]:
-                    raise ValueError("speech text must be nonempty and at most 4096 bytes")
+                if (
+                    not isinstance(payload, str)
+                    or not payload.strip()
+                    or len(payload.encode()) > CAPABILITIES["max_text_bytes"]
+                ):
+                    raise ValueError(
+                        "speech text must be nonempty and at most 4096 bytes"
+                    )
             else:
                 raise ValueError("unsupported operation")
 
@@ -224,7 +276,12 @@ def create_app(token, engine, *, synthetic=False):
                     put(None)
                 except Exception:
                     # Avoid leaking model paths, tokens or utterances through errors.
-                    put({"type": "error", "message": "local speech engine failed; check its configuration and cached models"})
+                    put(
+                        {
+                            "type": "error",
+                            "message": "local speech engine failed; check its configuration and cached models",
+                        }
+                    )
                 finally:
                     close = getattr(stream, "close", None)
                     if close:
@@ -238,7 +295,10 @@ def create_app(token, engine, *, synthetic=False):
                         if len(raw) > 1024:
                             raise ValueError("control frame too large")
                         event = json.loads(raw)
-                        if event.get("type") != "cancel" or event.get("id") != request_id:
+                        if (
+                            event.get("type") != "cancel"
+                            or event.get("id") != request_id
+                        ):
                             raise ValueError("expected cancel")
                 finally:
                     cancelled.cancel()
@@ -249,7 +309,9 @@ def create_app(token, engine, *, synthetic=False):
             while not cancelled.stopped.is_set():
                 get = asyncio.create_task(outgoing.get())
                 try:
-                    done, _ = await asyncio.wait([get, watcher], timeout=180, return_when=asyncio.FIRST_COMPLETED)
+                    done, _ = await asyncio.wait(
+                        [get, watcher], timeout=180, return_when=asyncio.FIRST_COMPLETED
+                    )
                     if not done:
                         raise ValueError("speech engine timed out")
                     if watcher in done:
@@ -265,10 +327,14 @@ def create_app(token, engine, *, synthetic=False):
                 if item is None:
                     if not sequence:
                         raise ValueError("speech engine produced no output")
-                    await ws.send_json({"type": "done", "id": request_id, "frames": sequence})
+                    await ws.send_json(
+                        {"type": "done", "id": request_id, "frames": sequence}
+                    )
                     break
                 if isinstance(item, bytes):
-                    await asyncio.wait_for(ws.send_bytes(pack_audio(request_id, sequence, item)), 10)
+                    await asyncio.wait_for(
+                        ws.send_bytes(pack_audio(request_id, sequence, item)), 10
+                    )
                 else:
                     await ws.send_json({**item, "id": request_id})
                     if item["type"] == "error":
@@ -278,7 +344,9 @@ def create_app(token, engine, *, synthetic=False):
             pass
         except (ValueError, KeyError, TypeError, asyncio.TimeoutError) as error:
             with contextlib.suppress(Exception):
-                await ws.send_json({"type": "error", "id": request_id, "message": str(error)[:160]})
+                await ws.send_json(
+                    {"type": "error", "id": request_id, "message": str(error)[:160]}
+                )
         finally:
             cancelled.cancel()
             if watcher:
@@ -306,13 +374,19 @@ def main():
     parser.add_argument("--tts-model")
     parser.add_argument("--reference")
     parser.add_argument("--reference-text", default="")
-    parser.add_argument("--synthetic", action="store_true", help="test-only silent PCM and fixed transcript")
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="test-only silent PCM and fixed transcript",
+    )
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
     if not args.synthetic and not (args.stt_model and args.tts_model):
         parser.error("real speech requires explicit cached --stt-model and --tts-model")
-    os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1")
+    os.environ.update(
+        HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1"
+    )
     # A separate private profile holds only endpoint + token; it is never sent
     # to the webview. Reuse it across restarts without overwriting other keys.
     if args.connection_file.exists():
@@ -327,9 +401,20 @@ def main():
         with os.fdopen(fd, "w") as f:
             json.dump({"endpoint": f"http://127.0.0.1:{args.port}", "token": token}, f)
     import uvicorn
-    app = create_app(token, SyntheticEngine() if args.synthetic else SpeechEngines(args), synthetic=args.synthetic)
-    uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False,
-                ws_max_size=MAX_FRAME + 20, ws_max_queue=8)
+
+    app = create_app(
+        token,
+        SyntheticEngine() if args.synthetic else SpeechEngines(args),
+        synthetic=args.synthetic,
+    )
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=args.port,
+        access_log=False,
+        ws_max_size=MAX_FRAME + 20,
+        ws_max_queue=8,
+    )
 
 
 if __name__ == "__main__":

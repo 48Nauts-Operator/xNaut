@@ -66,7 +66,9 @@ def _validate(value: Any, path: str = "$") -> None:
                 value.encode("utf-8")
                 value.encode("utf-16-be")
             except UnicodeEncodeError as exc:
-                raise EvidenceFormatError(f"{path}: strings must contain Unicode scalars") from exc
+                raise EvidenceFormatError(
+                    f"{path}: strings must contain Unicode scalars"
+                ) from exc
         return
     if isinstance(value, int):
         if not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
@@ -110,7 +112,9 @@ def _canonical(value: Any) -> str:
         # RFC 8785 sorts property names by UTF-16 code unit, not code point.
         # The orders genuinely differ above the BMP.
         keys = sorted(value, key=lambda item: item.encode("utf-16-be"))
-        return "{" + ",".join(f"{_string(k)}:{_canonical(value[k])}" for k in keys) + "}"
+        return (
+            "{" + ",".join(f"{_string(k)}:{_canonical(value[k])}" for k in keys) + "}"
+        )
     return "[" + ",".join(_canonical(item) for item in value) + "]"
 
 
@@ -142,7 +146,9 @@ def record_hash(record: Mapping[str, Any]) -> str:
     """
     body = {k: v for k, v in record.items() if k != "hash"}
     if body.get("schema_version") != RECORD_SCHEMA:
-        raise EvidenceFormatError(f"unsupported record schema: {body.get('schema_version')!r}")
+        raise EvidenceFormatError(
+            f"unsupported record schema: {body.get('schema_version')!r}"
+        )
     return digest(RECORD_DOMAIN, canonical_json(body))
 
 
@@ -173,7 +179,9 @@ def merkle_root(record_digests: Sequence[str]) -> bytes:
     return level[0]
 
 
-def merkle_proof(record_digests: Sequence[str], leaf_index: int) -> list[dict[str, str]]:
+def merkle_proof(
+    record_digests: Sequence[str], leaf_index: int
+) -> list[dict[str, str]]:
     """The ordered sibling path for one record, so it can be proved in isolation."""
     if not 0 <= leaf_index < len(record_digests):
         raise EvidenceFormatError("leaf index is outside the Merkle tree")
@@ -182,14 +190,20 @@ def merkle_proof(record_digests: Sequence[str], leaf_index: int) -> list[dict[st
     while len(level) > 1:
         sibling = index - 1 if index % 2 else index + 1
         if sibling < len(level):
-            proof.append({"side": "left" if sibling < index else "right",
-                          "hash": level[sibling].hex()})
+            proof.append(
+                {
+                    "side": "left" if sibling < index else "right",
+                    "hash": level[sibling].hex(),
+                }
+            )
         level = _level_up(level)
         index //= 2
     return proof
 
 
-def verify_merkle_proof(record_digest: str, proof: Sequence[Mapping[str, str]]) -> bytes:
+def verify_merkle_proof(
+    record_digest: str, proof: Sequence[Mapping[str, str]]
+) -> bytes:
     current = merkle_leaf(record_digest)
     for item in proof:
         try:
@@ -198,18 +212,25 @@ def verify_merkle_proof(record_digest: str, proof: Sequence[Mapping[str, str]]) 
             raise EvidenceFormatError("invalid Merkle proof item") from exc
         if len(sibling) != 32 or side not in ("left", "right"):
             raise EvidenceFormatError("invalid Merkle proof sibling")
-        current = merkle_parent(sibling, current) if side == "left" else merkle_parent(current, sibling)
+        current = (
+            merkle_parent(sibling, current)
+            if side == "left"
+            else merkle_parent(current, sibling)
+        )
     return current
 
 
 def checkpoint_payload(checkpoint: Mapping[str, Any]) -> bytes:
     """The exact bytes handed to the HSM for a v1 checkpoint."""
     if checkpoint.get("schema") != CHECKPOINT_SCHEMA:
-        raise EvidenceFormatError(f"unsupported checkpoint schema: {checkpoint.get('schema')!r}")
+        raise EvidenceFormatError(
+            f"unsupported checkpoint schema: {checkpoint.get('schema')!r}"
+        )
     return CHECKPOINT_DOMAIN + canonical_json(checkpoint)
 
 
 # --- reading the log the Rust side writes -----------------------------------
+
 
 def read_records(path) -> list[dict]:
     """Every record in the JSONL log, in file order.
@@ -225,7 +246,9 @@ def read_records(path) -> list[dict]:
             try:
                 rows.append(json.loads(line))
             except ValueError as exc:
-                raise EvidenceFormatError(f"line {number}: corrupt, gap here: {exc}") from None
+                raise EvidenceFormatError(
+                    f"line {number}: corrupt, gap here: {exc}"
+                ) from None
     return rows
 
 
@@ -242,10 +265,13 @@ def verify_chain(records: Sequence[dict]) -> dict[str, int]:
         session = row.get("session_id") or ""
         seq, prev = heads.get(session, (0, None))
         if row.get("seq") != seq:
-            raise EvidenceFormatError(f"record {number}: session {session} expected seq {seq}")
+            raise EvidenceFormatError(
+                f"record {number}: session {session} expected seq {seq}"
+            )
         if row.get("prev_hash") != prev:
             raise EvidenceFormatError(
-                f"record {number}: session {session} does not link to the record before it")
+                f"record {number}: session {session} does not link to the record before it"
+            )
         heads[session] = (seq + 1, row["hash"])
     return {session: seq for session, (seq, _) in heads.items()}
 
@@ -277,11 +303,15 @@ def build_checkpoint(
         raise EvidenceFormatError("a checkpoint covers one session")
     seqs = [int(r["seq"]) for r in records]
     if seqs != list(range(seqs[0], seqs[0] + len(seqs))):
-        raise EvidenceFormatError(f"sequence gap in session {session}: {seqs[0]}..{seqs[-1]}")
+        raise EvidenceFormatError(
+            f"sequence gap in session {session}: {seqs[0]}..{seqs[-1]}"
+        )
     digests = [r["hash"] for r in records]
     root = merkle_root(digests)
-    stable = (f"{executor_id}:{session}:{seqs[0]}:{seqs[-1]}:{root.hex()}:"
-              f"{previous_checkpoint_sha256 or 'genesis'}:{signing_key_id}")
+    stable = (
+        f"{executor_id}:{session}:{seqs[0]}:{seqs[-1]}:{root.hex()}:"
+        f"{previous_checkpoint_sha256 or 'genesis'}:{signing_key_id}"
+    )
     checkpoint = {
         "schema": CHECKPOINT_SCHEMA,
         # uuid5, not uuid4: the same batch checkpointed twice must produce the
@@ -307,8 +337,9 @@ def selftest() -> None:
     # RFC 8785 section 3.2.3: keys sort by UTF-16 code unit. U+1F600's lead
     # surrogate is U+D83D, so it sorts BEFORE U+FB33 here and after it by code
     # point. Swap to sorted(value) and this line fails.
-    assert canonical_json({"\U0001f600": 1, "דּ": 2}) == \
-        '{"\U0001f600":1,"דּ":2}'.encode(), "UTF-16 key order"
+    assert (
+        canonical_json({"\U0001f600": 1, "דּ": 2}) == '{"\U0001f600":1,"דּ":2}'.encode()
+    ), "UTF-16 key order"
     assert canonical_json({"b": 1, "a": 2}) == b'{"a":2,"b":1}'
     # ensure_ascii=False, so a non-ASCII string is UTF-8 bytes, not \u escapes.
     assert canonical_json("€") == '"€"'.encode()
@@ -324,24 +355,35 @@ def selftest() -> None:
     # The Rust side's hash, recomputed here. This vector is a real record
     # written by evidence.rs; if either implementation drifts it fails.
     rec = {
-        "schema_version": RECORD_SCHEMA, "record_id": "a", "session_id": "s",
-        "seq": 0, "prev_hash": None, "recorded_at": "2026-08-20T00:00:00.000Z",
-        "executor_id": "xnaut:test", "executor_version": "1.19.0", "kind": "tool_call",
+        "schema_version": RECORD_SCHEMA,
+        "record_id": "a",
+        "session_id": "s",
+        "seq": 0,
+        "prev_hash": None,
+        "recorded_at": "2026-08-20T00:00:00.000Z",
+        "executor_id": "xnaut:test",
+        "executor_version": "1.19.0",
+        "kind": "tool_call",
     }
     # Pinned on both sides: src-tauri/src/evidence.rs has the same vector in
     # `the_python_side_computes_the_same_hash_for_the_same_record`. Either
     # implementation changing alone fails here or there.
     h = record_hash(rec)
-    assert h == "sha256:c6f9bdb5259ad1e23a9fa9a137cbefcad4e83a8cd849531686a3bf5491ac2b52", h
+    assert (
+        h == "sha256:c6f9bdb5259ad1e23a9fa9a137cbefcad4e83a8cd849531686a3bf5491ac2b52"
+    ), h
     assert record_hash({**rec, "hash": h}) == h, "the hash field must not hash itself"
 
     # A tree of three: the unpaired leaf is promoted, not duplicated. Duplicating
     # it is CVE-2012-2459, where two different batches share a root.
     d = [digest(RECORD_DOMAIN, bytes([i])) for i in range(3)]
-    assert merkle_root(d) == merkle_parent(merkle_parent(merkle_leaf(d[0]), merkle_leaf(d[1])),
-                                           merkle_leaf(d[2]))
+    assert merkle_root(d) == merkle_parent(
+        merkle_parent(merkle_leaf(d[0]), merkle_leaf(d[1])), merkle_leaf(d[2])
+    )
     for i in range(3):
-        assert verify_merkle_proof(d[i], merkle_proof(d, i)) == merkle_root(d), f"proof {i}"
+        assert verify_merkle_proof(d[i], merkle_proof(d, i)) == merkle_root(d), (
+            f"proof {i}"
+        )
     assert merkle_root(d) != merkle_root(d[:2]), "a shorter batch is a different root"
 
     # Chain verification catches a mutated record and a removed one.
@@ -371,7 +413,9 @@ def selftest() -> None:
     b = build_checkpoint(chain, executor_id="xnaut:test", signing_key_id="k")
     assert a == b, "the same batch must checkpoint identically"
     try:
-        build_checkpoint([chain[0], chain[2]], executor_id="xnaut:test", signing_key_id="k")
+        build_checkpoint(
+            [chain[0], chain[2]], executor_id="xnaut:test", signing_key_id="k"
+        )
         raise AssertionError("a sequence gap should be refused")
     except EvidenceFormatError:
         pass

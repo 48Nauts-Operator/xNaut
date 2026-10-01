@@ -49,7 +49,9 @@ API_KEY = os.getenv("NAUTGATE_API_KEY", "").strip()
 
 def base() -> str:
     if not URL or not API_KEY:
-        raise RuntimeError("set NAUTGATE_URL and NAUTGATE_API_KEY in the plugin's config")
+        raise RuntimeError(
+            "set NAUTGATE_URL and NAUTGATE_API_KEY in the plugin's config"
+        )
     root = URL.rstrip("/")
     return root[:-3].rstrip("/") if root.endswith("/v1") else root
 
@@ -57,18 +59,26 @@ def base() -> str:
 def get(path: str, query: dict | None = None):
     url = f"{base()}{path}"
     if query:
-        url += "?" + urllib.parse.urlencode({k: v for k, v in query.items() if v is not None})
+        url += "?" + urllib.parse.urlencode(
+            {k: v for k, v in query.items() if v is not None}
+        )
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {API_KEY}"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            raise RuntimeError(f"NautGate has nothing at {path}. A receipt is only "
-                               "exportable once the checkpoint covering it is signed.") from None
-        raise RuntimeError(f"NautGate refused {path}: {exc.code} {exc.reason}") from None
+            raise RuntimeError(
+                f"NautGate has nothing at {path}. A receipt is only "
+                "exportable once the checkpoint covering it is signed."
+            ) from None
+        raise RuntimeError(
+            f"NautGate refused {path}: {exc.code} {exc.reason}"
+        ) from None
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"NautGate at {base()} is unreachable: {exc.reason}") from None
+        raise RuntimeError(
+            f"NautGate at {base()} is unreachable: {exc.reason}"
+        ) from None
 
 
 def do_receipts(args: dict) -> dict:
@@ -84,7 +94,9 @@ def do_bundle(args: dict) -> dict:
     if path:
         out = Path(path).expanduser()
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        out.write_text(
+            json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         return {"path": str(out), "receipt_id": receipt_id}
     return bundle
 
@@ -105,7 +117,9 @@ def do_verify(args: dict) -> dict:
         raise ValueError("pass path or bundle")
 
     if doc.get("bundle_schema") != ng.BUNDLE_SCHEMA:
-        raise ValueError(f"not a NautGate evidence bundle: {doc.get('bundle_schema')!r}")
+        raise ValueError(
+            f"not a NautGate evidence bundle: {doc.get('bundle_schema')!r}"
+        )
     receipt, checkpoint = doc.get("receipt") or {}, doc.get("checkpoint") or {}
     signature = doc.get("signature") or {}
 
@@ -119,15 +133,22 @@ def do_verify(args: dict) -> dict:
     fingerprint = signature.get("public_key_fingerprint")
     spki, source = None, "not checked"
     for key in (get("/v1/audit/keys").get("keys") or []) if (URL and API_KEY) else []:
-        if key.get("public_key_fingerprint") == fingerprint and key.get("public_key_pem"):
+        if key.get("public_key_fingerprint") == fingerprint and key.get(
+            "public_key_pem"
+        ):
             spki, source = ng.spki_from_pem(key["public_key_pem"]), "/v1/audit/keys"
             break
     signed = False
     if spki:
-        signed = xv.rsa_verify_sha256(spki, ng.checkpoint_payload(checkpoint),
-                                      base64.b64decode(signature.get("value") or ""))
+        signed = xv.rsa_verify_sha256(
+            spki,
+            ng.checkpoint_payload(checkpoint),
+            base64.b64decode(signature.get("value") or ""),
+        )
         if not signed:
-            raise ValueError(f"the checkpoint signature does not verify under {fingerprint}")
+            raise ValueError(
+                f"the checkpoint signature does not verify under {fingerprint}"
+            )
 
     return {
         "ok": True,
@@ -137,9 +158,14 @@ def do_verify(args: dict) -> dict:
         "signature_verified": signed,
         "signature_key": fingerprint,
         "key_source": source,
-        "claim": ("The receipt is inside the checkpoint and unmodified."
-                  + (" The HSM signed that checkpoint." if signed else
-                     " The signature was NOT checked: no public key was available.")),
+        "claim": (
+            "The receipt is inside the checkpoint and unmodified."
+            + (
+                " The HSM signed that checkpoint."
+                if signed
+                else " The signature was NOT checked: no public key was available."
+            )
+        ),
     }
 
 
@@ -154,7 +180,10 @@ TOOLS = [
         "description": "Fetch one routing receipt as a portable, hardware-signed evidence bundle. Optionally write it to a file.",
         "inputSchema": {
             "type": "object",
-            "properties": {"receipt_id": {"type": "string"}, "path": {"type": "string"}},
+            "properties": {
+                "receipt_id": {"type": "string"},
+                "path": {"type": "string"},
+            },
             "required": ["receipt_id"],
         },
     },
@@ -211,8 +240,14 @@ def main() -> None:
             continue
         result = handle(msg.get("method", ""), msg.get("params") or {})
         if result is None:
-            reply = {"jsonrpc": "2.0", "id": msg["id"],
-                     "error": {"code": -32601, "message": f"method not found: {msg.get('method')}"}}
+            reply = {
+                "jsonrpc": "2.0",
+                "id": msg["id"],
+                "error": {
+                    "code": -32601,
+                    "message": f"method not found: {msg.get('method')}",
+                },
+            }
         else:
             reply = {"jsonrpc": "2.0", "id": msg["id"], "result": result}
         sys.stdout.write(json.dumps(reply) + "\n")
@@ -227,20 +262,43 @@ def selftest() -> None:
     than assumed. The signed half is covered by xnaut_verify's pinned HSM
     vector, which is the same forty lines of RSA.
     """
-    receipt = {"schema": ng.RECEIPT_SCHEMA, "receipt_id": "r-1", "decision_id": "d-1", "sequence": 0}
+    receipt = {
+        "schema": ng.RECEIPT_SCHEMA,
+        "receipt_id": "r-1",
+        "decision_id": "d-1",
+        "sequence": 0,
+    }
     digest = ng.receipt_hash(receipt)
     sibling = bytes(32)
     root = ng.merkle_parent(ng.merkle_leaf(digest), sibling)
-    doc = {"bundle_schema": ng.BUNDLE_SCHEMA, "receipt": receipt, "receipt_hash": digest.hex(),
-           "leaf_index": 0, "merkle_proof": [{"hash": sibling.hex(), "side": "right"}],
-           "checkpoint": {"schema": ng.CHECKPOINT_SCHEMA, "checkpoint_id": "c-1",
-                          "merkle_root": root.hex(), "first_sequence": 0,
-                          "last_sequence": 1, "receipt_count": 2, "signing_key_id": "K"},
-           "signature": {"algorithm": "SHA256_WITH_RSA", "encoding": "base64-der",
-                         "value": "", "key_id": "K", "public_key_fingerprint": "sha256:ng"}}
+    doc = {
+        "bundle_schema": ng.BUNDLE_SCHEMA,
+        "receipt": receipt,
+        "receipt_hash": digest.hex(),
+        "leaf_index": 0,
+        "merkle_proof": [{"hash": sibling.hex(), "side": "right"}],
+        "checkpoint": {
+            "schema": ng.CHECKPOINT_SCHEMA,
+            "checkpoint_id": "c-1",
+            "merkle_root": root.hex(),
+            "first_sequence": 0,
+            "last_sequence": 1,
+            "receipt_count": 2,
+            "signing_key_id": "K",
+        },
+        "signature": {
+            "algorithm": "SHA256_WITH_RSA",
+            "encoding": "base64-der",
+            "value": "",
+            "key_id": "K",
+            "public_key_fingerprint": "sha256:ng",
+        },
+    }
 
     report = do_verify({"bundle": doc})
-    assert report["signature_verified"] is False and report["key_source"] == "not checked", report
+    assert (
+        report["signature_verified"] is False and report["key_source"] == "not checked"
+    ), report
     assert "NOT checked" in report["claim"], report
 
     forged = json.loads(json.dumps(doc))
@@ -258,8 +316,10 @@ def selftest() -> None:
         raise AssertionError("a bundle whose proof misses the root verified")
     except ValueError as exc:
         assert "does not reach the checkpoint root" in str(exc), exc
-    print("ok: a NautGate bundle verifies structurally, forgeries refused, "
-          "an unchecked signature is reported as unchecked")
+    print(
+        "ok: a NautGate bundle verifies structurally, forgeries refused, "
+        "an unchecked signature is reported as unchecked"
+    )
 
 
 if __name__ == "__main__":

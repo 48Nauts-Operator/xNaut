@@ -48,7 +48,9 @@ class EvidenceFormatError(ValueError):
 
 def receipt_hash(receipt: dict) -> bytes:
     if receipt.get("schema") != RECEIPT_SCHEMA:
-        raise EvidenceFormatError(f"unsupported receipt schema: {receipt.get('schema')!r}")
+        raise EvidenceFormatError(
+            f"unsupported receipt schema: {receipt.get('schema')!r}"
+        )
     return hashlib.sha256(RECEIPT_DOMAIN + ev.canonical_json(receipt)).digest()
 
 
@@ -75,14 +77,20 @@ def verify_merkle_proof(receipt_digest: bytes, proof) -> bytes:
             raise EvidenceFormatError("invalid Merkle proof item") from exc
         if len(sibling) != 32 or side not in ("left", "right"):
             raise EvidenceFormatError("invalid Merkle proof sibling")
-        current = merkle_parent(sibling, current) if side == "left" else merkle_parent(current, sibling)
+        current = (
+            merkle_parent(sibling, current)
+            if side == "left"
+            else merkle_parent(current, sibling)
+        )
     return current
 
 
 def checkpoint_payload(checkpoint: dict) -> bytes:
     """The exact bytes NautGate submitted to the HSM for this checkpoint."""
     if checkpoint.get("schema") != CHECKPOINT_SCHEMA:
-        raise EvidenceFormatError(f"unsupported checkpoint schema: {checkpoint.get('schema')!r}")
+        raise EvidenceFormatError(
+            f"unsupported checkpoint schema: {checkpoint.get('schema')!r}"
+        )
     return CHECKPOINT_DOMAIN + ev.canonical_json(checkpoint)
 
 
@@ -94,10 +102,10 @@ def spki_from_pem(pem: str) -> bytes:
     """
     import base64
 
-    lines = [l.strip() for l in pem.strip().splitlines()]
+    lines = [line.strip() for line in pem.strip().splitlines()]
     if not lines or "BEGIN PUBLIC KEY" not in lines[0]:
         raise EvidenceFormatError("not a PEM public key block")
-    body = "".join(l for l in lines[1:] if "END " not in l)
+    body = "".join(line for line in lines[1:] if "END " not in line)
     try:
         return base64.b64decode(body, validate=True)
     except Exception as exc:  # noqa: BLE001 -- base64 raises several types

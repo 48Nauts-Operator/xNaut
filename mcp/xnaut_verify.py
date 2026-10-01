@@ -67,6 +67,7 @@ class VerificationError(Exception):
 
 # ---- DER, only as much as an SPKI needs ------------------------------------
 
+
 def _der_read(buf: bytes, at: int) -> tuple[int, bytes, int]:
     """One TLV at `at`. Returns (tag, value, index after)."""
     tag = buf[at]
@@ -74,9 +75,9 @@ def _der_read(buf: bytes, at: int) -> tuple[int, bytes, int]:
     at += 2
     if length & 0x80:
         count = length & 0x7F
-        length = int.from_bytes(buf[at:at + count], "big")
+        length = int.from_bytes(buf[at : at + count], "big")
         at += count
-    return tag, buf[at:at + length], at + length
+    return tag, buf[at : at + length], at + length
 
 
 def rsa_public_numbers(spki_der: bytes) -> tuple[int, int]:
@@ -123,6 +124,7 @@ def rsa_verify_sha256(spki_der: bytes, message: bytes, signature: bytes) -> bool
 
 # ---- the bundle -------------------------------------------------------------
 
+
 def _args_hashes(value, found=None) -> list[str]:
     """Every `args_hash` anywhere in a record.
 
@@ -163,13 +165,17 @@ def verify_nautgate(bundle: dict, records: list) -> dict:
     bundles = bundle.get("nautgate_bundles") or []
     referenced = {}
     for record in records:
-        receipt_id = ((record.get("nautgate") or {}).get("receipt_id"))
+        receipt_id = (record.get("nautgate") or {}).get("receipt_id")
         if isinstance(receipt_id, str) and receipt_id:
             referenced[receipt_id] = record.get("session_id") or ""
     if not bundles:
-        return {"present": False, "referenced": len(referenced),
-                "verified": 0, "signatures_verified": 0,
-                "awaiting_checkpoint": sorted(referenced)}
+        return {
+            "present": False,
+            "referenced": len(referenced),
+            "verified": 0,
+            "signatures_verified": 0,
+            "awaiting_checkpoint": sorted(referenced),
+        }
 
     keys = {}
     for row in (bundle.get("nautgate_keys") or {}).get("keys") or []:
@@ -188,41 +194,66 @@ def verify_nautgate(bundle: dict, records: list) -> dict:
         try:
             digest = ng.receipt_hash(receipt)
             if doc.get("receipt_hash") != digest.hex():
-                raise VerificationError(f"{where}: the receipt does not hash to its own hash")
+                raise VerificationError(
+                    f"{where}: the receipt does not hash to its own hash"
+                )
             root = ng.verify_merkle_proof(digest, doc.get("merkle_proof") or [])
             if root.hex() != checkpoint.get("merkle_root"):
-                raise VerificationError(f"{where}: the inclusion proof does not reach the checkpoint root")
+                raise VerificationError(
+                    f"{where}: the inclusion proof does not reach the checkpoint root"
+                )
             payload = ng.checkpoint_payload(checkpoint)
         except ng.EvidenceFormatError as exc:
             raise VerificationError(f"{where}: {exc}") from None
 
         index, sequence = doc.get("leaf_index"), receipt.get("sequence")
-        if not isinstance(index, int) or index < 0 or index >= checkpoint.get("receipt_count", 0):
-            raise VerificationError(f"{where}: the Merkle leaf index is outside the checkpoint")
+        if (
+            not isinstance(index, int)
+            or index < 0
+            or index >= checkpoint.get("receipt_count", 0)
+        ):
+            raise VerificationError(
+                f"{where}: the Merkle leaf index is outside the checkpoint"
+            )
         if sequence != checkpoint.get("first_sequence", 0) + index:
-            raise VerificationError(f"{where}: the receipt sequence and the leaf index disagree")
+            raise VerificationError(
+                f"{where}: the receipt sequence and the leaf index disagree"
+            )
         if checkpoint.get("receipt_count") != (
-                checkpoint.get("last_sequence", 0) - checkpoint.get("first_sequence", 0) + 1):
-            raise VerificationError(f"{where}: the checkpoint range and its receipt count disagree")
+            checkpoint.get("last_sequence", 0) - checkpoint.get("first_sequence", 0) + 1
+        ):
+            raise VerificationError(
+                f"{where}: the checkpoint range and its receipt count disagree"
+            )
         if signature.get("key_id") != checkpoint.get("signing_key_id"):
-            raise VerificationError(f"{where}: the signature names a different key than the checkpoint")
+            raise VerificationError(
+                f"{where}: the signature names a different key than the checkpoint"
+            )
 
         fingerprint = signature.get("public_key_fingerprint")
         fingerprints.add(fingerprint)
         spki = keys.get(fingerprint)
         if spki:
-            if signature.get("algorithm") != "SHA256_WITH_RSA" or signature.get("encoding") != "base64-der":
-                raise VerificationError(f"{where}: unsupported signature algorithm or encoding")
+            if (
+                signature.get("algorithm") != "SHA256_WITH_RSA"
+                or signature.get("encoding") != "base64-der"
+            ):
+                raise VerificationError(
+                    f"{where}: unsupported signature algorithm or encoding"
+                )
             raw_signature = base64.b64decode(signature.get("value") or "")
             if not rsa_verify_sha256(spki, payload, raw_signature):
-                raise VerificationError(f"{where}: the checkpoint signature does not verify under {fingerprint}")
+                raise VerificationError(
+                    f"{where}: the checkpoint signature does not verify under {fingerprint}"
+                )
             signed += 1
 
         receipt_id = receipt.get("receipt_id")
         if receipt_id not in referenced:
             raise VerificationError(
                 f"{where}: receipt {receipt_id!r}, which no xNAUT record names. "
-                "A gateway receipt in this bundle must belong to a call this trail recorded.")
+                "A gateway receipt in this bundle must belong to a call this trail recorded."
+            )
         seen.add(receipt_id)
 
     return {
@@ -241,7 +272,9 @@ def verify_bundle(bundle: dict) -> dict:
     failure, because a report that lists eight passes and one failure invites
     somebody to read the eight."""
     if bundle.get("schema") != BUNDLE_SCHEMA:
-        raise VerificationError(f"not an evidence bundle: schema {bundle.get('schema')!r}")
+        raise VerificationError(
+            f"not an evidence bundle: schema {bundle.get('schema')!r}"
+        )
 
     records = bundle.get("records") or []
     if not records:
@@ -258,7 +291,9 @@ def verify_bundle(bundle: dict) -> dict:
     key = bundle.get("signing_key") or {}
     spki = base64.b64decode(key.get("public_key_spki_b64") or "")
     if not spki:
-        raise VerificationError("bundle carries no public key, so nothing can be verified")
+        raise VerificationError(
+            "bundle carries no public key, so nothing can be verified"
+        )
     fingerprint = "sha256:" + hashlib.sha256(spki).hexdigest()
 
     # 3 + 4 + 5: each checkpoint covers what it says, links to the one before,
@@ -269,30 +304,45 @@ def verify_bundle(bundle: dict) -> dict:
     for number, row in enumerate(bundle.get("checkpoints") or [], start=1):
         cp = row.get("checkpoint") or {}
         session = cp.get("session_id") or ""
-        covered = [r for r in by_session.get(session, [])
-                   if cp["first_seq"] <= int(r["seq"]) <= cp["last_seq"]]
+        covered = [
+            r
+            for r in by_session.get(session, [])
+            if cp["first_seq"] <= int(r["seq"]) <= cp["last_seq"]
+        ]
         if len(covered) != cp.get("record_count"):
             raise VerificationError(
                 f"checkpoint {number}: says {cp.get('record_count')} records, "
-                f"the bundle holds {len(covered)}")
+                f"the bundle holds {len(covered)}"
+            )
         if ev.merkle_root([r["hash"] for r in covered]).hex() != cp.get("merkle_root"):
-            raise VerificationError(f"checkpoint {number}: those records do not build its Merkle root")
+            raise VerificationError(
+                f"checkpoint {number}: those records do not build its Merkle root"
+            )
         if cp.get("previous_checkpoint_sha256") != previous:
-            raise VerificationError(f"checkpoint {number}: does not link to the checkpoint before it")
+            raise VerificationError(
+                f"checkpoint {number}: does not link to the checkpoint before it"
+            )
         payload = ev.checkpoint_payload(cp)
         own = "sha256:" + hashlib.sha256(payload).hexdigest()
         if own != row.get("checkpoint_sha256"):
-            raise VerificationError(f"checkpoint {number}: does not hash to its own hash")
+            raise VerificationError(
+                f"checkpoint {number}: does not hash to its own hash"
+            )
         signature = base64.b64decode(row.get("signature") or "")
         if not signature:
             raise VerificationError(f"checkpoint {number}: unsigned")
         if (row.get("algorithm") or "SHA256_WITH_RSA") != "SHA256_WITH_RSA":
-            raise VerificationError(f"checkpoint {number}: unsupported algorithm {row.get('algorithm')!r}")
+            raise VerificationError(
+                f"checkpoint {number}: unsupported algorithm {row.get('algorithm')!r}"
+            )
         if not rsa_verify_sha256(spki, payload, signature):
             raise VerificationError(
-                f"checkpoint {number}: signature does not verify under {fingerprint}")
+                f"checkpoint {number}: signature does not verify under {fingerprint}"
+            )
         previous = own
-        sealed_through[session] = max(sealed_through.get(session, -1), int(cp["last_seq"]))
+        sealed_through[session] = max(
+            sealed_through.get(session, -1), int(cp["last_seq"])
+        )
         checked.append(cp.get("checkpoint_id"))
 
     # 6: the arguments, when the exporter was asked to include them. A blob that
@@ -307,10 +357,12 @@ def verify_bundle(bundle: dict) -> dict:
         for args_hash, plaintext in blobs.items():
             if ev.digest(ev.ARGS_DOMAIN, plaintext.encode("utf-8")) != args_hash:
                 raise VerificationError(
-                    f"session {session}: the arguments given for {args_hash} hash to something else")
+                    f"session {session}: the arguments given for {args_hash} hash to something else"
+                )
             if wanted.get(args_hash) != session:
                 raise VerificationError(
-                    f"session {session}: arguments for {args_hash}, which no record in it names")
+                    f"session {session}: arguments for {args_hash}, which no record in it names"
+                )
             supplied += 1
 
     # 7: the gateway's own account of the same model calls, when the export
@@ -324,8 +376,14 @@ def verify_bundle(bundle: dict) -> dict:
         "nautgate": gateway,
         "ok": True,
         "records": len(records),
-        "sessions": {s: {"records": seq, "sealed_through_seq": sealed_through.get(s),
-                         "unattested_tail": unattested[s]} for s, seq in heads.items()},
+        "sessions": {
+            s: {
+                "records": seq,
+                "sealed_through_seq": sealed_through.get(s),
+                "unattested_tail": unattested[s],
+            }
+            for s, seq in heads.items()
+        },
         "checkpoints_verified": len(checked),
         "signatures_verified": len(checked),
         "arguments_verified": supplied,
@@ -369,7 +427,9 @@ PINNED_SIGNATURE_B64 = (
 )
 
 PINNED_MESSAGE = b"xnaut-verify pinned vector v1"
-PINNED_FINGERPRINT = "sha256:b860ec465fc05ebf2c515b31fd87e9ad763580d9ee1ade927ce44f79b1b62e8f"
+PINNED_FINGERPRINT = (
+    "sha256:b860ec465fc05ebf2c515b31fd87e9ad763580d9ee1ade927ce44f79b1b62e8f"
+)
 
 
 def selftest_nautgate(bundle: dict, records: list, session: str) -> None:
@@ -380,8 +440,15 @@ def selftest_nautgate(bundle: dict, records: list, session: str) -> None:
     pass: the receipt hash, the inclusion proof, the leaf index, and the rule
     that a gateway receipt must belong to a call this trail recorded.
     """
-    receipts = [{"schema": ng.RECEIPT_SCHEMA, "receipt_id": f"rcpt-{i}",
-                 "decision_id": f"dec-{i}", "sequence": i} for i in range(3)]
+    receipts = [
+        {
+            "schema": ng.RECEIPT_SCHEMA,
+            "receipt_id": f"rcpt-{i}",
+            "decision_id": f"dec-{i}",
+            "sequence": i,
+        }
+        for i in range(3)
+    ]
     digests = [ng.receipt_hash(r) for r in receipts]
     # The same tree NautGate builds: leaves, pairwise, odd node promoted.
     level = [ng.merkle_leaf(d) for d in digests]
@@ -402,21 +469,41 @@ def selftest_nautgate(bundle: dict, records: list, session: str) -> None:
             nxt_spans.append(spans[i] + spans[i + 1])
         level, spans = nxt, nxt_spans
 
-    checkpoint = {"schema": ng.CHECKPOINT_SCHEMA, "checkpoint_id": "ngcp-1",
-                  "merkle_root": level[0].hex(), "first_sequence": 0,
-                  "last_sequence": 2, "receipt_count": 3, "signing_key_id": "K1"}
-    docs = [{"bundle_schema": ng.BUNDLE_SCHEMA, "receipt": r, "receipt_hash": d.hex(),
-             "leaf_index": i, "merkle_proof": proofs[i], "checkpoint": checkpoint,
-             "signature": {"algorithm": "SHA256_WITH_RSA", "encoding": "base64-der",
-                           "value": "", "key_id": "K1",
-                           "public_key_fingerprint": "sha256:ng"}}
-            for i, (r, d) in enumerate(zip(receipts, digests))]
+    checkpoint = {
+        "schema": ng.CHECKPOINT_SCHEMA,
+        "checkpoint_id": "ngcp-1",
+        "merkle_root": level[0].hex(),
+        "first_sequence": 0,
+        "last_sequence": 2,
+        "receipt_count": 3,
+        "signing_key_id": "K1",
+    }
+    docs = [
+        {
+            "bundle_schema": ng.BUNDLE_SCHEMA,
+            "receipt": r,
+            "receipt_hash": d.hex(),
+            "leaf_index": i,
+            "merkle_proof": proofs[i],
+            "checkpoint": checkpoint,
+            "signature": {
+                "algorithm": "SHA256_WITH_RSA",
+                "encoding": "base64-der",
+                "value": "",
+                "key_id": "K1",
+                "public_key_fingerprint": "sha256:ng",
+            },
+        }
+        for i, (r, d) in enumerate(zip(receipts, digests))
+    ]
 
     joined = dict(bundle)
     joined["records"] = [dict(r) for r in records]
     for record, receipt in zip(joined["records"], receipts):
-        record["nautgate"] = {"decision_id": receipt["decision_id"],
-                              "receipt_id": receipt["receipt_id"]}
+        record["nautgate"] = {
+            "decision_id": receipt["decision_id"],
+            "receipt_id": receipt["receipt_id"],
+        }
         record["hash"] = ev.record_hash(record)
     prev = None
     for record in joined["records"]:
@@ -464,54 +551,88 @@ def selftest_nautgate(bundle: dict, records: list, session: str) -> None:
     alone = json.loads(json.dumps(joined))
     del alone["nautgate_bundles"]
     assert verify_bundle(alone)["nautgate"]["present"] is False
-    print("ok: the NautGate join verifies, refuses a forged receipt, and stays optional")
+    print(
+        "ok: the NautGate join verifies, refuses a forged receipt, and stays optional"
+    )
 
 
 def selftest() -> None:
     spki = base64.b64decode(PINNED_SPKI_B64)
     signature = base64.b64decode(PINNED_SIGNATURE_B64)
-    assert "sha256:" + hashlib.sha256(spki).hexdigest() == PINNED_FINGERPRINT, \
+    assert "sha256:" + hashlib.sha256(spki).hexdigest() == PINNED_FINGERPRINT, (
         "the pinned public key is not the key it claims to be"
+    )
     n, e = rsa_public_numbers(spki)
     assert n.bit_length() == 4096 and e == 65537, (n.bit_length(), e)
-    assert rsa_verify_sha256(spki, PINNED_MESSAGE, signature), \
+    assert rsa_verify_sha256(spki, PINNED_MESSAGE, signature), (
         "a real HSM signature stopped verifying"
+    )
     # Each of these is a way a lenient verifier says yes to a forgery.
-    assert not rsa_verify_sha256(spki, PINNED_MESSAGE + b"!", signature), "message can move"
-    assert not rsa_verify_sha256(spki, PINNED_MESSAGE, signature[:-1]), "short signature accepted"
-    assert not rsa_verify_sha256(spki, PINNED_MESSAGE, bytes(len(signature))), "zero signature accepted"
+    assert not rsa_verify_sha256(spki, PINNED_MESSAGE + b"!", signature), (
+        "message can move"
+    )
+    assert not rsa_verify_sha256(spki, PINNED_MESSAGE, signature[:-1]), (
+        "short signature accepted"
+    )
+    assert not rsa_verify_sha256(spki, PINNED_MESSAGE, bytes(len(signature))), (
+        "zero signature accepted"
+    )
     forged = bytearray(signature)
     forged[-1] ^= 1
-    assert not rsa_verify_sha256(spki, PINNED_MESSAGE, bytes(forged)), "flipped signature accepted"
+    assert not rsa_verify_sha256(spki, PINNED_MESSAGE, bytes(forged)), (
+        "flipped signature accepted"
+    )
 
     # A bundle with no checkpoints verifies its chain and reports the whole
     # thing as an unattested tail rather than quietly calling it proof.
     records = []
     prev, session = None, "selftest"
     for seq in range(3):
-        row = {"schema_version": ev.RECORD_SCHEMA, "record_id": f"r{seq}", "session_id": session,
-               "seq": seq, "prev_hash": prev, "recorded_at": "2026-08-20T00:00:00.000Z",
-               "executor_id": "xnaut:selftest", "executor_version": "0", "kind": "tool_call",
-               "tool": {"name": "Bash", "args_hash": ev.digest(ev.ARGS_DOMAIN, b'{"cmd":"ls"}'),
-                        "args_size": 12}}
+        row = {
+            "schema_version": ev.RECORD_SCHEMA,
+            "record_id": f"r{seq}",
+            "session_id": session,
+            "seq": seq,
+            "prev_hash": prev,
+            "recorded_at": "2026-08-20T00:00:00.000Z",
+            "executor_id": "xnaut:selftest",
+            "executor_version": "0",
+            "kind": "tool_call",
+            "tool": {
+                "name": "Bash",
+                "args_hash": ev.digest(ev.ARGS_DOMAIN, b'{"cmd":"ls"}'),
+                "args_size": 12,
+            },
+        }
         row["hash"] = ev.record_hash(row)
         records.append(row)
         prev = row["hash"]
-    bundle = {"schema": BUNDLE_SCHEMA, "records": records, "checkpoints": [],
-              "signing_key": {"key_name": "K", "public_key_spki_b64": PINNED_SPKI_B64}}
+    bundle = {
+        "schema": BUNDLE_SCHEMA,
+        "records": records,
+        "checkpoints": [],
+        "signing_key": {"key_name": "K", "public_key_spki_b64": PINNED_SPKI_B64},
+    }
     report = verify_bundle(bundle)
     assert report["sessions"][session]["unattested_tail"] == 3, report
     assert report["checkpoints_verified"] == 0
     # No gateway documents is the ordinary case and stays a pass.
-    assert report["nautgate"] == {"present": False, "referenced": 0, "verified": 0,
-                                  "signatures_verified": 0, "awaiting_checkpoint": []}, report
+    assert report["nautgate"] == {
+        "present": False,
+        "referenced": 0,
+        "verified": 0,
+        "signatures_verified": 0,
+        "awaiting_checkpoint": [],
+    }, report
 
     selftest_nautgate(bundle, records, session)
 
     # Arguments are checked against the record that names them, or refused.
     bundle["arguments"] = {session: {records[0]["tool"]["args_hash"]: '{"cmd":"ls"}'}}
     assert verify_bundle(bundle)["arguments_verified"] == 1
-    bundle["arguments"] = {session: {records[0]["tool"]["args_hash"]: '{"cmd":"rm -rf /"}'}}
+    bundle["arguments"] = {
+        session: {records[0]["tool"]["args_hash"]: '{"cmd":"rm -rf /"}'}
+    }
     try:
         verify_bundle(bundle)
         raise AssertionError("substituted arguments were accepted")
@@ -526,7 +647,9 @@ def selftest() -> None:
         raise AssertionError("a mutated record verified")
     except VerificationError as exc:
         assert "record 2" in str(exc), exc
-    print("ok: RSA against a real HSM signature, forgeries refused, chain and arguments checked")
+    print(
+        "ok: RSA against a real HSM signature, forgeries refused, chain and arguments checked"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -550,32 +673,55 @@ def main(argv: list[str]) -> int:
 
     print("OK    the bundle verifies")
     print(f"      {report['records']} records in {len(report['sessions'])} session(s)")
-    print(f"      {report['checkpoints_verified']} checkpoint(s), every signature verified")
+    print(
+        f"      {report['checkpoints_verified']} checkpoint(s), every signature verified"
+    )
     print(f"      key {report['key_name']}  {report['public_key_fingerprint']}")
     print("      compare that fingerprint against the one we publish, or the key")
     print("      attestation in the bundle. This file cannot tell you it is ours.")
     gateway = report["nautgate"]
     if not gateway["present"]:
-        print("      no gateway evidence: this is xNAUT's own account, signed by one party")
+        print(
+            "      no gateway evidence: this is xNAUT's own account, signed by one party"
+        )
     else:
-        checked = ("every signature verified" if gateway["signatures_verified"] == gateway["verified"]
-                   else f"{gateway['signatures_verified']} of {gateway['verified']} signatures verified")
-        print(f"      {gateway['verified']} NautGate receipt(s) cross-referenced, {checked}")
+        checked = (
+            "every signature verified"
+            if gateway["signatures_verified"] == gateway["verified"]
+            else f"{gateway['signatures_verified']} of {gateway['verified']} signatures verified"
+        )
+        print(
+            f"      {gateway['verified']} NautGate receipt(s) cross-referenced, {checked}"
+        )
         if not gateway.get("signatures_checkable"):
-            print("      NOT checked: no NautGate public key in the bundle, so the gateway's")
-            print("      signatures were only structurally verified. Fetch /v1/audit/keys.")
+            print(
+                "      NOT checked: no NautGate public key in the bundle, so the gateway's"
+            )
+            print(
+                "      signatures were only structurally verified. Fetch /v1/audit/keys."
+            )
         for fingerprint in gateway["key_fingerprints"]:
             print(f"      gateway key {fingerprint}")
     if gateway["awaiting_checkpoint"]:
-        print(f"      {len(gateway['awaiting_checkpoint'])} routing receipt(s) referenced with no")
-        print("      bundle yet: NautGate exports a receipt once its checkpoint is signed")
+        print(
+            f"      {len(gateway['awaiting_checkpoint'])} routing receipt(s) referenced with no"
+        )
+        print(
+            "      bundle yet: NautGate exports a receipt once its checkpoint is signed"
+        )
     if report["arguments_included"]:
-        print(f"      {report['arguments_verified']} tool argument blob(s) match their records")
+        print(
+            f"      {report['arguments_verified']} tool argument blob(s) match their records"
+        )
     else:
         print("      redacted: no arguments included, and none are needed to verify")
     for session, state in report["sessions"].items():
         tail = state["unattested_tail"]
-        note = "all attested" if tail == 0 else f"{tail} record(s) past the last checkpoint, UNATTESTED"
+        note = (
+            "all attested"
+            if tail == 0
+            else f"{tail} record(s) past the last checkpoint, UNATTESTED"
+        )
         print(f"      {session}: {state['records']} records, {note}")
     return 0
 

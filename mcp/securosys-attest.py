@@ -63,11 +63,15 @@ NAUTGATE_API_KEY = os.getenv("NAUTGATE_API_KEY", "").strip()
 if sys.platform == "darwin":
     DATA_DIR = Path.home() / "Library" / "Application Support" / "xnaut"
 else:
-    DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "xnaut"
+    DATA_DIR = (
+        Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "xnaut"
+    )
 RECEIPTS = DATA_DIR / "attestations.jsonl"
 # Written by evidence.rs. XNAUT_EVIDENCE_DIR moves both, so a test run seals its
 # own log rather than the operator's.
-EVIDENCE_DIR = Path(os.getenv("XNAUT_EVIDENCE_DIR", "").strip() or (DATA_DIR / "evidence"))
+EVIDENCE_DIR = Path(
+    os.getenv("XNAUT_EVIDENCE_DIR", "").strip() or (DATA_DIR / "evidence")
+)
 EXECUTION_LOG = EVIDENCE_DIR / "execution.jsonl"
 CHECKPOINTS = EVIDENCE_DIR / "checkpoints.jsonl"
 
@@ -84,13 +88,17 @@ def endpoint() -> str:
 
 def tsb_sign(payload: bytes) -> str:
     """Sign raw bytes on the HSM. Returns base64 signature or raises RuntimeError."""
-    body = json.dumps({"signRequest": {
-        "payload": base64.b64encode(payload).decode("ascii"),
-        "payloadType": "UNSPECIFIED",
-        "signKeyName": KEY_NAME,
-        "signatureAlgorithm": ALGORITHM,
-        "signatureType": "DER",
-    }}).encode("utf-8")
+    body = json.dumps(
+        {
+            "signRequest": {
+                "payload": base64.b64encode(payload).decode("ascii"),
+                "payloadType": "UNSPECIFIED",
+                "signKeyName": KEY_NAME,
+                "signatureAlgorithm": ALGORITHM,
+                "signatureType": "DER",
+            }
+        }
+    ).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if API_KEY:
         headers["X-API-KEY"] = API_KEY
@@ -136,7 +144,16 @@ def digest_from(args: dict) -> tuple[str, bytes]:
     return raw.hex(), raw
 
 
-LINK_FIELDS = ("seq", "prev", "ts", "subject", "digest", "key_name", "algorithm", "signature")
+LINK_FIELDS = (
+    "seq",
+    "prev",
+    "ts",
+    "subject",
+    "digest",
+    "key_name",
+    "algorithm",
+    "signature",
+)
 GENESIS = "0" * 64
 LINK_DOMAIN = b"XNAUT-ATTEST-LINK-V1\x00"
 
@@ -198,10 +215,19 @@ def verify_chain(rows: list) -> dict:
         # Truncating the front of the file shows up here: the first surviving
         # receipt no longer claims seq 0 from genesis.
         if int(row["seq"]) != seq or row.get("prev") != prev:
-            return {"ok": False, "chained": seq, "unchained": len(rows) - len(chained),
-                    "broken_at": row.get("digest", "?")}
+            return {
+                "ok": False,
+                "chained": seq,
+                "unchained": len(rows) - len(chained),
+                "broken_at": row.get("digest", "?"),
+            }
         seq, prev = seq + 1, link_hash(row)
-    return {"ok": True, "chained": seq, "unchained": len(rows) - len(chained), "broken_at": None}
+    return {
+        "ok": True,
+        "chained": seq,
+        "unchained": len(rows) - len(chained),
+        "broken_at": None,
+    }
 
 
 def refuse_if_exposed() -> None:
@@ -223,7 +249,9 @@ def refuse_if_exposed() -> None:
 
 def do_attest(args: dict) -> dict:
     if not TSB_URL or not KEY_NAME:
-        raise RuntimeError("SECUROSYS_TSB_URL and SECUROSYS_KEY_NAME must be set in the plugin's env")
+        raise RuntimeError(
+            "SECUROSYS_TSB_URL and SECUROSYS_KEY_NAME must be set in the plugin's env"
+        )
     refuse_if_exposed()
     subject = str(args.get("subject") or "").strip()
     if not subject:
@@ -273,6 +301,7 @@ def publish(receipts_file: Path) -> None:
     rejected) is reported on stderr and never fails the attest.
     """
     import subprocess
+
     target = Path(PUBLISH_DIR) / "attest" / "receipts.json"
     rows = []
     for line in receipts_file.read_text(encoding="utf-8").splitlines():
@@ -284,18 +313,30 @@ def publish(receipts_file: Path) -> None:
     rows.sort(key=lambda r: r["ts"], reverse=True)
     target.write_text(json.dumps({"receipts": rows}, indent=2) + "\n", encoding="utf-8")
     git = ["git", "-C", PUBLISH_DIR]
-    subprocess.run([*git, "add", "attest/receipts.json"], check=True, capture_output=True)
+    subprocess.run(
+        [*git, "add", "attest/receipts.json"], check=True, capture_output=True
+    )
     diff = subprocess.run([*git, "diff", "--cached", "--quiet"], check=False)
     if diff.returncode == 0:
         return  # nothing new
-    subprocess.run([*git, "commit", "-m", f"feat(attest): publish {len(rows)} receipt(s)"],
-                   check=True, capture_output=True)
+    subprocess.run(
+        [*git, "commit", "-m", f"feat(attest): publish {len(rows)} receipt(s)"],
+        check=True,
+        capture_output=True,
+    )
     for remote in ("forgejo", "origin"):
-        has = subprocess.run([*git, "remote", "get-url", remote], capture_output=True, check=False)
+        has = subprocess.run(
+            [*git, "remote", "get-url", remote], capture_output=True, check=False
+        )
         if has.returncode == 0:
-            push = subprocess.run([*git, "push", remote], capture_output=True, check=False)
+            push = subprocess.run(
+                [*git, "push", remote], capture_output=True, check=False
+            )
             if push.returncode != 0:
-                print(f"publish: push to {remote} failed: {push.stderr.decode()[:200]}", file=sys.stderr)
+                print(
+                    f"publish: push to {remote} failed: {push.stderr.decode()[:200]}",
+                    file=sys.stderr,
+                )
 
 
 def do_receipts(args: dict) -> dict:
@@ -348,7 +389,9 @@ def sealed_state() -> tuple[dict, str | None]:
 def do_checkpoint(args: dict) -> dict:
     """Seal every session's unsealed records. One HSM call per session."""
     if not TSB_URL or not KEY_NAME:
-        raise RuntimeError("SECUROSYS_TSB_URL and SECUROSYS_KEY_NAME must be set in the plugin's env")
+        raise RuntimeError(
+            "SECUROSYS_TSB_URL and SECUROSYS_KEY_NAME must be set in the plugin's env"
+        )
     if not EXECUTION_LOG.is_file():
         raise RuntimeError(f"no execution record at {EXECUTION_LOG}")
     refuse_if_exposed()
@@ -369,11 +412,13 @@ def do_checkpoint(args: dict) -> dict:
         handle.seek(0)
         for line in handle.read().splitlines():
             try:
-                cp = (json.loads(line).get("checkpoint") or {})
+                cp = json.loads(line).get("checkpoint") or {}
             except ValueError:
                 continue
             if cp.get("session_id") is not None:
-                upto[cp["session_id"]] = max(upto.get(cp["session_id"], -1), int(cp.get("last_seq", -1)))
+                upto[cp["session_id"]] = max(
+                    upto.get(cp["session_id"], -1), int(cp.get("last_seq", -1))
+                )
         for session, rows in ev.sessions(records).items():
             if only and session != only:
                 continue
@@ -398,13 +443,23 @@ def do_checkpoint(args: dict) -> dict:
             handle.write(json.dumps(row) + "\n")
             handle.flush()
             previous = checkpoint_hash
-            sealed.append({"session_id": session, "first_seq": checkpoint["first_seq"],
-                           "last_seq": checkpoint["last_seq"],
-                           "records": checkpoint["record_count"],
-                           "merkle_root": checkpoint["merkle_root"],
-                           "checkpoint_sha256": checkpoint_hash})
-    return {"sealed": sealed, "skipped": skipped, "records_verified": len(records),
-            "log": str(EXECUTION_LOG), "checkpoints": str(CHECKPOINTS)}
+            sealed.append(
+                {
+                    "session_id": session,
+                    "first_seq": checkpoint["first_seq"],
+                    "last_seq": checkpoint["last_seq"],
+                    "records": checkpoint["record_count"],
+                    "merkle_root": checkpoint["merkle_root"],
+                    "checkpoint_sha256": checkpoint_hash,
+                }
+            )
+    return {
+        "sealed": sealed,
+        "skipped": skipped,
+        "records_verified": len(records),
+        "log": str(EXECUTION_LOG),
+        "checkpoints": str(CHECKPOINTS),
+    }
 
 
 def _tsb_headers() -> dict:
@@ -427,9 +482,15 @@ def _spki_from_attributes(label: str) -> str:
     # uses) and POST /v1/key/attributes {"label"} (the KB's gotcha list). Try
     # the GET, fall back to the POST; a 404 on both means the key is absent.
     attempts = [
-        urllib.request.Request(f"{_tsb_base()}/key/{label}/attributes", headers=_tsb_headers()),
-        urllib.request.Request(f"{_tsb_base()}/key/attributes", data=json.dumps({"label": label}).encode("utf-8"),
-                               headers=_tsb_headers(), method="POST"),
+        urllib.request.Request(
+            f"{_tsb_base()}/key/{label}/attributes", headers=_tsb_headers()
+        ),
+        urllib.request.Request(
+            f"{_tsb_base()}/key/attributes",
+            data=json.dumps({"label": label}).encode("utf-8"),
+            headers=_tsb_headers(),
+            method="POST",
+        ),
     ]
     data = None
     last = None
@@ -449,11 +510,11 @@ def _spki_from_attributes(label: str) -> str:
     end = xml.find("</public_key>")
     if start < 0 or end < 0:
         raise RuntimeError("TSB returned no public key for " + label)
-    return xml[start + len('<public_key format="base64">'):end].strip()
+    return xml[start + len('<public_key format="base64">') : end].strip()
 
 
 def _pem(spki_b64: str) -> str:
-    body = "\n".join(spki_b64[i:i + 64] for i in range(0, len(spki_b64), 64))
+    body = "\n".join(spki_b64[i : i + 64] for i in range(0, len(spki_b64), 64))
     return f"-----BEGIN PUBLIC KEY-----\n{body}\n-----END PUBLIC KEY-----\n"
 
 
@@ -480,24 +541,36 @@ def tsb_create_key(label: str, key_size: int = 4096) -> dict:
         spki = _spki_from_attributes(label)
         created = False
     except RuntimeError:
-        body = json.dumps({
-            "label": label,
-            "algorithm": "RSA",
-            "keySize": int(key_size),
-            "attributes": {
-                "sign": True, "decrypt": False, "unwrap": False, "derive": False,
-                "extractable": False, "sensitive": True, "modifiable": False,
-                "destroyable": True, "copyable": False,
-            },
-            "policy": None,
-        }).encode("utf-8")
-        req = urllib.request.Request(f"{_tsb_base()}/key", data=body, headers=_tsb_headers(), method="POST")
+        body = json.dumps(
+            {
+                "label": label,
+                "algorithm": "RSA",
+                "keySize": int(key_size),
+                "attributes": {
+                    "sign": True,
+                    "decrypt": False,
+                    "unwrap": False,
+                    "derive": False,
+                    "extractable": False,
+                    "sensitive": True,
+                    "modifiable": False,
+                    "destroyable": True,
+                    "copyable": False,
+                },
+                "policy": None,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{_tsb_base()}/key", data=body, headers=_tsb_headers(), method="POST"
+        )
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:300]
-            raise RuntimeError(f"TSB refused to create {label}: HTTP {exc.code} {detail}") from None
+            raise RuntimeError(
+                f"TSB refused to create {label}: HTTP {exc.code} {detail}"
+            ) from None
         except urllib.error.URLError as exc:
             raise RuntimeError(f"cannot reach TSB: {exc.reason}") from None
         spki = _spki_from_attributes(label)
@@ -542,7 +615,9 @@ def tsb_public_key() -> dict:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"TSB: cannot read key {KEY_NAME}: HTTP {exc.code}") from None
+        raise RuntimeError(
+            f"TSB: cannot read key {KEY_NAME}: HTTP {exc.code}"
+        ) from None
     except urllib.error.URLError as exc:
         raise RuntimeError(f"cannot reach TSB: {exc.reason}") from None
     xml = data.get("xml") or ""
@@ -550,12 +625,13 @@ def tsb_public_key() -> dict:
     end = xml.find("</public_key>")
     if start < 0 or end < 0:
         raise RuntimeError("TSB returned no public key for " + KEY_NAME)
-    spki = xml[start + len('<public_key format="base64">'):end].strip()
+    spki = xml[start + len('<public_key format="base64">') : end].strip()
     return {
         "key_name": KEY_NAME,
         "algorithm": ALGORITHM,
         "public_key_spki_b64": spki,
-        "fingerprint_sha256": "sha256:" + hashlib.sha256(base64.b64decode(spki)).hexdigest(),
+        "fingerprint_sha256": "sha256:"
+        + hashlib.sha256(base64.b64decode(spki)).hexdigest(),
         "hsm_attestation_xml": xml,
         "hsm_attestation_signature": data.get("xmlSignature"),
         "hsm_attestation_key_name": data.get("attestationKeyName"),
@@ -563,8 +639,9 @@ def tsb_public_key() -> dict:
 
 
 def nautgate_get(base: str, path: str):
-    req = urllib.request.Request(f"{base}{path}",
-                                 headers={"Authorization": f"Bearer {NAUTGATE_API_KEY}"})
+    req = urllib.request.Request(
+        f"{base}{path}", headers={"Authorization": f"Bearer {NAUTGATE_API_KEY}"}
+    )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -582,7 +659,7 @@ def nautgate_bundles(records: list) -> tuple[list, list, dict]:
         return [], [], {}
     wanted, seen = [], set()
     for record in records:
-        receipt_id = ((record.get("nautgate") or {}).get("receipt_id"))
+        receipt_id = (record.get("nautgate") or {}).get("receipt_id")
         if isinstance(receipt_id, str) and receipt_id and receipt_id not in seen:
             seen.add(receipt_id)
             wanted.append(receipt_id)
@@ -598,9 +675,13 @@ def nautgate_bundles(records: list) -> tuple[list, list, dict]:
             if exc.code in (404, 409):
                 pending.append(receipt_id)
                 continue
-            raise RuntimeError(f"NautGate refused {receipt_id}: {exc.code} {exc.reason}") from exc
+            raise RuntimeError(
+                f"NautGate refused {receipt_id}: {exc.code} {exc.reason}"
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"NautGate at {base} is unreachable: {exc.reason}") from exc
+            raise RuntimeError(
+                f"NautGate at {base} is unreachable: {exc.reason}"
+            ) from exc
 
     # The signing keys go in the bundle too, or the auditor can check the
     # gateway's structure and not its signatures, which is the half that
@@ -611,8 +692,11 @@ def nautgate_bundles(records: list) -> tuple[list, list, dict]:
             keys = nautgate_get(base, "/v1/audit/keys")
         except (urllib.error.HTTPError, urllib.error.URLError) as exc:
             keys = {}
-            print(f"nautgate: could not fetch /v1/audit/keys ({exc}); the bundle will "
-                  "verify structurally but its signatures cannot be checked", file=sys.stderr)
+            print(
+                f"nautgate: could not fetch /v1/audit/keys ({exc}); the bundle will "
+                "verify structurally but its signatures cannot be checked",
+                file=sys.stderr,
+            )
     return bundles, pending, keys
 
 
@@ -691,12 +775,16 @@ def do_export(args: dict) -> dict:
     if gateway_keys:
         bundle["nautgate_keys"] = gateway_keys
 
-    out = Path(str(args.get("path") or "").strip() or (EVIDENCE_DIR / "bundle.json")).expanduser()
+    out = Path(
+        str(args.get("path") or "").strip() or (EVIDENCE_DIR / "bundle.json")
+    ).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    sealed = sum(1 for r in records
-                 if isinstance((r.get("tool") or {}).get("args_hash"), str)) - sum(
-                     len(v) for v in arguments.values())
+    out.write_text(
+        json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    sealed = sum(
+        1 for r in records if isinstance((r.get("tool") or {}).get("args_hash"), str)
+    ) - sum(len(v) for v in arguments.values())
     return {
         "path": str(out),
         "records": len(records),
@@ -724,27 +812,47 @@ def do_verify_evidence(args: dict) -> dict:
     by_session = ev.sessions(records)
     checked, previous = [], None
     if CHECKPOINTS.is_file():
-        for number, line in enumerate(CHECKPOINTS.read_text(encoding="utf-8").splitlines(), 1):
+        for number, line in enumerate(
+            CHECKPOINTS.read_text(encoding="utf-8").splitlines(), 1
+        ):
             if not line.strip():
                 continue
             row = json.loads(line)
             cp = row["checkpoint"]
-            rows = [r for r in by_session.get(cp["session_id"], [])
-                    if cp["first_seq"] <= int(r["seq"]) <= cp["last_seq"]]
+            rows = [
+                r
+                for r in by_session.get(cp["session_id"], [])
+                if cp["first_seq"] <= int(r["seq"]) <= cp["last_seq"]
+            ]
             if len(rows) != cp["record_count"]:
-                raise RuntimeError(f"checkpoint {number}: covers {cp['record_count']} records, "
-                                   f"{len(rows)} are in the log")
+                raise RuntimeError(
+                    f"checkpoint {number}: covers {cp['record_count']} records, "
+                    f"{len(rows)} are in the log"
+                )
             if ev.merkle_root([r["hash"] for r in rows]).hex() != cp["merkle_root"]:
-                raise RuntimeError(f"checkpoint {number}: records do not produce its Merkle root")
+                raise RuntimeError(
+                    f"checkpoint {number}: records do not produce its Merkle root"
+                )
             if cp.get("previous_checkpoint_sha256") != previous:
-                raise RuntimeError(f"checkpoint {number}: does not link to the checkpoint before it")
+                raise RuntimeError(
+                    f"checkpoint {number}: does not link to the checkpoint before it"
+                )
             payload = ev.checkpoint_payload(cp)
-            if "sha256:" + hashlib.sha256(payload).hexdigest() != row["checkpoint_sha256"]:
-                raise RuntimeError(f"checkpoint {number}: does not hash to its own hash")
+            if (
+                "sha256:" + hashlib.sha256(payload).hexdigest()
+                != row["checkpoint_sha256"]
+            ):
+                raise RuntimeError(
+                    f"checkpoint {number}: does not hash to its own hash"
+                )
             previous = row["checkpoint_sha256"]
             checked.append(cp["checkpoint_id"])
-    return {"ok": True, "records": len(records), "sessions": heads,
-            "checkpoints_verified": len(checked)}
+    return {
+        "ok": True,
+        "records": len(records),
+        "sessions": heads,
+        "checkpoints_verified": len(checked),
+    }
 
 
 TOOLS = [
@@ -760,8 +868,14 @@ TOOLS = [
             "properties": {
                 "subject": {"type": "string", "description": "what is being attested"},
                 "digest": {"type": "string", "description": "hex digest to sign"},
-                "text": {"type": "string", "description": "text to sha256 then sign (alternative to digest)"},
-                "meta": {"type": "object", "description": "extra context stored with the receipt"},
+                "text": {
+                    "type": "string",
+                    "description": "text to sha256 then sign (alternative to digest)",
+                },
+                "meta": {
+                    "type": "object",
+                    "description": "extra context stored with the receipt",
+                },
             },
             "required": ["subject"],
         },
@@ -776,7 +890,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "session_id": {"type": "string", "description": "seal only this session (default: all)"},
+                "session_id": {
+                    "type": "string",
+                    "description": "seal only this session (default: all)",
+                },
             },
         },
     },
@@ -799,9 +916,18 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "where to write it (default: evidence/bundle.json)"},
-                "session_id": {"type": "string", "description": "export only this session (default: all)"},
-                "include_arguments": {"type": "boolean", "description": "embed tool arguments (default false)"},
+                "path": {
+                    "type": "string",
+                    "description": "where to write it (default: evidence/bundle.json)",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "export only this session (default: all)",
+                },
+                "include_arguments": {
+                    "type": "boolean",
+                    "description": "embed tool arguments (default false)",
+                },
             },
         },
     },
@@ -817,8 +943,14 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "label": {"type": "string", "description": "the key's label in TSB, e.g. NAUTGATE_AUDIT_KEY"},
-                "key_size": {"type": "integer", "description": "RSA modulus bits, default 4096"},
+                "label": {
+                    "type": "string",
+                    "description": "the key's label in TSB, e.g. NAUTGATE_AUDIT_KEY",
+                },
+                "key_size": {
+                    "type": "integer",
+                    "description": "RSA modulus bits, default 4096",
+                },
             },
             "required": ["label"],
         },
@@ -861,7 +993,9 @@ def handle(method: str, params: dict):
             elif name == "verify_evidence":
                 result = do_verify_evidence(args)
             elif name == "create_key":
-                result = tsb_create_key(args.get("label", ""), int(args.get("key_size") or 4096))
+                result = tsb_create_key(
+                    args.get("label", ""), int(args.get("key_size") or 4096)
+                )
             else:
                 raise ValueError(f"unknown tool: {name}")
             return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
@@ -885,8 +1019,14 @@ def main() -> None:
             continue
         result = handle(msg.get("method", ""), msg.get("params") or {})
         if result is None:
-            reply = {"jsonrpc": "2.0", "id": msg["id"],
-                     "error": {"code": -32601, "message": f"method not found: {msg.get('method')}"}}
+            reply = {
+                "jsonrpc": "2.0",
+                "id": msg["id"],
+                "error": {
+                    "code": -32601,
+                    "message": f"method not found: {msg.get('method')}",
+                },
+            }
         else:
             reply = {"jsonrpc": "2.0", "id": msg["id"], "result": result}
         sys.stdout.write(json.dumps(reply) + "\n")
@@ -902,28 +1042,46 @@ def selftest_join(write) -> None:
 
     receipts = {}
     for index in (0, 1):
-        receipt = {"schema": "dev.nautgate.decision-receipt/v1",
-                   "receipt_id": f"rcpt-{index}", "decision_id": f"dec-{index}",
-                   "sequence": index}
+        receipt = {
+            "schema": "dev.nautgate.decision-receipt/v1",
+            "receipt_id": f"rcpt-{index}",
+            "decision_id": f"dec-{index}",
+            "sequence": index,
+        }
         digest = ngev.receipt_hash(receipt)
         sibling = bytes(32)
         root = ngev.merkle_parent(ngev.merkle_leaf(digest), sibling)
         receipts[receipt["receipt_id"]] = {
             "bundle_schema": "dev.nautgate.evidence-bundle/v1",
-            "receipt": receipt, "receipt_hash": digest.hex(), "leaf_index": 0,
+            "receipt": receipt,
+            "receipt_hash": digest.hex(),
+            "leaf_index": 0,
             "merkle_proof": [{"hash": sibling.hex(), "side": "right"}],
-            "checkpoint": {"schema": "dev.nautgate.audit-checkpoint/v1",
-                           "checkpoint_id": f"ngcp-{index}", "merkle_root": root.hex(),
-                           "first_sequence": 0, "last_sequence": 1, "receipt_count": 2,
-                           "signing_key_id": "K"},
-            "signature": {"algorithm": "SHA256_WITH_RSA", "encoding": "base64-der",
-                          "value": "", "key_id": "K", "public_key_fingerprint": "sha256:ng"},
+            "checkpoint": {
+                "schema": "dev.nautgate.audit-checkpoint/v1",
+                "checkpoint_id": f"ngcp-{index}",
+                "merkle_root": root.hex(),
+                "first_sequence": 0,
+                "last_sequence": 1,
+                "receipt_count": 2,
+                "signing_key_id": "K",
+            },
+            "signature": {
+                "algorithm": "SHA256_WITH_RSA",
+                "encoding": "base64-der",
+                "value": "",
+                "key_id": "K",
+                "public_key_fingerprint": "sha256:ng",
+            },
         }
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/v1/audit/keys":
-                body, code = {"schema": "dev.nautgate.signing-key-history/v1", "keys": []}, 200
+                body, code = (
+                    {"schema": "dev.nautgate.signing-key-history/v1", "keys": []},
+                    200,
+                )
             elif self.path.startswith("/v1/audit/receipts/"):
                 wanted = self.path.split("/")[4]
                 body = receipts.get(wanted)
@@ -954,8 +1112,11 @@ def selftest_join(write) -> None:
         row.pop("hash")
         row["hash"] = ev.record_hash(row)
         rows[-1] = json.dumps(row)
-        rows.append(json.dumps(chained_after(row, {"decision_id": "dec-9",
-                                                   "receipt_id": "rcpt-9"})))
+        rows.append(
+            json.dumps(
+                chained_after(row, {"decision_id": "dec-9", "receipt_id": "rcpt-9"})
+            )
+        )
         EXECUTION_LOG.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
         exported = do_export({"session_id": "gw"})
@@ -968,7 +1129,9 @@ def selftest_join(write) -> None:
         report = verify_module.verify_bundle(bundle)
         gateway = report["nautgate"]
         assert gateway["verified"] == 1 and gateway["referenced"] == 2, gateway
-        assert gateway["signatures_verified"] == 0 and not gateway["signatures_checkable"], gateway
+        assert (
+            gateway["signatures_verified"] == 0 and not gateway["signatures_checkable"]
+        ), gateway
         assert gateway["awaiting_checkpoint"] == ["rcpt-9"], gateway
     finally:
         NAUTGATE_URL, NAUTGATE_API_KEY = "", ""
@@ -977,11 +1140,18 @@ def selftest_join(write) -> None:
 
 
 def chained_after(previous: dict, nautgate: dict) -> dict:
-    row = {"schema_version": ev.RECORD_SCHEMA, "record_id": "gw-next",
-           "session_id": previous["session_id"], "seq": previous["seq"] + 1,
-           "prev_hash": previous["hash"], "recorded_at": "2026-08-20T00:00:09.000Z",
-           "executor_id": previous["executor_id"], "executor_version": "0",
-           "kind": "model_call", "nautgate": nautgate}
+    row = {
+        "schema_version": ev.RECORD_SCHEMA,
+        "record_id": "gw-next",
+        "session_id": previous["session_id"],
+        "seq": previous["seq"] + 1,
+        "prev_hash": previous["hash"],
+        "recorded_at": "2026-08-20T00:00:09.000Z",
+        "executor_id": previous["executor_id"],
+        "executor_version": "0",
+        "kind": "model_call",
+        "nautgate": nautgate,
+    }
     row["hash"] = ev.record_hash(row)
     return row
 
@@ -1027,10 +1197,18 @@ def selftest() -> None:
         EVIDENCE_DIR.mkdir(parents=True)
         scratch.chmod(0o700)
         TSB_URL, KEY_NAME = "https://example.invalid/tsb", "selftest-key"
-        tsb_sign = lambda payload: (signed.append(payload), base64.b64encode(payload[:8]).decode())[1]
-        tsb_public_key = lambda: {"key_name": KEY_NAME, "algorithm": ALGORITHM,
-                                  "public_key_spki_b64": xv.PINNED_SPKI_B64,
-                                  "fingerprint_sha256": xv.PINNED_FINGERPRINT}
+
+        def tsb_sign(payload):
+            signed.append(payload)
+            return base64.b64encode(payload[:8]).decode()
+
+        def tsb_public_key():
+            return {
+                "key_name": KEY_NAME,
+                "algorithm": ALGORITHM,
+                "public_key_spki_b64": xv.PINNED_SPKI_B64,
+                "fingerprint_sha256": xv.PINNED_FINGERPRINT,
+            }
 
         def write(session, count, kind="tool_call"):
             rows = ev.read_records(EXECUTION_LOG) if EXECUTION_LOG.exists() else []
@@ -1039,11 +1217,17 @@ def selftest() -> None:
             prev = head[-1]["hash"] if head else None
             with EXECUTION_LOG.open("a", encoding="utf-8") as f:
                 for _ in range(count):
-                    row = {"schema_version": ev.RECORD_SCHEMA, "record_id": str(seq) + session,
-                           "session_id": session, "seq": seq, "prev_hash": prev,
-                           "recorded_at": f"2026-08-20T00:00:0{seq % 10}.000Z",
-                           "executor_id": "xnaut:selftest", "executor_version": "0",
-                           "kind": kind}
+                    row = {
+                        "schema_version": ev.RECORD_SCHEMA,
+                        "record_id": str(seq) + session,
+                        "session_id": session,
+                        "seq": seq,
+                        "prev_hash": prev,
+                        "recorded_at": f"2026-08-20T00:00:0{seq % 10}.000Z",
+                        "executor_id": "xnaut:selftest",
+                        "executor_version": "0",
+                        "kind": kind,
+                    }
                     row["hash"] = ev.record_hash(row)
                     f.write(json.dumps(row) + "\n")
                     seq, prev = seq + 1, row["hash"]
@@ -1073,7 +1257,9 @@ def selftest() -> None:
         assert len(bundle["records"]) == 6 and len(bundle["checkpoints"]) == 3
         try:
             xv.verify_bundle(bundle)
-            raise AssertionError("the offline verifier accepted a signature the HSM never made")
+            raise AssertionError(
+                "the offline verifier accepted a signature the HSM never made"
+            )
         except xv.VerificationError as exc:
             assert "signature does not verify" in str(exc), exc
         # Without checkpoints the same bundle is internally consistent, and the
@@ -1117,6 +1303,13 @@ if __name__ == "__main__":
         selftest()
     elif len(sys.argv) >= 3 and sys.argv[1] == "create-key":
         # Terminal use: SECUROSYS_TSB_URL and a credential in the env.
-        print(json.dumps(tsb_create_key(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 4096), indent=2))
+        print(
+            json.dumps(
+                tsb_create_key(
+                    sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 4096
+                ),
+                indent=2,
+            )
+        )
     else:
         main()

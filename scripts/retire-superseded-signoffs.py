@@ -114,7 +114,9 @@ def main():
                 json.dump(retire(job), fh, indent=2)
 
     verb = "would retire: " if args.dry_run else "retired: "
-    print(f"{verb}{len(tickets)} tickets, {sum(tickets.values())} escalations on them, {jobs} jobs in the jury store")
+    print(
+        f"{verb}{len(tickets)} tickets, {sum(tickets.values())} escalations on them, {jobs} jobs in the jury store"
+    )
     for key, count in tickets.most_common():
         print(f"   {key:<16} {count}")
     if args.dry_run:

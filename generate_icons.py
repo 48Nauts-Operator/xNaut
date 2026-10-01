@@ -18,7 +18,7 @@ def create_gradient_circle_icon(size, output_path):
         output_path: Path where to save the PNG file
     """
     # Create RGBA image (with alpha channel)
-    img = Image.new('RGBA', size, (0, 0, 0, 0))
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     # Calculate circle dimensions with some padding
@@ -39,32 +39,29 @@ def create_gradient_circle_icon(size, output_path):
 
         color = (r, g, b, 255)  # Fully opaque
 
-        bbox = [
-            center_x - i,
-            center_y - i,
-            center_x + i,
-            center_y + i
-        ]
+        bbox = [center_x - i, center_y - i, center_x + i, center_y + i]
         draw.ellipse(bbox, fill=color)
 
     # Save as PNG with RGBA
-    img.save(output_path, 'PNG')
+    img.save(output_path, "PNG")
     print(f"Created {output_path} ({size[0]}x{size[1]}) - RGBA format")
+
 
 def main():
     # Define the icons directory
-    icons_dir = '/home/jarvis/projects/NautCode/xnowd/src-tauri/icons'
+    icons_dir = "/home/jarvis/projects/NautCode/xnowd/src-tauri/icons"
 
     # Create icons directory if it doesn't exist
     os.makedirs(icons_dir, exist_ok=True)
 
     # Generate the required icons
-    create_gradient_circle_icon((32, 32), os.path.join(icons_dir, '32x32.png'))
-    create_gradient_circle_icon((128, 128), os.path.join(icons_dir, '128x128.png'))
-    create_gradient_circle_icon((256, 256), os.path.join(icons_dir, '128x128@2x.png'))
+    create_gradient_circle_icon((32, 32), os.path.join(icons_dir, "32x32.png"))
+    create_gradient_circle_icon((128, 128), os.path.join(icons_dir, "128x128.png"))
+    create_gradient_circle_icon((256, 256), os.path.join(icons_dir, "128x128@2x.png"))
 
     print("\nAll icons generated successfully!")
     print("Icons are in RGBA format with alpha channel transparency.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

@@ -15,7 +15,13 @@ class BridgeTests(unittest.TestCase):
     def test_auth_and_origin_are_checked_before_capabilities_or_websocket(self):
         with TestClient(create_app(TOKEN, SyntheticEngine(), synthetic=True)) as client:
             self.assertEqual(client.get("/voice/v1/capabilities").status_code, 401)
-            self.assertEqual(client.get("/voice/v1/capabilities", headers={**AUTH, "Origin": "https://example.com"}).status_code, 401)
+            self.assertEqual(
+                client.get(
+                    "/voice/v1/capabilities",
+                    headers={**AUTH, "Origin": "https://example.com"},
+                ).status_code,
+                401,
+            )
             caps = client.get("/voice/v1/capabilities", headers=AUTH).json()
             self.assertTrue(caps["synthetic"])
             self.assertFalse(caps["streaming_input"])
@@ -31,21 +37,38 @@ class BridgeTests(unittest.TestCase):
                 assert payload == "A complete answer."
                 yield struct.pack("<3h", 0, -32768, 32767)
                 yield struct.pack("<2h", 11, 12)
+
         with TestClient(create_app(TOKEN, Engine())) as client:
             with client.websocket_connect("/voice/v1/session", headers=AUTH) as ws:
                 request_id = str(uuid.uuid4())
-                ws.send_json({"type": "synthesize", "id": request_id, "text": "A complete answer."})
+                ws.send_json(
+                    {
+                        "type": "synthesize",
+                        "id": request_id,
+                        "text": "A complete answer.",
+                    }
+                )
                 self.assertEqual(ws.receive_json()["type"], "ready")
-                self.assertEqual(unpack_audio(ws.receive_bytes(), request_id, 0), struct.pack("<3h", 0, -32768, 32767))
-                self.assertEqual(unpack_audio(ws.receive_bytes(), request_id, 1), struct.pack("<2h", 11, 12))
-                self.assertEqual(ws.receive_json(), {"type": "done", "id": request_id, "frames": 2})
+                self.assertEqual(
+                    unpack_audio(ws.receive_bytes(), request_id, 0),
+                    struct.pack("<3h", 0, -32768, 32767),
+                )
+                self.assertEqual(
+                    unpack_audio(ws.receive_bytes(), request_id, 1),
+                    struct.pack("<2h", 11, 12),
+                )
+                self.assertEqual(
+                    ws.receive_json(), {"type": "done", "id": request_id, "frames": 2}
+                )
 
     def test_transcription_commits_once_and_never_calls_synthesis(self):
         calls = []
+
         class Engine:
             def run(self, operation, payload, cancelled):
                 calls.append((operation, len(payload)))
                 yield {"type": "transcript.final", "text": "Please open the note."}
+
         with TestClient(create_app(TOKEN, Engine())) as client:
             with client.websocket_connect("/voice/v1/session", headers=AUTH) as ws:
                 request_id = str(uuid.uuid4())
@@ -63,11 +86,14 @@ class BridgeTests(unittest.TestCase):
                 with client.websocket_connect("/voice/v1/session", headers=AUTH) as ws:
                     request_id = str(uuid.uuid4())
                     ws.send_json({"type": "transcribe", "id": request_id})
-                    ws.send_bytes(pack_audio(wrong_id or request_id, sequence, b"\0\0" * 4800))
+                    ws.send_bytes(
+                        pack_audio(wrong_id or request_id, sequence, b"\0\0" * 4800)
+                    )
                     self.assertIn("out-of-order", ws.receive_json()["message"])
 
     def test_cancel_discards_engine_blocks_and_keeps_compute_exclusive(self):
         retired = threading.Event()
+
         class SlowEngine:
             def run(self, operation, payload, cancelled):
                 yield b"\0\0" * 512
@@ -75,14 +101,25 @@ class BridgeTests(unittest.TestCase):
                 # Simulate the buffered blocks observed in the real Qwen probe.
                 yield b"\x01\0" * 512
                 retired.set()
+
         with TestClient(create_app(TOKEN, SlowEngine())) as client:
             with client.websocket_connect("/voice/v1/session", headers=AUTH) as first:
                 request_id = str(uuid.uuid4())
-                first.send_json({"type": "synthesize", "id": request_id, "text": "first"})
+                first.send_json(
+                    {"type": "synthesize", "id": request_id, "text": "first"}
+                )
                 self.assertEqual(first.receive_json()["type"], "ready")
                 first.receive_bytes()
-                with client.websocket_connect("/voice/v1/session", headers=AUTH) as second:
-                    second.send_json({"type": "synthesize", "id": str(uuid.uuid4()), "text": "second"})
+                with client.websocket_connect(
+                    "/voice/v1/session", headers=AUTH
+                ) as second:
+                    second.send_json(
+                        {
+                            "type": "synthesize",
+                            "id": str(uuid.uuid4()),
+                            "text": "second",
+                        }
+                    )
                     self.assertIn("busy", second.receive_json()["message"])
                 first.send_json({"type": "cancel", "id": request_id})
                 with self.assertRaises(WebSocketDisconnect):
@@ -94,10 +131,13 @@ class BridgeTests(unittest.TestCase):
         class EmptyEngine:
             def run(self, *args):
                 return iter(())
+
         with TestClient(create_app(TOKEN, EmptyEngine())) as client:
             for text in ["", "界" * 1500, "valid but engine produces nothing"]:
                 with client.websocket_connect("/voice/v1/session", headers=AUTH) as ws:
-                    ws.send_json({"type": "synthesize", "id": str(uuid.uuid4()), "text": text})
+                    ws.send_json(
+                        {"type": "synthesize", "id": str(uuid.uuid4()), "text": text}
+                    )
                     event = ws.receive_json()
                     if event["type"] == "ready":
                         event = ws.receive_json()

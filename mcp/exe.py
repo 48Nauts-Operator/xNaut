@@ -48,15 +48,15 @@ TIMEOUT_S = 35
 STATUS_HELP = {
     400: "bad request: empty body or invalid command syntax (unbalanced quotes?)",
     401: "invalid token: malformed, expired, or signed with a key exe.dev does not know "
-         "(check `ssh exe.dev ssh-key list`)",
+    "(check `ssh exe.dev ssh-key list`)",
     403: "the token's --cmds list does not allow this command; subcommands must be listed "
-         "explicitly ('ssh-key' does not grant 'ssh-key list')",
+    "explicitly ('ssh-key' does not grant 'ssh-key list')",
     404: "unknown command (see `ssh exe.dev help`)",
     413: "request too large: the 64KB body limit",
     422: "the command ran and failed (non-zero exit); the message below is its output",
     429: "rate limited: the limit is per SSH key, use separate keys for independent workloads",
     504: "timed out: /exec kills a command at 30s. Background it on the VM "
-         "(nohup ... &) and poll instead of waiting here.",
+    "(nohup ... &) and poll instead of waiting here.",
 }
 
 
@@ -70,8 +70,10 @@ def describe(code: int, reason: str, body: str) -> str:
 def run(command: str) -> str:
     """POST one exe.dev command. The body IS the command; the reply IS its output."""
     if not API_KEY:
-        raise RuntimeError("set EXE_API_KEY in the plugin's config "
-                           "(ssh exe.dev ssh-key generate-api-key --exp=30d)")
+        raise RuntimeError(
+            "set EXE_API_KEY in the plugin's config "
+            "(ssh exe.dev ssh-key generate-api-key --exp=30d)"
+        )
     command = command.strip()
     if not command:
         raise ValueError("empty command")
@@ -187,8 +189,14 @@ def main() -> None:
             continue
         result = handle(msg.get("method", ""), msg.get("params") or {})
         if result is None:
-            reply = {"jsonrpc": "2.0", "id": msg["id"],
-                     "error": {"code": -32601, "message": f"method not found: {msg.get('method')}"}}
+            reply = {
+                "jsonrpc": "2.0",
+                "id": msg["id"],
+                "error": {
+                    "code": -32601,
+                    "message": f"method not found: {msg.get('method')}",
+                },
+            }
         else:
             reply = {"jsonrpc": "2.0", "id": msg["id"], "result": result}
         sys.stdout.write(json.dumps(reply) + "\n")
@@ -226,8 +234,10 @@ def selftest() -> None:
     assert "--cmds" in describe(403, "Forbidden", "")
     assert "boom" in describe(422, "Unprocessable", "boom")
     assert "999" in describe(999, "Weird", "")
-    print("ok: shell metacharacters reach the VM intact, VM names cannot smuggle "
-          "a second command, and each exe.dev status names its cause")
+    print(
+        "ok: shell metacharacters reach the VM intact, VM names cannot smuggle "
+        "a second command, and each exe.dev status names its cause"
+    )
 
 
 if __name__ == "__main__":

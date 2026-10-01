@@ -6,11 +6,36 @@ on:
 
 jobs:
   ci:
-    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/python-ci.yml@main
-    with:
-      python-version: "3.11"
-      run-mypy: false
-      working-directory: .
+    name: Python checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install ruff==0.15.12 pytest==8.4.2 httpx==0.28.1
+          python -m pip install -r companions/local-voice/requirements.txt
+      - name: Ensure Git LFS for repository transfer tests
+        run: |
+          if ! git lfs version; then
+            if [ "$(id -u)" = 0 ]; then
+              apt-get update && apt-get install -y git-lfs
+            else
+              sudo apt-get update && sudo apt-get install -y git-lfs
+            fi
+          fi
+          git lfs version
+      - name: Ruff lint
+        run: ruff check .
+      - name: Ruff format
+        run: ruff format --check .
+      - name: Python tests
+        run: |
+          python -m pytest -q
+          python mcp/test_attest_chain.py
+          python mcp/securosys-attest.py --selftest
 
   incident:
     needs: ci
@@ -23,7 +48,7 @@ jobs:
 
   ai-review:
     if: github.event_name == 'pull_request'
-    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@main
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@729a3b0648503dd800ba6cdc100bbfdab341a567
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
