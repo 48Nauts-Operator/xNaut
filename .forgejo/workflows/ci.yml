@@ -48,7 +48,7 @@ jobs:
 
   ai-review:
     if: github.event_name == 'pull_request'
-    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@0f91f2715a767116635e7d71d3968223d4fd4dc5
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@d14e25b6691267a9d07f0b2093882c35bc324803
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -60,4 +60,5 @@ jobs:
       model:       ${{ vars.AI_MODEL || 'qwen3.8-27b-mlx' }}
       max-tokens:  3000
       request-timeout-seconds: 900
+      local-prompt-format: qwen3-non-thinking
       focus:       "bugs, security, async/concurrency mistakes, unclear naming, missing tests"
