@@ -48,7 +48,7 @@ jobs:
 
   ai-review:
     if: github.event_name == 'pull_request'
-    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@729a3b0648503dd800ba6cdc100bbfdab341a567
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@0f91f2715a767116635e7d71d3968223d4fd4dc5
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -57,6 +57,7 @@ jobs:
     with:
       provider:    ${{ vars.AI_PROVIDER || 'local' }}
       lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://cand0riacstudio:1238' }}
-      model:       ${{ vars.AI_MODEL || 'qwen/qwen3.5-35b-a3b' }}
+      model:       ${{ vars.AI_MODEL || 'qwen3.8-27b-mlx' }}
       max-tokens:  3000
+      request-timeout-seconds: 900
       focus:       "bugs, security, async/concurrency mistakes, unclear naming, missing tests"
