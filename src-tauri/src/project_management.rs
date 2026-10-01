@@ -3107,6 +3107,15 @@ mod tests {
         // André, 2026-09-08: a consistent field, an event with previous and
         // new on change, empty allowed for Unassigned.
         let repo = scratch_repo("release-field", "XNAUT-900");
+        // Keep the cleanup regression inside an owned container: even a
+        // mistaken parent removal must never reach the machine's temp root.
+        let sandbox = repo.with_extension("isolation");
+        std::fs::create_dir(&sandbox).unwrap();
+        let isolated_repo = sandbox.join("repo");
+        std::fs::rename(&repo, &isolated_repo).unwrap();
+        let repo = isolated_repo;
+        let neighbor = sandbox.join("unrelated-fixture");
+        std::fs::write(&neighbor, "keep").unwrap();
         let before = read_json::<TicketRecord>(&find_ticket_path(&repo, "XNAUT-900").unwrap()).unwrap();
         assert_eq!(before.release, "", "unassigned by default");
         let events = |repo: &Path| -> Vec<serde_json::Value> {
@@ -3138,7 +3147,9 @@ mod tests {
         let tagged = ticket_tag_in(&repo, "XNAUT-900", "area:jury", false).unwrap();
         assert_eq!(tagged.tags, vec!["area:jury"]);
         assert_eq!(ticket_tag_in(&repo, "XNAUT-900", "area:jury", true).unwrap().tags.len(), 0);
-        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+        std::fs::remove_dir_all(&repo).unwrap();
+        assert_eq!(std::fs::read_to_string(&neighbor).unwrap(), "keep");
+        std::fs::remove_dir_all(sandbox).unwrap();
     }
 
     #[test]
