@@ -39,16 +39,17 @@ jobs:
 
   incident:
     needs: ci
-    if: failure()
-    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_auto-incident.yml@main
+    if: always()
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_auto-incident.yml@80036ad180e5dfe6b2be329fc4954df5460eb7e4
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
     with:
       assignees: jarvis
+      upstream-result: ${{ needs.ci.result }}
 
   ai-review:
     if: github.event_name == 'pull_request'
-    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@d14e25b6691267a9d07f0b2093882c35bc324803
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@80036ad180e5dfe6b2be329fc4954df5460eb7e4
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
