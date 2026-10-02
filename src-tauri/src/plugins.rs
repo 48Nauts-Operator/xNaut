@@ -1204,12 +1204,19 @@ pub async fn verify(plugin: &Plugin) -> Result<String, String> {
                 .collect();
             tokio::task::spawn_blocking(move || {
                 use std::process::{Command, Stdio};
-                if crate::agents::resolve_binary(&command).is_none() {
-                    return Err(format!("{command} is not on the PATH"));
-                }
-                let mut child = Command::new(&command)
+                let binary = crate::agents::resolve_binary(&command)
+                    .ok_or_else(|| format!("{command} is not on the PATH"))?;
+                let mut process = Command::new(binary);
+                process
                     .args(&args)
-                    .envs(env)
+                    .envs(env);
+                // Finder's PATH can omit Homebrew. Resolving npx above but
+                // spawning its bare name lost that resolution; its env-based
+                // node shebang also needs the same PATH as a chat MCP session.
+                if let Some(path) = crate::agents::runtime_path_public() {
+                    process.env("PATH", path);
+                }
+                let mut child = process
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -2357,6 +2364,45 @@ mod tests {
         assert!(!err.contains("No such file"), "probe used the raw arg: {err}");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_probe_resolves_the_launcher_and_its_shebang_with_a_gui_path() {
+        // Run in a child test process: changing HOME/PATH in cargo's shared
+        // process would race unrelated tests and touch the owner's runtime.
+        const CHILD: &str = "XNAUT_PLUGIN_GUI_PATH_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let mut plugin = stdio("runtime-probe");
+            plugin.command = "xnaut-test-launcher".into();
+            plugin.args.clear();
+            let error = verify(&plugin).await.unwrap_err();
+            assert!(error.contains("runtime-path-probe-ok"), "{error}");
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("xnaut-plugin-path-{}", uuid::Uuid::new_v4()));
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for (name, body) in [
+            ("xnaut-test-launcher", "#!/usr/bin/env xnaut-test-runtime\n"),
+            ("xnaut-test-runtime", "#!/bin/sh\necho runtime-path-probe-ok >&2\nexit 42\n"),
+        ] {
+            let path = bin.join(name);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "plugins::tests::the_probe_resolves_the_launcher_and_its_shebang_with_a_gui_path", "--nocapture"])
+            .env(CHILD, "1")
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+        assert!(output.status.success(), "{}\n{}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+
     #[test]
     fn modern_codex_and_claude_receive_http_plugins() {
         let http = seed().into_iter().find(|p| p.id == "linear").unwrap();
@@ -2413,4 +2459,3 @@ mod tests {
         assert_eq!(env["TOKEN"], "secret");
     }
 }
-
