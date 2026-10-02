@@ -144,9 +144,11 @@ test('creating a project lands in its workspace on the Work tab', async ({ page 
 
   await page.evaluate(() => window.xnautSidebarNavigate('new-project'));
   await expect(page.locator('.rpnp')).toBeVisible();
-  // Name and path both gate the button (right-pane-newproject.js `sync`).
+  // A new project needs a name, local path and explicit repository destination.
   await page.locator('.rpnp-name').fill('Fresh');
   await page.locator('.rpnp-path').fill('/tmp/fresh');
+  await expect(page.locator('.rpnp-create')).toBeDisabled();
+  await page.locator('.rpnp-url').fill('ssh://git@forge.example/team/fresh.git');
   await expect(page.locator('.rpnp-create')).toBeEnabled();
   await page.locator('.rpnp-create').click();
 
