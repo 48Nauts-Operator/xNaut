@@ -2162,6 +2162,14 @@ pub mod cli {
         let out = exec(dir, &["warm-up"])?;
         let body = text(&out);
         if !out.status.success() {
+            // The CLI returns nonzero for an existing live sandbox. A retry
+            // must retain it (and its unpublished files), not stop/recreate it.
+            // Saved state alone is insufficient: prove the guest still answers.
+            if body.trim().starts_with("gitvm: already warm")
+                && ssh(dir, "true").is_ok_and(|probe| probe.status.success())
+            {
+                return public_url(dir);
+            }
             return Err(format!("gitvm warm-up failed: {}", body.trim()));
         }
         if let Some(url) = extract_url(&body) {
