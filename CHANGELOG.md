@@ -2,6 +2,25 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.29.0] - 2026-10-02
+
+### Added
+- Repository-backed agent delivery: reports, notebook snapshots, images and video publish to isolated task branches, with Git LFS media and retryable uploads.
+- Independent task review and optional guarded merging with separate project permissions, CI/branch protection checks and Jev evidence judgments. Both permissions remain off by default.
+- Personal notes, checklists and conversation summaries beside Chat and Agent conversations, with native persistence and repository publication.
+- Jev tool-selection decisions, bounded tool discovery, native Astra Responses, and agent tools for scoped repository reads, worktree creation and evidenced task launches.
+
+### Fixed
+- Fresh exe.dev/GitVM worker provisioning, repository-scoped credentials and optional private-network access, including userspace networking on images without TUN/systemd.
+- Warm sandbox reuse, background SSH startup, unique worker session identities, durable handbacks and Forgejo review-comment recovery.
+- Chat history across previews, typed voice continuity, adopted-session opening, model-label refresh and Projects navigation with an empty cache.
+
+### Release verification
+- Application acceptance: 1,518 Rust tests, 21 Python tests, 10 focused browser tests, 25 native UI cases and six explicit live integrations passed before packaging.
+- Real worker publication, media readback, upload recovery, notebook publication, independent review, refusal gates and a controlled protected-branch merge were exercised.
+- Automatic merging requires a configured reachable Jev System One endpoint in addition to project permission; unavailable or uncertain judgments stop merging. No endpoint or credentials are bundled.
+- Release installers are staged as a draft and verified before publication. Homebrew updates only after publication.
+
 ## [1.28.2] - 2026-09-29
 
 ### Fixed

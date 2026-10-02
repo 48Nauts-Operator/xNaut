@@ -13,7 +13,7 @@
 
 **A native terminal for working with a fleet of coding agents.**
 
-[![Version](https://img.shields.io/badge/version-1.10.1-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
+[![Version](https://img.shields.io/badge/version-1.29.0-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -258,7 +258,9 @@ xNAUT uses reusable GitHub Actions workflows from
 - `cargo audit` -- security vulnerabilities
 
 Releases are built and Apple-notarized by `.github/workflows/release.yml` on a
-`v*` tag. Every PR must pass all checks before merge.
+`v*` tag and staged in a draft release. After the downloaded installers pass
+verification, the draft is published and the Homebrew update is dispatched with
+`update_homebrew_only=true` on that tag. Every PR must pass all checks before merge.
 
 ---
 

@@ -37,7 +37,7 @@ jobs:
     # purpose: bash syntax in a Windows step is what broke the v1.13.1 build leg
     # before it compiled anything.
     permissions:
-      contents: read
+      contents: write # Allows downloading the staged draft before publication.
     timeout-minutes: 20
 
     steps:

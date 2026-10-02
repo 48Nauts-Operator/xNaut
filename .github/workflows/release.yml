@@ -9,9 +9,15 @@ on:
   # was deleting and re-pushing the tag, which turned one stuck run into three
   # dead ones. Pick the tag as the ref and this runs the same pipeline.
   workflow_dispatch:
+    inputs:
+      update_homebrew_only:
+        description: Update Homebrew after the verified draft release is published
+        type: boolean
+        default: false
 
 jobs:
   build-and-release:
+    if: ${{ !inputs.update_homebrew_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -262,6 +268,8 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Verify the downloaded installers before promoting this draft.
+          draft: true
           files: |
             src-tauri/target/xNAUT-*.dmg
             src-tauri/target/xNAUT-*.msi
@@ -294,6 +302,11 @@ jobs:
           if [ -z "$TAP_TOKEN" ]; then
             echo "ok=false" >> "$GITHUB_OUTPUT"
             echo "::warning::TAP_TOKEN is not set — skipping the cask update. The release is unaffected."
+            exit 0
+          fi
+          if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)" != "false" ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "Release is still a draft; Homebrew will update after publication."
             exit 0
           fi
           # This job now runs even when a sibling matrix leg fails, so it must
@@ -374,7 +387,9 @@ jobs:
   windows-install-smoke:
     name: Windows install smoke
     needs: build-and-release
-    if: always() && !cancelled()
+    if: always() && !cancelled() && !inputs.update_homebrew_only
+    permissions:
+      contents: write # Draft releases require repository push access.
     uses: ./.github/workflows/windows-smoke.yml
     with:
       tag: ${{ github.ref_name }}
