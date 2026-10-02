@@ -2075,14 +2075,24 @@ pub mod cli {
             format!("{port}:localhost:{port}"),
             format!("root@{}", guest.ip),
         ]);
-        let out = std::process::Command::new("ssh")
+        // `ssh -f` leaves a live daemon. Pipes captured by output() remain
+        // open in that daemon, so waiting for their EOF wedges task launch.
+        // A private file retains startup errors without waiting on the tunnel.
+        use std::os::unix::fs::OpenOptionsExt;
+        let log = std::env::temp_dir().join(format!("xnaut-forward-{}.log", uuid::Uuid::new_v4()));
+        let stderr = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(&log).map_err(|e| format!("forward log: {e}"))?;
+        let status = std::process::Command::new("ssh")
             .args(&args)
-            .output()
-            .map_err(|e| format!("ssh: {e}"))?;
-        if out.status.success() {
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .status();
+        let err = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_file(&log);
+        if status.map_err(|e| format!("ssh: {e}"))?.success() {
             return Ok(());
         }
-        let err = String::from_utf8_lossy(&out.stderr);
         if err.contains("remote port forwarding failed") {
             return Ok(()); // already forwarded by an earlier spin-up
         }
