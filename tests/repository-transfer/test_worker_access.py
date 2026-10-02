@@ -29,6 +29,97 @@ class WorkerTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_userspace_route_uses_local_connect_proxy_and_scoped_ssh_command(self):
+        requests = []
+
+        class Connect(socketserver.StreamRequestHandler):
+            def handle(self):
+                requests.append(self.rfile.readline().decode().strip())
+                while self.rfile.readline().strip():
+                    pass
+                self.wfile.write(b"HTTP/1.0 200 Connection established\r\n\r\n")
+
+        server = socketserver.TCPServer(("127.0.0.1", 0), Connect)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.object(access.Path, "home", return_value=self.root):
+                directory = access.network_dir()
+                directory.mkdir(parents=True)
+                (directory / "userspace.json").write_text(
+                    json.dumps({"port": server.server_address[1]})
+                )
+                self.assertTrue(access.reachable("missing-tailnet-host.invalid", 2222))
+                _, _, ssh = access.identity(
+                    "ssh://git@missing-tailnet-host.invalid:2222/team/repo.git"
+                )
+                proxy = next(v for v in ssh if v.startswith("ProxyCommand="))
+                self.assertIn("tailscaled.sock", proxy)
+                self.assertIn("nc %h %p", proxy)
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(
+                    requests[0].split()[:2],
+                    ["CONNECT", "missing-tailnet-host.invalid:2222"],
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_userspace_daemon_is_private_idempotent_and_has_no_enrollment_secret(self):
+        with (
+            patch.object(access.Path, "home", return_value=self.root),
+            patch.object(access.shutil, "which", return_value="/usr/sbin/tailscaled"),
+            patch.object(access.subprocess, "Popen") as popen,
+            patch.object(
+                access,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, '{"BackendState":"NeedsLogin"}', ""
+                ),
+            ),
+        ):
+            popen.return_value.poll.return_value = None
+            access.start_userspace_network()
+            access.start_userspace_network()
+            popen.assert_called_once()
+            args = popen.call_args.args[0]
+            self.assertIn("--tun=userspace-networking", args)
+            self.assertTrue(
+                any(
+                    v.startswith("--outbound-http-proxy-listen=127.0.0.1:")
+                    for v in args
+                )
+            )
+            self.assertFalse(any("auth" in v for v in args))
+            self.assertEqual(access.network_dir().stat().st_mode & 0o777, 0o700)
+            self.assertEqual(
+                (access.network_dir() / "userspace.json").stat().st_mode & 0o777, 0o600
+            )
+
+    def test_linux_without_systemd_or_tun_starts_userspace_network(self):
+        statuses = [
+            subprocess.CompletedProcess([], 1, "", "daemon missing"),
+            subprocess.CompletedProcess([], 0, '{"BackendState":"Running"}', ""),
+        ]
+        with (
+            patch.object(access, "reachable", side_effect=[False, True]),
+            patch.object(access, "userspace_config", return_value=None),
+            patch.object(
+                access.shutil,
+                "which",
+                side_effect=lambda binary: (
+                    None if binary == "systemctl" else "/usr/bin/" + binary
+                ),
+            ),
+            patch.object(access.sys, "platform", "linux"),
+            patch.object(access.Path, "exists", return_value=False),
+            patch.object(access, "run", side_effect=statuses),
+            patch.object(access, "start_userspace_network") as start,
+        ):
+            access.network("private.example", 2222, {"auth_key": "fixture-secret"})
+            start.assert_called_once()
+
     def test_fresh_workers_projects_and_repeated_tasks_have_isolated_stable_keys(self):
         remote = "ssh://git@forge.example:2222/team/one.git"
         with patch.object(access.Path, "home", return_value=self.root / "worker-a"):

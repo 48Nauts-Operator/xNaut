@@ -3424,7 +3424,10 @@ print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase}))
             let argv = launch_argv(&session, &workdir, &staged);
             let mut viewport = std::process::Command::new(&argv[0])
                 .args(&argv[1..])
-                .stdin(std::process::Stdio::null())
+                // Match the native terminal contract when run over headless SSH.
+                // TERM=dumb makes tmux exit before creating the session.
+                .env("TERM", "xterm-256color")
+                .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
@@ -3472,7 +3475,8 @@ print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase}))
             let adopt = attach_argv(&session);
             let attached = std::process::Command::new(&adopt[0])
                 .args(&adopt[1..])
-                .stdin(std::process::Stdio::null())
+                .env("TERM", "xterm-256color")
+                .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()

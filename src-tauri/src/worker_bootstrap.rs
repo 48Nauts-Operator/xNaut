@@ -60,6 +60,7 @@ impl Target {
 pub struct Access {
     pub remote: String,
     pub ssh_command: String,
+    pub http_proxy: Option<String>,
 }
 
 fn failure(code: &str) -> String {
@@ -148,6 +149,7 @@ pub async fn prepare(
     }
     Ok(Access {
         remote: worker_remote,
+        http_proxy: verified["http_proxy"].as_str().map(String::from),
         ssh_command: verified["ssh_command"]
             .as_str()
             .ok_or("Worker SSH setup is missing")?

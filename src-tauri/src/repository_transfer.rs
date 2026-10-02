@@ -471,7 +471,9 @@ pub fn stage(transfer: &Transfer, access: &crate::worker_bootstrap::Access) -> R
         ],
     )?;
     // A fresh directory per run, with real history. Never delete an earlier run.
-    let command = format!("set -e; export GIT_TERMINAL_PROMPT=0; test ! -e {dir}; mkdir -p {parent}; git -c core.sshCommand={ssh} clone --no-checkout -- {remote} {dir}; cd {dir}; git config --local core.sshCommand {ssh}; git config --local user.name xNAUT; git config --local user.email xnaut@localhost; git lfs install --local; git fetch origin {input}; test \"$(git rev-parse FETCH_HEAD)\" = {sha}; git checkout -b {branch} {sha}; git push --dry-run origin HEAD:refs/heads/{branch}; test ! -L .xnaut; test ! -L .xnaut/runs; mkdir -p {artifacts}",
+    let proxy_config = access.http_proxy.as_ref().map(|proxy|
+        format!("git config --local http.proxy {}; ", quote(proxy))).unwrap_or_default();
+    let command = format!("set -e; export GIT_TERMINAL_PROMPT=0; test ! -e {dir}; mkdir -p {parent}; git -c core.sshCommand={ssh} clone --no-checkout -- {remote} {dir}; cd {dir}; git config --local core.sshCommand {ssh}; {proxy_config}git config --local user.name xNAUT; git config --local user.email xnaut@localhost; git lfs install --local; git fetch origin {input}; test \"$(git rev-parse FETCH_HEAD)\" = {sha}; git checkout -b {branch} {sha}; git push --dry-run origin HEAD:refs/heads/{branch}; test ! -L .xnaut; test ! -L .xnaut/runs; mkdir -p {artifacts}",
         dir=quote(&transfer.workdir), parent=quote(Path::new(&transfer.workdir).parent().ok_or("Invalid worker directory")?.to_str().ok_or("Invalid worker directory")?), remote=quote(&access.remote), ssh=quote(&access.ssh_command), input=quote(&input), sha=quote(&transfer.source_sha), branch=quote(&transfer.branch), artifacts=quote(&transfer.artifacts));
     transfer.worker.command(&command)?;
     let metadata = serde_json::to_string_pretty(transfer).map_err(|e| e.to_string())?;
