@@ -408,7 +408,10 @@ pub async fn ensure_repository_comment(
                     .ok_or("Published comment has no URL".into());
             }
         }
-        if rows.is_empty() {
+        // Forgejo's issueGetComments returns the complete list and ignores
+        // page/limit (unlike GitHub). Waiting for an empty next page repeated
+        // the same existing review 100 times and prevented the merge comment.
+        if host.kind == "forgejo" || rows.len() < 100 {
             return add_issue_comment_for(host, owner, repo, number, body).await;
         }
     }
@@ -1497,6 +1500,37 @@ mod tests {
             let first = ensure_pr(&config, "app", "xnaut/runs/fixture", "main", "Results", "Evidence").await.unwrap();
             let second = ensure_pr(&config, "app", "xnaut/runs/fixture", "main", "Results", "Evidence").await.unwrap();
             assert_eq!(first, second); assert_eq!(rows.lock().unwrap().len(), 1);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn review_comments_follow_forge_pagination_and_recover_without_duplicates() {
+        use axum::{extract::{Query, State}, Json, Router, routing::get};
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Fixture { paginated: bool, rows: Arc<Mutex<Vec<Value>>> }
+        async fn listing(State(f): State<Fixture>, Query(query): Query<std::collections::HashMap<String, String>>) -> Json<Value> {
+            let rows = f.rows.lock().unwrap();
+            let page: usize = query.get("page").unwrap().parse().unwrap();
+            Json(if f.paginated { json!(rows.iter().skip((page - 1) * 100).take(100).collect::<Vec<_>>()) } else { json!(*rows) })
+        }
+        async fn create(State(f): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
+            let record = json!({"body":body["body"],"html_url":"https://example.test/comment/106"});
+            f.rows.lock().unwrap().push(record.clone()); Json(record)
+        }
+        for kind in ["forgejo", "github"] {
+            let rows = Arc::new(Mutex::new((0..105).map(|n| json!({"body":format!("Existing comment {n}")})).collect::<Vec<_>>()));
+            let route = if kind == "forgejo" { "/api/v1/repos/team/app/issues/7/comments" } else { "/repos/team/app/issues/7/comments" };
+            let router = Router::new().route(route, get(listing).post(create)).with_state(Fixture { paginated: kind == "github", rows: rows.clone() });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+            let config = host(kind, &format!("http://{address}"));
+            for _ in 0..2 {
+                assert_eq!(ensure_repository_comment(&config, "team", "app", 7, "<!-- guard:run -->", "<!-- guard:run -->\nResult").await.unwrap(), "https://example.test/comment/106");
+            }
+            assert_eq!(rows.lock().unwrap().len(), 106);
             server.abort();
         }
     }

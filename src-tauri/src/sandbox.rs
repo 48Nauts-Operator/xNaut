@@ -317,6 +317,14 @@ Set this profile's execution to local to run it here now.",
         crate::zellij::session_name(&format!("xnaut-{}-{run}", handle.trim()))
     }
 
+    /// Repository workers use tmux, which accepts the full run identity.
+    /// Zellij's short-name cap can truncate a long handle's ULID to "01",
+    /// attaching a new task to a different run instead of starting it.
+    pub fn repository_session_name(handle: &str, run_id: &str) -> String {
+        let id: String = run_id.chars().filter(char::is_ascii_alphanumeric).flat_map(char::to_lowercase).collect();
+        format!("{}{id}", session_prefix(handle))
+    }
+
     /// The prefix every session belonging to one agent starts with.
     ///
     /// Built the same way as `session_name`, so truncation of a long handle
@@ -1706,6 +1714,17 @@ run `gitvm stop` there by hand if it is still up",
             );
             let listing = format!("{name}\nxnaut-someone-else-1\n{}\n", session_name("b", "z"));
             assert_eq!(sessions_for_handle(&listing, "Builder"), vec![name]);
+        }
+
+        #[test]
+        fn repository_tmux_sessions_keep_the_entire_run_identity() {
+            let first = repository_session_name("acceptancegitvm", "01M3XYK11A97DVDZXFE4R7H21S");
+            let second = repository_session_name("acceptancegitvm", "01M3XYK11A97DVDZXFE4R7H21T");
+            assert_ne!(first, second);
+            assert!(first.ends_with("01m3xyk11a97dvdzxfe4r7h21s"));
+            let legacy = session_name("acceptancegitvm", "01M3XYK11A97DVDZXFE4R7H21S");
+            let listing = format!("{first}\n{second}\n{legacy}\nxnaut-other-run\n");
+            assert_eq!(sessions_for_handle(&listing, "acceptancegitvm"), vec![first, second, legacy]);
         }
 
         /// Isolation granularity: an environment is keyed by agent AND

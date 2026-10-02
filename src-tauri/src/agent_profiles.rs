@@ -2335,7 +2335,7 @@ async fn launch_on_exe_dev(
     let prompt = Some(format!("{}{}", prompt.unwrap_or_default(), crate::repository_transfer::instructions(&transfer)));
     let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
     let workdir = transfer.workdir.clone();
-    let session = exe::session_name(&profile.handle, &run_id);
+    let session = crate::sandbox::launch_env::repository_session_name(&profile.handle, &run_id);
     let script = crate::repository_transfer::run_script(&transfer, &command, &crate::sandbox::launch_env::onboarding_seed(&cfg));
     crate::repository_transfer::save(&transfer)?;
     let staged = {
@@ -2489,7 +2489,7 @@ async fn launch_on_gitvm(
     transfer.workdir = format!("/workspace/.xnaut-runs/{run_id}");
     let prompt = Some(format!("{}{}", prompt.unwrap_or_default(), crate::repository_transfer::instructions(&transfer)));
     let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
-    let session = crate::sandbox::launch_env::session_name(&profile.handle, &run_id);
+    let session = crate::sandbox::launch_env::repository_session_name(&profile.handle, &run_id);
     let script = crate::repository_transfer::run_script(&transfer, &command, &crate::sandbox::launch_env::onboarding_seed(&cfg));
     crate::repository_transfer::save(&transfer)?;
 
