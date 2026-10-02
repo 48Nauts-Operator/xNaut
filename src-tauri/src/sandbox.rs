@@ -2097,10 +2097,15 @@ pub mod cli {
         // `ssh -f` leaves a live daemon. Pipes captured by output() remain
         // open in that daemon, so waiting for their EOF wedges task launch.
         // A private file retains startup errors without waiting on the tunnel.
-        use std::os::unix::fs::OpenOptionsExt;
         let log = std::env::temp_dir().join(format!("xnaut-forward-{}.log", uuid::Uuid::new_v4()));
-        let stderr = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
-            .open(&log).map_err(|e| format!("forward log: {e}"))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let stderr = options.open(&log).map_err(|e| format!("forward log: {e}"))?;
         let status = std::process::Command::new("ssh")
             .args(&args)
             .stdin(std::process::Stdio::null())
