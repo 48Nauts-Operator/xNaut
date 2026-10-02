@@ -2,7 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.29.0] - 2026-10-02
+## [1.29.1] - 2026-10-02
 
 ### Added
 - Repository-backed agent delivery: reports, notebook snapshots, images and video publish to isolated task branches, with Git LFS media and retryable uploads.
@@ -16,6 +16,7 @@ All notable changes to xNAUT are documented in this file.
 - Chat history across previews, typed voice continuity, adopted-session opening, model-label refresh and Projects navigation with an empty cache.
 
 ### Release verification
+- The unpublished 1.29.0 packaging attempt was rejected before jobs started because of a duplicate workflow permissions entry. The tag is retained; 1.29.1 corrects the workflow.
 - Application acceptance: 1,518 Rust tests, 21 Python tests, 10 focused browser tests, 25 native UI cases and six explicit live integrations passed before packaging.
 - Real worker publication, media readback, upload recovery, notebook publication, independent review, refusal gates and a controlled protected-branch merge were exercised.
 - Automatic merging requires a configured reachable Jev System One endpoint in addition to project permission; unavailable or uncertain judgments stop merging. No endpoint or credentials are bundled.

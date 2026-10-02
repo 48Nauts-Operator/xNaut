@@ -393,8 +393,6 @@ jobs:
     uses: ./.github/workflows/windows-smoke.yml
     with:
       tag: ${{ github.ref_name }}
-    permissions:
-      contents: read
 
   # The website shows live download/release counts fetched from the GitHub API,
   # and falls back to numbers baked into the markup when that fetch fails
