@@ -593,6 +593,7 @@ pub async fn chat_send_tools(
             &[],
             canvas_key,
             Some((&app, &request_id)),
+            &[],
         )
         .await
         {

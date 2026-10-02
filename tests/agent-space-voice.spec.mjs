@@ -105,7 +105,28 @@ test('Agent Space STT stays pinned to its draft when browsing another agent', as
   await expect(page.getByLabel('Message @nautbot')).toHaveValue('Draft. More words.');
 });
 
-test('spoken build requests keep the existing workspace confirmation', async ({ page }) => {
+test('spoken requests retain a repository from before the recent conversation window', async ({ page }) => {
+  await page.evaluate(() => {
+    const messages = [{ id:'repo',role:'user',text:'/tmp/vynl-voice-project' }];
+    for (let i=0;i<40;i++) messages.push({id:'old-'+i,role:i%2?'agent':'user',text:'Design discussion '+i});
+    window.xnautConversationStorage.setItem('xnaut-agent-threads:v1',JSON.stringify({nautbot:[{
+      id:'voice-repo',title:'Vynl',created_at:'2026-10-02',updated_at:'2026-10-02',messages,
+    }]}));
+    window.xnautOpenAgentSpace('nautbot','voice-repo');
+  });
+  await start(page);
+  await emit(page, [
+    {kind:'commit',role:'user',text:'Launch the two developers we discussed.',turn:0},
+    {kind:'dispatch',turn:0,epoch:0},
+  ]);
+  await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='voice_live_result').length)).toBe(1);
+  const call=await page.evaluate(()=>window.__xnautInvokes.find(i=>i.cmd==='agent_chat_turn').args);
+  expect(call.repositoryContext).toContain('/tmp/vynl-voice-project');
+  expect(call.messages.some(m=>m.content.includes('/tmp/vynl-voice-project'))).toBe(false);
+  await expect(page.locator('.as-build')).toHaveCount(0);
+});
+
+test('spoken build requests for an unknown repository keep the location picker', async ({ page }) => {
   await page.evaluate(() => { window.__xnautStub.agent_chat_turn = 'BUILD-REQUEST\nThis needs a coding session.'; });
   await openAgent(page);
   await start(page);

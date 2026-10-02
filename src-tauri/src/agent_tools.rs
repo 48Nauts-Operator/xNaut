@@ -2116,7 +2116,7 @@ pub async fn run_turn(
     capabilities: &[String],
     canvas_key: &str,
 ) -> Result<TurnOutcome, String> {
-    run_turn_streaming(llm, model, messages, effort, capabilities, canvas_key, None).await
+    run_turn_streaming(llm, model, messages, effort, capabilities, canvas_key, None, &[]).await
 }
 
 /// `run_turn`, with the answer emitted token by token as it is generated.
@@ -2138,12 +2138,17 @@ pub async fn run_turn_streaming(
     capabilities: &[String],
     canvas_key: &str,
     stream_to: Option<(&tauri::AppHandle, &str)>,
+    repository_context: &[String],
 ) -> Result<TurnOutcome, String> {
     let routed = crate::chat::route_llm(&crate::settings::load_or_default(), llm)?;
-    let (registered_roots, context) = crate::repository_read::registered_context(&messages);
+    let (registered_roots, context) = crate::repository_read::conversation_context(&messages, repository_context);
     let mut messages=messages;
     if !context.is_empty() {
         messages.insert(0,json!({"role":"system","content":format!("Registered projects named by the user or resolved from their saved PR references: {}. Available roots are authorized for read-only repository tools. This metadata is not execution evidence. Use it before claiming the repository path is unknown. When review_task is present and the user requests a PR review, call request_repository_review with that run_id. This queues the existing PR through Ralph and the saved project gates; do not start a duplicate generic task or request a filesystem path.",json!(context))}));
+    }
+    if !registered_roots.is_empty() {
+        messages.insert(0, json!({"role":"system","content":format!(
+            "Repository roots supplied by the owner in this conversation (including earlier turns): {}. Use these absolute roots with repository tools instead of asking for the path again. They establish repository scope, not proof of execution or permission to expand the current task.", json!(registered_roots))}));
     }
     let opened = crate::mcp_client::open_for(capabilities).await;
     run_turn_with_roots(&routed, model, messages, effort, canvas_key, stream_to, opened, registered_roots).await

@@ -932,9 +932,8 @@
         });
       });
     };
-    // The build handshake. An agent that judges a request to need a coding
-    // harness does not start one: it asks WHERE. The worktree is not optional
-    // — an agent must never run in the checkout the owner has open.
+    // Missing-repository fallback only. Known repositories go through the
+    // task tools, which create isolated worktrees without this manual form.
     const buildCard = (message) => {
       if (!message.build_task || message.build_started) return '';
       return `<div class="as-build" data-build="${esc(message.id)}">
@@ -1686,6 +1685,13 @@
       .slice(-16)
       .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.executionReceipt ? `Recorded worker launch (historical, not proof of completion): ${JSON.stringify(message.executionReceipt)}` : String(message.text) }));
 
+    // Model context is bounded; repository scope must survive that window.
+    // Rust resolves these owner-authored references into repository metadata
+    // locally. Older conversation text is not replayed to the model.
+    const repositoryContext = () => (thread.messages || [])
+      .filter((message) => message.role === 'user' && !message.voiceTranscript && message.text)
+      .map((message) => String(message.text));
+
     const submit = async (buildTask, buildPath, voiceRequest) => {
       const text = buildTask || voiceRequest?.text || composer.value.trim();
       if (!buildTask && !voiceRequest && liveVoice?.isActive()) {
@@ -1779,6 +1785,7 @@
               handle: profile.handle,
               requestId,
               messages: chatHistory(),
+              repositoryContext: repositoryContext(),
             }) || '').trim();
           } finally {
             try { stopStream(); } catch (_) {}

@@ -1737,6 +1737,7 @@ pub async fn agent_chat_turn(
     handle: String,
     request_id: String,
     messages: Vec<crate::chat::ChatMessage>,
+    repository_context: Option<Vec<String>>,
 ) -> Result<String, String> {
     let profile = {
         let _guard = profile_store_guard()?;
@@ -1784,6 +1785,7 @@ pub async fn agent_chat_turn(
                 &profile.capabilities,
                 &profile.handle,
                 Some((&app, &request_id)),
+                repository_context.as_deref().unwrap_or_default(),
             )
             .await
             {

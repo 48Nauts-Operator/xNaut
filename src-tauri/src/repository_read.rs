@@ -66,12 +66,29 @@ pub fn roots(messages: &[Value]) -> Vec<PathBuf> {
     }
     roots
 }
-/// Resolve user-named projects from xNaut's authoritative local registry.
-/// Assistant/tool text cannot grant access, and ambiguous names grant none.
-pub fn registered_context(messages: &[Value]) -> (Vec<PathBuf>, Vec<Value>) {
-    let entries = registered_entries();
-    let reviews = crate::repository_review::chat_references(messages);
-    context_with_reviews(messages, &entries, &reviews)
+/// The UI bounds recent model history, but keeps the owner's repository
+/// references from the whole thread. Resolve them locally; never replay old
+/// instructions or accept assistant/tool messages as new repository scope.
+pub(crate) fn conversation_context(
+    messages: &[Value],
+    earlier_user_texts: &[String],
+) -> (Vec<PathBuf>, Vec<Value>) {
+    let mut scope = messages.to_vec();
+    scope.extend(earlier_user_texts.iter().map(|text| json!({"role":"user","content":text})));
+    let reviews = crate::repository_review::chat_references(&scope);
+    conversation_context_in(&scope, &registered_entries(), &reviews)
+}
+
+fn conversation_context_in(
+    scope: &[Value],
+    entries: &[(String, String, String)],
+    reviews: &[crate::repository_transfer::Transfer],
+) -> (Vec<PathBuf>, Vec<Value>) {
+    let (mut allowed, context) = context_with_reviews(scope, entries, reviews);
+    for root in roots(scope) {
+        if !allowed.contains(&root) { allowed.push(root); }
+    }
+    (allowed, context)
 }
 pub(crate) fn context_with_reviews(
     messages: &[Value],
@@ -341,6 +358,26 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn repository_scope_survives_bounded_history_without_trusting_assistant_paths() {
+        let tmp = Scratch::new();
+        let owner_root = tmp.path().join("owner-repo");
+        let invented_root = tmp.path().join("assistant-repo");
+        std::fs::create_dir_all(owner_root.join(".git")).unwrap();
+        std::fs::create_dir_all(invented_root.join(".git")).unwrap();
+        let recent = vec![
+            json!({"role":"assistant","content":invented_root}),
+            json!({"role":"user","content":"Please launch the two developers now"}),
+        ];
+        assert!(conversation_context_in(&recent, &[], &[]).0.is_empty());
+        let mut scope = recent;
+        scope.push(json!({"role":"user","content":owner_root}));
+        let (allowed, _) = conversation_context_in(&scope, &[], &[]);
+        assert_eq!(allowed, vec![owner_root.canonicalize().unwrap()]);
+        assert!(resolve_authorized_root(owner_root.to_str().unwrap(), &allowed, &[]).is_ok());
+        assert!(resolve_authorized_root(invented_root.to_str().unwrap(), &allowed, &[]).is_err());
     }
 
     #[test]
