@@ -129,6 +129,21 @@ test('the Projects rail icon opens a project workspace on its Code tab', async (
   expect(await errors(page)).toEqual([]);
 });
 
+test('Projects recovers when its cached project list was empty', async ({ page }) => {
+  await openSidebar(page);
+  await page.evaluate(() => {
+    window.__xnautStub.pm_project_list = [];
+    window.xnautSidebarRefresh();
+  });
+  await expect(page.locator(GROUP)).toHaveCount(0);
+  await page.evaluate((projects) => { window.__xnautStub.pm_project_list = projects; }, STUB.pm_project_list);
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await expect(page.locator('.wsp')).toBeVisible();
+  await expect(page.locator('.wsp-name')).toHaveText('xnaut');
+  await expect(page.locator('.wsp-tabs button[data-wsp-tab="code"]')).toHaveClass(/active/);
+  expect(await errors(page)).toEqual([]);
+});
+
 // The rail has to work from whatever the sidebar was showing, and the state it
 // most often is in is folded: the Projects section is collapsible and the whole
 // sidebar collapses to a 52px strip. A front door that only opens when the tree

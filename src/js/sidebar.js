@@ -860,7 +860,7 @@
     // tree and open nothing, and the second click would be the first.
     //
     // That is the two clicks in the acceptance: rail, then a project row.
-    function openFrontDoor() {
+    async function openFrontDoor() {
       // `closeSubmenu` is declared further down this same closure; it is read
       // when the icon is pressed, which is long after createSidebar has run.
       if (!submenu.hidden) closeSubmenu();
@@ -879,7 +879,16 @@
       }
       const scoped = state.scope && state.scope.project;
       const hidden = window.xnautHiddenProjects.list('sidebar');
-      const first = buildEntries().find((entry) => entry.projectKey && !hidden.includes(entry.id));
+      const firstVisible = () => buildEntries().find((entry) => entry.projectKey && !hidden.includes(entry.id));
+      let first = firstVisible();
+      // The registry can render before the PM list arrives (or after a
+      // transient read failure). Resolve the click before declaring it empty.
+      if (!scoped && !first) {
+        state.projects = await listOr('pm_project_list');
+        if (state.destroyed) return undefined;
+        first = firstVisible();
+        renderProjects();
+      }
       const key = scoped || (first && first.projectKey);
       if (!key) {
         // No project on this machine yet. Say so where the tree says it, rather
