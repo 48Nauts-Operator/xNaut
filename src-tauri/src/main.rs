@@ -28,6 +28,7 @@ mod chat;
 mod responses;
 mod repository_read;
 mod conversation_store;
+mod agent_history;
 mod notebook;
 mod codex_spend;
 mod commands;

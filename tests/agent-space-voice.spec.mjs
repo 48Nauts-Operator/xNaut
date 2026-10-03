@@ -121,6 +121,7 @@ test('spoken requests retain a repository from before the recent conversation wi
   ]);
   await expect.poll(() => page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='voice_live_result').length)).toBe(1);
   const call=await page.evaluate(()=>window.__xnautInvokes.find(i=>i.cmd==='agent_chat_turn').args);
+  expect(call.threadId).toBeTruthy();
   expect(call.repositoryContext).toContain('/tmp/vynl-voice-project');
   expect(call.messages.some(m=>m.content.includes('/tmp/vynl-voice-project'))).toBe(false);
   await expect(page.locator('.as-build')).toHaveCount(0);

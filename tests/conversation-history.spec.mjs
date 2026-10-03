@@ -19,6 +19,7 @@ test('an earlier owner repository survives the model window and reload without a
   await composer.fill('Launch the two developers for the project we discussed');await composer.press('Enter');
   await expect(page.getByText('The release is tagged and the cask is on 1.15.0.',{exact:true}).last()).toBeVisible();
   const request=await page.evaluate(()=>window.__xnautInvokes.findLast(i=>i.cmd==='agent_chat_turn'));
+  expect(request.args.threadId).toBe('repo-history');
   expect(request.args.messages.length).toBeLessThanOrEqual(16);
   expect(request.args.messages.some(m=>m.content.includes('/tmp/vynl-owner-project'))).toBe(false);
   expect(request.args.repositoryContext).toContain('/tmp/vynl-owner-project');

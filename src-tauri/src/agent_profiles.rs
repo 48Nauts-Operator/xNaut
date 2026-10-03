@@ -1738,6 +1738,7 @@ pub async fn agent_chat_turn(
     request_id: String,
     messages: Vec<crate::chat::ChatMessage>,
     repository_context: Option<Vec<String>>,
+    thread_id: Option<String>,
 ) -> Result<String, String> {
     let profile = {
         let _guard = profile_store_guard()?;
@@ -1749,6 +1750,10 @@ pub async fn agent_chat_turn(
             .find(|profile| profile.handle == handle)
             .ok_or_else(|| format!("agent profile not found: @{handle}"))?
     };
+    // A missing/unreadable saved thread is an explicit failure, never a silent
+    // fallback to a model that would claim the history does not exist.
+    let saved_history = thread_id.as_deref()
+        .map(|id| crate::agent_history::load(&profile.handle,id)).transpose()?;
     let mut turn = vec![crate::chat::ChatMessage {
         role: "system".into(),
         content: crate::composer::chat_system(&profile),
@@ -1786,6 +1791,7 @@ pub async fn agent_chat_turn(
                 &profile.handle,
                 Some((&app, &request_id)),
                 repository_context.as_deref().unwrap_or_default(),
+                saved_history,
             )
             .await
             {

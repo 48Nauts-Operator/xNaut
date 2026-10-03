@@ -19,18 +19,29 @@ async function openBuilder(page) {
   await expect(page.locator('.as-title h1')).toHaveText('Builder');
 }
 
-// A build now takes a handshake: the agent asks WHERE, the owner answers, and
-// only then does a harness start. Tests that need a running session go through
-// this rather than pretending a message launches one.
+// The chooser supplies a root to the ticket-aware chat loop. It never launches directly.
 async function startBuild(page, text, repo = '/tmp/smoke') {
-  await page.evaluate(() => { window.__xnautStub.agent_chat_turn = 'BUILD-REQUEST\nDoing the work.'; });
+  await page.evaluate(repo => {
+    const invoke=window.__TAURI__.core.invoke;
+    let turn=0;
+    window.__TAURI__.core.invoke=async(name,args)=>{
+      if(name!=='agent_chat_turn') return invoke(name,args);
+      window.__xnautInvokes.push({cmd:name,args});
+      if(turn++===0) return 'BUILD-REQUEST\nDoing the work.';
+      window.__xnautEmit('agent-task-started',{requestId:args.requestId,agent_id:'builder',receipt:{
+        ok:true,ticket:'FIXTURE-1',task:'Run the checks',worktree_path:repo+'/.worktrees/ticket-task',
+        launch:{session_id:'smoke-agent',run_id:'fixture-run'}
+      }});
+      return 'Worker launched for FIXTURE-1; completion is not yet verified.';
+    };
+  },repo);
   await page.getByLabel('Message @builder').fill(text);
   await page.getByLabel('Message @builder').press('Enter');
   const card = page.locator('.as-build');
   await expect(card).toBeVisible();
   await card.locator('[data-build-path]').fill(repo);
   await card.getByRole('button', { name:'Open worktree & build' }).click();
-  await expect(page.getByText('Working…', { exact:true })).toBeVisible();
+  await expect(page.getByText('Worker launched for FIXTURE-1; completion is not yet verified.',{exact:true})).toBeVisible();
 }
 
 test('Agent Space owns the second-left library and bounded agent threads', async ({ page }) => {
@@ -80,46 +91,15 @@ test('a message is a chat turn against the agent, not a coding session', async (
   expect(invokes).not.toContain('agent_build_workspace');
 });
 
-test('a build request asks where before it opens a worktree', async ({ page }) => {
-  await page.evaluate(() => { window.__xnautStub.agent_chat_turn = 'BUILD-REQUEST\nA single-file HTML shooter.'; })
-    .catch(() => {});
-  await page.addInitScript(() => {
-    // The stub is built per page load, so the override has to be re-applied
-    // once it exists rather than before navigation.
-    const apply = () => {
-      if (!window.__xnautStub) return setTimeout(apply, 20);
-      window.__xnautStub.agent_chat_turn = 'BUILD-REQUEST\nA single-file HTML shooter.';
-    };
-    apply();
-  });
-  await page.goto('/?stub=1');
-  await page.waitForTimeout(900);
+test('the repository picker returns through ticketed chat and cannot launch a bare worktree', async ({ page }) => {
   await openBuilder(page);
-  const composer = page.getByLabel('Message @builder');
-  await composer.fill('Build me a 3D shooter in one HTML file');
-  await composer.press('Enter');
-
-  // The marker never reaches the thread; the summary does, with the card.
-  await expect(page.getByText('A single-file HTML shooter.', { exact:true })).toBeVisible();
-  await expect(page.getByText('BUILD-REQUEST')).toHaveCount(0);
-  const card = page.locator('.as-build');
-  await expect(card).toBeVisible();
-  // Nothing has launched yet: that is the whole point of the handshake.
-  expect(await page.evaluate(() => window.__xnautInvokes.some((item) => item.cmd === 'agent_profile_launch'))).toBe(false);
-
-  await card.locator('[data-build-path]').fill('/tmp/smoke');
-  await card.getByRole('button', { name:'Open worktree & build' }).click();
-
-  await expect(page.getByText('Working…', { exact:true })).toBeVisible();
-  const workspace = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_build_workspace').args);
-  expect(workspace).toMatchObject({ handle:'builder', repoPath:'/tmp/smoke' });
-  const launch = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_profile_launch').args.req);
-  // The run happens in the WORKTREE the backend returned, never in the repo
-  // the owner has open.
-  expect(launch).toMatchObject({ handle:'builder', worktree_path:'/tmp/smoke/.worktrees/run-the-checks', conversation_mode:true });
-  expect(launch).not.toHaveProperty('worktreePath');
-  expect(launch.prompt).toContain('Build me a 3D shooter in one HTML file');
-  await expect(page.getByText('/tmp/smoke/.worktrees/run-the-checks')).toBeVisible();
+  await startBuild(page,'Build me a 3D shooter in one HTML file');
+  const calls=await page.evaluate(()=>window.__xnautInvokes);
+  expect(calls.some(c=>c.cmd==='agent_build_workspace'||c.cmd==='agent_profile_launch')).toBe(false);
+  const request=calls.filter(c=>c.cmd==='agent_chat_turn').at(-1).args;
+  expect(request.messages.at(-1).content).toContain('Repository: /tmp/smoke');
+  expect(request.messages.at(-1).content).toContain('Build me a 3D shooter');
+  expect(request.threadId).toBeTruthy();
 });
 
 test('each thread menu can archive and permanently delete a thread', async ({ page }) => {
@@ -151,22 +131,14 @@ test('each thread menu can archive and permanently delete a thread', async ({ pa
   await expect(page.locator('[data-library-thread="keep-thread"]')).toBeVisible();
 });
 
-test('Gemini JSONL deltas become one clean assistant message', async ({ page }) => {
+test('ticketed worker receipts persist without being mistaken for completion', async ({ page }) => {
   await openBuilder(page);
-  await startBuild(page, 'Build it');
-  await page.evaluate(() => {
-    const output = [
-      JSON.stringify({ type:'init', session_id:'gemini-thread-1', model:'gemini-3-pro' }),
-      JSON.stringify({ type:'message', role:'assistant', content:'Building ', delta:true }),
-      JSON.stringify({ type:'message', role:'assistant', content:'now.', delta:true }),
-      JSON.stringify({ type:'result', status:'success', stats:{} }),
-      '',
-    ].join('\n');
-    window.__xnautEmit('terminal-output:smoke-agent', { data:btoa(output) });
-    window.__xnautEmit('agent-status-changed', { session_id:'smoke-agent', status:'done' });
-  });
-  await expect(page.getByText('Building now.', { exact:true })).toBeVisible();
-  await expect(page.getByText('[object Object]', { exact:true })).toHaveCount(0);
+  await startBuild(page,'Build it');
+  await page.evaluate(()=>window.xnautConversationStorage.flush());
+  const receipt=await page.evaluate(()=>Object.values(JSON.parse(window.xnautConversationStorage.getItem('xnaut-agent-threads:v1'))).flat().flatMap(t=>t.messages).find(m=>m.executionReceipt)?.executionReceipt);
+  expect(receipt.ticket).toBe('FIXTURE-1');
+  expect(receipt.launch.run_id).toBe('fixture-run');
+  await expect(page.getByText('[object Object]',{exact:true})).toHaveCount(0);
 });
 
 test('an agent with no project still answers, and a build never runs in home', async ({ page }) => {
@@ -186,8 +158,8 @@ test('an agent with no project still answers, and a build never runs in home', a
   expect(await page.evaluate(() => window.__xnautInvokes.some((item) => item.cmd === 'agent_profile_launch'))).toBe(false);
 
   await startBuild(page, 'Build the honey website', '/tmp/new-honey');
-  const launch = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_profile_launch'));
-  expect(launch.args.req.worktree_path).toBe('/tmp/smoke/.worktrees/run-the-checks');
+  expect(await page.evaluate(() => window.__xnautInvokes.some(i => i.cmd === 'agent_profile_launch' || i.cmd === 'agent_build_workspace'))).toBe(false);
+  await expect(page.getByText('/tmp/new-honey/.worktrees/ticket-task',{exact:true})).toBeVisible();
   expect(await page.evaluate(() => window.__xnautInvokes.some((item) => item.cmd === 'get_home_directory'))).toBe(false);
 });
 
@@ -206,11 +178,11 @@ test('a specialist receives the current Control Center conversation on handoff',
   ]));
   await openBuilder(page);
   await startBuild(page, 'Continue with the release work');
-  const prompt = await page.evaluate(() => window.__xnautInvokes.find((item) => item.cmd === 'agent_profile_launch').args.req.prompt);
+  const prompt = await page.evaluate(() => window.__xnautInvokes.filter(i=>i.cmd==='agent_chat_turn').at(-1).args.messages.map(m=>m.content).join('\n'));
   expect(prompt).toContain('PORTABLE XNAUT CONVERSATION HANDOFF');
   expect(prompt).toContain('The release target is Friday.');
   expect(prompt).toContain('Active project/worktree: /tmp/smoke');
-  expect(prompt).toContain('LATEST USER REQUEST\nContinue with the release work');
+  expect(prompt).toContain('Continue with the release work');
 });
 
 test('Settings-page NautGate credentials reach the backend before an agent answers', async ({ page }) => {

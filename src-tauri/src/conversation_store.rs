@@ -58,6 +58,23 @@ fn get(db: &Connection, key: &str) -> Result<Option<Record>, String> {
     .optional()
     .map_err(|e| e.to_string())
 }
+
+// Read only the caller's active Agent Space thread. The model never supplies
+// storage keys, agent handles or paths, and reads never migrate/write the DB.
+pub(crate) fn agent_thread(handle: &str, thread_id: &str) -> Result<Value, String> {
+    let db = Connection::open_with_flags(root()?.join("conversations.sqlite"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
+    agent_thread_in(&db, handle, thread_id)
+}
+
+fn agent_thread_in(db: &Connection, handle: &str, thread_id: &str) -> Result<Value, String> {
+    let value = get(db,"xnaut-agent-threads:v1")?.and_then(|r|r.value)
+        .ok_or("Saved Agent history is unavailable")?;
+    let all: Value = serde_json::from_str(&value).map_err(|e|e.to_string())?;
+    all.get(handle).and_then(Value::as_array).into_iter().flatten()
+        .find(|thread|thread["id"].as_str()==Some(thread_id)).cloned()
+        .ok_or_else(||"Saved thread does not belong to this agent or is unavailable".into())
+}
 fn read_all(db: &Connection) -> Result<Records, String> {
     let mut stmt = db
         .prepare("SELECT key,value,revision FROM conversations")
@@ -371,6 +388,20 @@ pub fn conversation_store_put(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn agent_recall_is_scoped_and_survives_database_reopen() {
+        let tmp=Scratch::new();
+        let mut db=connect(tmp.path()).unwrap();
+        let data=serde_json::json!({"nautbot":[{"id":"one","messages":[{"role":"user","text":"DJ and metadata"}]}],
+            "other":[{"id":"private","messages":[{"role":"user","text":"Other conversation"}]}]}).to_string();
+        put(&mut db,"xnaut-agent-threads:v1",Some(data),0).unwrap();
+        drop(db);
+        let db=Connection::open_with_flags(tmp.path().join("conversations.sqlite"),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert_eq!(agent_thread_in(&db,"nautbot","one").unwrap()["messages"][0]["text"],"DJ and metadata");
+        assert!(agent_thread_in(&db,"nautbot","private").is_err());
+        assert!(agent_thread_in(&db,"other","one").is_err());
+        assert!(agent_thread_in(&db,"nautbot","../one").is_err());
+    }
     struct Scratch(PathBuf);
     impl Scratch {
         fn new() -> Self {

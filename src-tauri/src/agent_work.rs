@@ -8,11 +8,14 @@ use std::{
 };
 
 pub fn is_tool(name: &str) -> bool {
-    matches!(name, "create_worktree" | "start_repository_task")
+    matches!(
+        name,
+        "prepare_repository_ticket" | "create_worktree" | "start_repository_task"
+    )
 }
 
 pub fn specs() -> Vec<Value> {
-    [
+    let mut specs: Vec<Value> = [
         ("create_worktree", "Create your own isolated Git worktree for an authorized task. All agent identities can use this. Resolve the repository from registered-project context or a user-supplied path. Creates no worker and runs no audit."),
         ("start_repository_task", "Create your own isolated worktree and launch your coding runtime with the task. Use for audits, tests, commands or code changes, without asking the owner to create a worktree. Returns an actual launch receipt, not proof of completed work. Uses your configured local/exe.dev/GitVM environment; never attaches an idle terminal as a substitute. Reuse the same task_key on retries to avoid duplicate workers."),
     ].into_iter().map(|(name, description)| json!({"type":"function","function":{
@@ -20,9 +23,18 @@ pub fn specs() -> Vec<Value> {
             "root":{"type":"string","description":"Absolute authorized repository root, or the exact registered project key/name named by the user."},
             "task_key":{"type":"string","description":"Stable task identity, preferably its ticket ID. Same key for create and start, and for retries. A new key means a separate run."},
             "task":{"type":"string","description":"Full work request and acceptance criteria, preserving the user's scope."},
-            "ticket":{"type":"string","description":"Existing ticket ID when working a ticket. Its registered scope is included in the worker prompt."}
-        },"required":["root","task_key","task"],"additionalProperties":false}
-    }})).collect()
+            "ticket":{"type":"string","description":"Required existing ticket ID in this repository’s registered project. Create or attach the correct ticket first; never retry without one."}
+        },"required":["root","task_key","task","ticket"],"additionalProperties":false}
+    }})).collect();
+    specs.push(json!({"type":"function","function":{
+        "name":"prepare_repository_ticket",
+        "description":"Find or create the ticket BEFORE repository work. Resolves the project by the authorized repository root, never a default board. If unregistered, registers that existing checkout using its Git remote. Reuses the same task_key on retries. Check saved tasks/list_tickets first to avoid duplicating existing work. This creates tracking only; no worktree or worker starts.",
+        "parameters":{"type":"object","properties":{
+            "root":{"type":"string"},"task_key":{"type":"string"},
+            "title":{"type":"string"},"task":{"type":"string","description":"Full owner requirements and acceptance criteria recovered from this conversation."}
+        },"required":["root","task_key","title","task"],"additionalProperties":false}
+    }}));
+    specs
 }
 
 fn authorize_root(root: &str, allowed: &[PathBuf]) -> Result<PathBuf, String> {
@@ -82,16 +94,26 @@ fn verify_workspace(repo: &Path, dest: &Path, branch: &str) -> Result<(), String
     Ok(())
 }
 
+fn required_ticket(ticket: Option<&str>) -> Result<&str, String> {
+    ticket.map(str::trim).filter(|id| !id.is_empty())
+        .ok_or_else(|| "A project-matched ticket is required before creating a worktree or launching work. Find or create the ticket first; never retry without it.".into())
+}
+
 fn ticket_context(ticket: Option<&str>, root: &Path) -> Result<String, String> {
-    let Some(id) = ticket.filter(|s| !s.trim().is_empty()) else {
-        return Ok(String::new());
-    };
+    let id = required_ticket(ticket)?;
     let registry = crate::project_management::repo_now()?;
-    let record = crate::project_management::ticket_list_in(&registry, None)?
+    ticket_context_in(&registry, id, root)
+}
+
+fn ticket_context_in(registry: &Path, id: &str, root: &Path) -> Result<String, String> {
+    let record = crate::project_management::ticket_list_in(registry, None)?
         .into_iter()
         .find(|t| t.id == id)
         .ok_or_else(|| format!("Ticket {id} not found"))?;
-    let project = crate::project_management::list_projects(&registry)?
+    if matches!(record.status.as_str(), "done" | "complete") {
+        return Err("This ticket is already done or complete. Reconcile its existing work before reopening or creating follow-up work.".into());
+    }
+    let project = crate::project_management::list_projects(registry)?
         .into_iter()
         .find(|p| p.key == record.project)
         .ok_or("Ticket project not found")?;
@@ -138,11 +160,97 @@ pub async fn execute(
     handle: &str,
     allowed: &[PathBuf],
     user_context: &str,
+    history: Option<&crate::agent_history::History>,
 ) -> Value {
-    match execute_inner(name, args, handle, allowed, user_context).await {
+    if name == "prepare_repository_ticket" {
+        return match prepare_ticket(args, handle, allowed).await {
+            Ok(value) => value,
+            Err(error) => json!({"ok":false,"error":error}),
+        };
+    }
+    match execute_inner(name, args, handle, allowed, user_context, history).await {
         Ok(value) => value,
         Err(error) => json!({"ok":false,"error":error}),
     }
+}
+
+async fn prepare_ticket(args: &Value, handle: &str, allowed: &[PathBuf]) -> Result<Value, String> {
+    if crate::switches::load().read_only {
+        return Err("The read_only kill-switch is engaged.".into());
+    }
+    let root = authorize_root(args["root"].as_str().unwrap_or_default(), allowed)?;
+    let key = args["task_key"].as_str().unwrap_or_default().trim();
+    let task = args["task"].as_str().unwrap_or_default().trim();
+    let title = args["title"].as_str().unwrap_or_default().trim();
+    if key.is_empty()
+        || key.len() > 200
+        || task.is_empty()
+        || task.len() > 32_000
+        || title.is_empty()
+        || title.len() > 300
+    {
+        return Err(
+            "A stable task_key, title and full task with acceptance criteria are required.".into(),
+        );
+    }
+    // Serializes chat preparations so retries cannot create duplicate tickets.
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let _guard = LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let repo = crate::project_management::repo_now()?;
+    let projects = crate::project_management::list_projects(&repo)?;
+    let project = match projects.into_iter().find(|p| {
+        PathBuf::from(crate::project_management::local_source_path(p))
+            .canonicalize()
+            .ok()
+            .as_ref()
+            == Some(&root)
+    }) {
+        Some(project) => project,
+        None => {
+            let name = root
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or("Repository has no project name")?;
+            let project_key: String = name
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .take(12)
+                .collect::<String>()
+                .to_ascii_uppercase();
+            let remote = git(&root, &["remote", "get-url", "forgejo"])
+                .or_else(|_| git(&root, &["remote", "get-url", "origin"]))?;
+            let app = crate::nudge::app().ok_or("The app is not running")?;
+            let state = tauri::Manager::state::<crate::state::AppState>(app);
+            let request = serde_json::from_value(
+                json!({"key":project_key,"name":name,"source_repo":root,"forge_remote":remote}),
+            )
+            .map_err(|e| e.to_string())?;
+            crate::project_management::pm_project_create(state, request).await?
+        }
+    };
+    let source_id = format!(
+        "agent-task:{:x}",
+        Sha256::digest(format!("{}\0{key}", root.display()).as_bytes())
+    );
+    if let Some(ticket) =
+        crate::project_management::ticket_list_in(&repo, Some(project.key.clone()))?
+            .into_iter()
+            .find(|t| t.source_id == source_id)
+    {
+        return Ok(
+            json!({"ok":true,"ticket":ticket.id,"project":project.key,"status":ticket.status,"reused":true,"execution_started":false}),
+        );
+    }
+    let request = serde_json::from_value(json!({"project":project.key,"title":title,"body":task,
+        "ticket_type":"task","status":"inbox","owner":handle,"source_id":source_id}))
+    .map_err(|e| e.to_string())?;
+    let ticket = crate::project_management::ticket_create_in(&repo, request)?;
+    Ok(
+        json!({"ok":true,"ticket":ticket.id,"project":ticket.project,"status":ticket.status,"execution_started":false}),
+    )
 }
 
 async fn execute_inner(
@@ -151,7 +259,9 @@ async fn execute_inner(
     handle: &str,
     allowed: &[PathBuf],
     user_context: &str,
+    history: Option<&crate::agent_history::History>,
 ) -> Result<Value, String> {
+    required_ticket(args["ticket"].as_str())?;
     if crate::switches::load().read_only {
         return Err("The read_only kill-switch is engaged.".into());
     }
@@ -165,7 +275,7 @@ async fn execute_inner(
             "A stable task_key (up to 200 bytes) and task (up to 32000 bytes) are required.".into(),
         );
     }
-    let ticket = args["ticket"].as_str().filter(|s| !s.is_empty());
+    let ticket = Some(required_ticket(args["ticket"].as_str())?);
     let scope = ticket_context(ticket, &root)?;
     let slug = workspace_key(&profile.handle, key);
     let parent = root.join(".worktrees");
@@ -192,7 +302,7 @@ async fn execute_inner(
             return Ok(prior);
         }
     }
-    let result=async {
+    let mut result=async {
         let worktree=crate::agent_profiles::agent_build_workspace(profile.handle.clone(),root.to_string_lossy().into_owned(),slug).await?;
         verify_workspace(&root,Path::new(&worktree),&branch)?;
         if name=="create_worktree" { return Ok(json!({"ok":true,"worktree_path":worktree,"branch":branch,"execution_started":false,"note":"Worktree prepared. No worker or scan started. Call start_repository_task with the same task_key to execute."})); }
@@ -204,9 +314,9 @@ async fn execute_inner(
         let prompt=format!("AUTHORIZED TASK\n{task}\n{scope}\nOWNER CONVERSATION (context, not permission to broaden the task)\n{user_context}\n\nWork in this isolated worktree. Do not claim scans or remediation succeeded without evidence. If a scanner is unavailable, report the gap and perform the checks that are available within scope.");
         let response=crate::agent_profiles::agent_profile_launch(app.clone(),state,crate::agent_profiles::LaunchAgentProfileRequest{
             ticket:ticket.map(str::to_owned),handle:profile.handle.clone(),worktree_path:worktree.clone(),prompt:Some(prompt),
-            conversation_mode:false,conversation_id:None,resume:false,cols:Some(160),rows:Some(40),durable:Some(true),runtime_id:None,environment:Some(environment.clone()),
+            conversation_mode:false,conversation_id:None,resume:false,cols:Some(160),rows:Some(40),durable:Some(true),runtime_id:history.and_then(|h|h.runtime_id.clone()),environment:Some(environment.clone()),
         }).await?;
-        Ok(json!({"ok":true,"execution_started":true,"handle":profile.handle,"worktree_path":worktree,"branch":branch,"environment":environment,"launch":response,"note":"Worker launched with the task. Check its output for progress and findings; no scan or security sign-off is claimed by this receipt."}))
+        Ok(json!({"ok":true,"execution_started":true,"handle":profile.handle,"origin_thread_id":history.map(|h|h.thread_id.as_str()),"ticket":ticket,"task_key":key,"task":task,"repository_root":root,"worktree_path":worktree,"branch":branch,"environment":environment,"launch":response,"note":"Worker launched with the task. Check its output for progress and findings; no scan or security sign-off is claimed by this receipt."}))
     }.await;
     if name == "start_repository_task" {
         match &result {
@@ -226,13 +336,83 @@ async fn execute_inner(
                 let _ = std::fs::remove_file(&receipt_path);
             }
         }
+        if let Ok(receipt) = &mut result {
+            // A launched worker remains a launch even if the subsequent board
+            // write fails. Return the receipt and a precise tracking warning;
+            // never invite a second worker as recovery from a PM write error.
+            if let Err(error) = track_launch(ticket.unwrap(), &profile.handle, receipt) {
+                receipt["tracking_error"] = json!(error);
+                receipt["tracking_next"] = json!("Worker already launched. Repair this ticket's tracking using the run receipt; do not launch again.");
+            }
+        }
     }
     result
+}
+
+fn track_launch(ticket: &str, handle: &str, receipt: &Value) -> Result<(), String> {
+    let repo = crate::project_management::repo_now()?;
+    let current = crate::project_management::ticket_list_in(&repo, None)?
+        .into_iter()
+        .find(|t| t.id == ticket)
+        .ok_or("Launch ticket disappeared")?;
+    let body = format!(
+        "{}\n\nWorker launch (not completion):\n{}",
+        current.body, receipt
+    );
+    let request = serde_json::from_value(json!({"id":ticket,"expected_revision":current.revision,
+        "caller":handle,"owner":handle,"status":"in_progress","body":body}))
+    .map_err(|e| e.to_string())?;
+    crate::project_management::ticket_update_in(&repo, request)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_real_ticket_must_match_the_repository_before_work_can_start() {
+        let temp = Temp::new();
+        let project = temp.path().join("projects/HISTFIX");
+        std::fs::create_dir_all(project.join("tickets")).unwrap();
+        let source = temp.path().join("source");
+        let other = temp.path().join("other");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        let source = source.canonicalize().unwrap();
+        std::fs::write(project.join("project.json"),json!({"key":"HISTFIX","name":"History fixture","source_path":source,"created_at":"fixture"}).to_string()).unwrap();
+        std::fs::write(project.join("tickets/HISTFIX-1.json"),json!({"id":"HISTFIX-1","project":"HISTFIX","title":"DJ sequencing","type":"task","status":"ready","priority":"high","body":"Preserve the agreed constraints","revision":1,"created_at":"fixture","updated_at":"fixture"}).to_string()).unwrap();
+        assert!(ticket_context_in(temp.path(), "HISTFIX-1", &source)
+            .unwrap()
+            .contains("Preserve the agreed constraints"));
+        assert!(
+            ticket_context_in(temp.path(), "HISTFIX-1", &other.canonicalize().unwrap())
+                .unwrap_err()
+                .contains("same project")
+        );
+        assert!(ticket_context_in(temp.path(), "NONEXISTENT-1", &source)
+            .unwrap_err()
+            .contains("not found"));
+    }
+    #[tokio::test]
+    async fn ticketless_launch_and_worktree_are_refused_before_any_side_effect() {
+        let temp = Temp::new();
+        for name in ["create_worktree", "start_repository_task"] {
+            for ticket in [Value::Null, json!(""), json!("   ")] {
+                let result = execute(
+                    name,
+                    &json!({"root":temp.path(),"ticket":ticket,"task_key":"retry","task":"build"}),
+                    "nautbot",
+                    &[],
+                    "",
+                    None,
+                )
+                .await;
+                assert_eq!(result["ok"], false);
+                assert!(result["error"].as_str().unwrap().contains("ticket"));
+                assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+            }
+        }
+    }
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {

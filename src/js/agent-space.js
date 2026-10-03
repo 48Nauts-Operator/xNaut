@@ -1014,19 +1014,10 @@
           const repo = String(input.value || '').trim();
           if (!repo) { input.focus(); return; }
           const go = card.querySelector('[data-build-go]');
-          go.disabled = true; go.textContent = 'Opening worktree…';
+          go.disabled = true; go.textContent = 'Preparing ticketed work…';
           try {
-            const workspace = await invoke('agent_build_workspace', {
-              handle: profile.handle, repoPath: repo, task: record.build_task,
-            });
-            thread = updateThread(profile.handle, thread.id, (next) => {
-              const item = next.messages.find((entry) => entry.id === record.id);
-              if (item) item.build_started = true;
-              next.workspace = workspace;
-              return next;
-            });
-            paintMessages();
-            await submit(record.build_task, workspace);
+            // The repository chooser supplies context, never bypasses ticketed dispatch.
+            await submit(record.build_task, repo);
           } catch (error) {
             go.disabled = false; go.textContent = 'Open worktree & build';
             updateAgentMessage(record.id, `${record.text}\n\nCould not open a worktree: ${String(error)}`);
@@ -1680,10 +1671,14 @@
     // this list, so every turn shipped a trailing assistant message and the
     // Anthropic lane rejected the whole request as a prefill (XNAUT-217).
     const PLACEHOLDERS = new Set(['Working…', 'Thinking…']);
-    const chatHistory = () => (thread.messages || [])
-      .filter((message) => (message.executionReceipt || message.kind !== 'action') && !message.voiceTranscript && (message.text || message.executionReceipt) && !PLACEHOLDERS.has(message.text))
-      .slice(-16)
-      .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.executionReceipt ? `Recorded worker launch (historical, not proof of completion): ${JSON.stringify(message.executionReceipt)}` : String(message.text) }));
+    const chatHistory = () => {
+      const recent = (thread.messages || [])
+        .filter(message => (message.executionReceipt || message.kind !== 'action') && !message.voiceTranscript && (message.text || message.executionReceipt) && !PLACEHOLDERS.has(message.text))
+        .slice(thread.handoff_context ? -15 : -16)
+        .map(message => ({role:message.role === 'user' ? 'user' : 'assistant',content:message.executionReceipt ? `Recorded worker launch (historical, not proof of completion): ${JSON.stringify(message.executionReceipt)}` : String(message.text)}));
+      if (thread.handoff_context) recent.unshift({role:'assistant',content:thread.handoff_context});
+      return recent;
+    };
 
     // Model context is bounded; repository scope must survive that window.
     // Rust resolves these owner-authored references into repository metadata
@@ -1693,8 +1688,14 @@
       .map((message) => String(message.text));
 
     const submit = async (buildTask, buildPath, voiceRequest) => {
-      const text = buildTask || voiceRequest?.text || composer.value.trim();
-      if (!buildTask && !voiceRequest && liveVoice?.isActive()) {
+      const fromBuild = Boolean(buildTask);
+      const text = fromBuild ? `${buildTask}\nRepository: ${buildPath || profile.default_project || ''}` : voiceRequest?.text || composer.value.trim();
+      buildTask = null; // Every build request returns through the ticket-aware tool loop.
+      if (fromBuild && !thread.handoff_context) {
+        const handoff = portableHandoff(profile,thread);
+        thread = updateThread(profile.handle,thread.id,next => {next.handoff_context=handoff;return next;});
+      }
+      if (!fromBuild && !voiceRequest && liveVoice?.isActive()) {
         if (text) { await liveVoice.send(text); composer.value = ''; grow(); }
         return;
       }
@@ -1727,7 +1728,6 @@
           return next;
         });
         if (voiceRequest) voiceReplyTurns.add(voiceRequest.turn);
-        let handedToBuild = false;
         paintMessages();
         try {
           // The Settings page still writes provider credentials to the legacy
@@ -1781,11 +1781,13 @@
           });
           let reply;
           try {
+            await window.xnautConversationStorage.confirmSaved('xnaut-agent-threads:v1');
             reply = String(await invoke('agent_chat_turn', {
               handle: profile.handle,
               requestId,
               messages: chatHistory(),
               repositoryContext: repositoryContext(),
+              threadId: thread.id,
             }) || '').trim();
           } finally {
             try { stopStream(); } catch (_) {}
@@ -1794,15 +1796,6 @@
           if (reply.startsWith('BUILD-REQUEST')) {
             const summary = reply.split('\n').slice(1).join('\n').trim();
             updateAgentMessage(replyId, summary || 'That needs a coding session.');
-            // Asked once per thread. A thread that already has a workspace
-            // continues in it: re-asking for the repository on every follow-up
-            // ("now add sound") is the interrogation this flow exists to end.
-            if (thread.workspace) {
-              paintMessages();
-              handedToBuild = true;
-              await submit(text, thread.workspace);
-              return summary || 'That needs a coding session.';
-            }
             thread = updateThread(profile.handle, thread.id, (next) => {
               const message = next.messages.find((item) => item.id === replyId);
               if (message) message.build_task = text;
@@ -1818,76 +1811,11 @@
           updateAgentMessage(replyId, `Could not answer: ${String(error)}`);
           if (voiceRequest) throw error;
         } finally {
-          if (!handedToBuild) send.disabled = false;
+          send.disabled = false;
         }
         return;
       }
 
-      let worktreePath = buildPath || profile.default_project;
-      if (!worktreePath) {
-        // Not every message is a coding run: a question needs no repository,
-        // and interrogating the owner before they can type is an obstacle,
-        // not a safety feature. Fall back to the agent's own bounded scratch
-        // folder — never home — and let the header button point it at a real
-        // project whenever that matters.
-        worktreePath = await invoke('agent_scratch_workspace', { handle: profile.handle }).catch(() => null);
-        if (!worktreePath) { send.disabled = false; return; }
-        // A previous fallback launch may be sitting at a trust prompt in the
-        // home directory. Never reuse that broad-scoped session after the user
-        // has selected the real project.
-        if (sessionId) await invoke('agent_session_interrupt', { sessionId }).catch(() => {});
-        sessionId = null;
-        thread = updateThread(profile.handle, thread.id, (next) => {
-          next.session_id = null;
-          next.conversation_id = null;
-          return next;
-        });
-      }
-      const handoff = thread.conversation_id ? '' : portableHandoff(profile, thread);
-      const runtimePrompt = handoff
-        ? `${handoff}\n\nLATEST USER REQUEST\n${text}`
-        : text;
-      const messageId = `a-${Date.now()}`;
-      thread = updateThread(profile.handle, thread.id, (next) => {
-        // Where it is building is the one fact a build thread must state.
-        // "Working…" with no location is how a run in the wrong directory
-        // goes unnoticed until it has written something.
-        next.messages.push({ id:`x-${Date.now()}`, kind:'action', label:'Building in', detail:worktreePath, at:nowIso() });
-        next.messages.push({ id:messageId, role:'agent', text:'Working…', at:nowIso() });
-        return next;
-      });
-      paintMessages();
-      try {
-        const response = await invoke('agent_profile_launch', { req: {
-          handle: profile.handle,
-          worktree_path: worktreePath,
-          prompt: runtimePrompt,
-          conversation_mode: true,
-          conversation_id: thread.conversation_id || null,
-          resume: !!thread.conversation_id,
-          cols: 200,
-          rows: 30,
-          runtime_id: threadRuntime,
-        } });
-        sessionId = response.session_id;
-        thread = updateThread(profile.handle, thread.id, (next) => {
-          next.session_id = response.session_id;
-          if (response.conversation_id) next.conversation_id = response.conversation_id;
-          const message = next.messages.find((item) => item.id === messageId);
-          if (message) message.session_id = response.session_id;
-          return next;
-        });
-        showTerminal(response.session_id);
-        announceProfilesChanged(profile);
-        paintMessages();
-        if (response.output_path) {
-          await captureRunFile(response.output_path, messageId, response.zellij_session);
-        }
-        else await captureStructuredTurn(response.session_id, messageId);
-      } catch (error) {
-        updateAgentMessage(messageId, `Could not start: ${String(error)}`);
-        send.disabled = false;
-      }
     };
     // NEVER `send.onclick = submit`: the click handler is called with the
     // PointerEvent, which lands in submit's first parameter (buildTask) and
