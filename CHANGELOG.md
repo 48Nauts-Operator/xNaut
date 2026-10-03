@@ -2,6 +2,23 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.29.3] - 2026-10-03
+
+### Added
+- Project Wiki brings Vault documents, saved project memory, work activity and handoffs into the existing right pane. People and agents can add and edit the same canonical Vault pages, with original authorship, dated revision history and concurrent-edit protection.
+- Live Journal is a project working document beside the Wiki: historical context, highlighted decisions, findings, questions, fixes and verification, with links to saved conversations and exact run evidence.
+- Daily Journal records persist in the Vault, with background capture across registered projects and replay after restart. Agent tools can read and append ticket-bound findings and summaries.
+- Journal and Wiki follow the project discussed in the active Agent conversation. Clear registered project names, ticket references and qualified aliases select the project; a visible control lets you pin a conversation or return to Auto.
+
+### Fixed
+- Keep typed and voice messages attached to their project when another conversation or workspace is opened; delayed background replies cannot redirect the visible Journal.
+- Restore a conversation's project when switching threads or returning to Agent Space. Ambiguous multi-project messages remain unassigned unless a project is pinned.
+- Present historical review results as readable summaries with expandable evidence instead of raw JSON. Render internal Wiki links offline, retain readable code blocks, and preserve note drafts while the Journal refreshes.
+
+### Notes
+- Includes the agent-memory, ticket-tracking, plugin-launcher, Code Snippets and complete Windows/Intel updater fixes from 1.29.2.
+- Agent image attachments and a user-facing PM checkout repair flow remain separate work. Older records with missing authorship or context are labelled accordingly; recorded worker outcomes are not fresh code verification.
+
 ## [1.29.2] - 2026-10-03
 
 ### Fixed
