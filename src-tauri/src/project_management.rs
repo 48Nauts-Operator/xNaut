@@ -1995,6 +1995,24 @@ pub fn repo_now() -> Result<PathBuf, String> {
     configured_repo(&crate::settings::load_or_default().project_management)
 }
 
+/// Where the control repo sits, WITHOUT the validity inspection `repo_now`
+/// performs. For readers that only want to open one known file.
+///
+/// `configured_repo` calls `inspect`, which runs several git commands and
+/// counts every ticket file in every project. The run sweep reads one ticket
+/// per live run on every pass; paying `inspect` for each of those would put
+/// the sweep straight back into the git-storm territory of XNAUT-432, where
+/// 116 git processes at 786% CPU came from exactly this kind of per-call work
+/// on this exact repository. A caller that wants validity still calls
+/// `repo_now`; a caller that wants a path gets a path.
+pub fn repo_path_now() -> Option<PathBuf> {
+    let settings = crate::settings::load_or_default().project_management;
+    if !settings.enabled || settings.repo_path.trim().is_empty() {
+        return None;
+    }
+    resolve_path(&settings.repo_path).ok()
+}
+
 pub fn ticket_list_in(repo: &Path, project: Option<String>) -> Result<Vec<TicketRecord>, String> {
 let roots: Vec<PathBuf> = if let Some(project) = project {
         vec![repo

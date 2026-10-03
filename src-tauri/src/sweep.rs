@@ -298,8 +298,10 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
             repo
         }
         Err(error) => {
+            // Sampled once for the whole pass, never per run (XNAUT-439).
+            let machine = crate::run_control::Machine::sample();
             registry_tick_in(&registry,&leases,None,&crate::ledger::path(),crate::run_control::now_ms(),
-                |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
+                |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_with(&machine,&registry,r,&live) })?;
             if !announced.no_repo {
                 crate::ledger::record("sweep_idle", "nautbot", "", &error);
                 announced.no_repo = true;
@@ -317,8 +319,10 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
             eprintln!("control repo maintenance: {e}");
         }
     });
+    // Sampled once for the whole pass, never per run (XNAUT-439).
+    let machine = crate::run_control::Machine::sample();
     let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
-        |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
+        |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_with(&machine,&registry,r,&live) })?;
     announce_undead(app, &registry)?;
     if crate::instance::role().dispatches() {
         let review_app = app.clone();

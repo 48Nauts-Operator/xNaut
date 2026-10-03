@@ -138,6 +138,24 @@ pub struct RunManifest {
     pub waiting_on: Option<String>,
     pub capture_bytes: u64,
     pub last_commit: String,
+    /// High-water accumulated CPU of the run's children (XNAUT-439).
+    ///
+    /// HIGH-WATER, not last-seen. A subtree's total falls when a child exits —
+    /// rustc finishes and its time leaves the process table — so storing the
+    /// latest reading would let the next idle tick clear the old mark and read
+    /// as fresh progress, and the detector would never fire again.
+    ///
+    /// `serde(default)` for the same reason as `instance`: every manifest on
+    /// tron predates these three fields, and a registry that cannot read its
+    /// own records is a worse failure than the stall window being wrong.
+    #[serde(default)]
+    pub cpu_ms: u64,
+    /// High-water revision of the run's ticket (XNAUT-439).
+    #[serde(default)]
+    pub ticket_revision: u64,
+    /// High-water bytes under the worktree's `.xnaut/` tree (XNAUT-439).
+    #[serde(default)]
+    pub verify_log_bytes: u64,
     pub last_signal: String,
     pub ticket_returned: bool,
     pub revision: u64,
@@ -268,6 +286,13 @@ impl RunManifest {
             waiting_on: None,
             capture_bytes: 0,
             last_commit: git_value(worktree, &["rev-parse", "HEAD"]),
+            // Zero rather than a reading of the world: there is no process yet
+            // to have burned CPU, and letting the first sweep set the three
+            // baselines costs one advance of `last_progress_at` inside the
+            // grace window, which changes no verdict.
+            cpu_ms: 0,
+            ticket_revision: 0,
+            verify_log_bytes: 0,
             last_signal: "requested".into(),
             ticket_returned: false,
             revision: 0,
@@ -780,10 +805,34 @@ pub struct Proofs {
     pub pid: Option<u32>,
     pub process_birth: Option<String>,
     pub exit_code: Option<i32>,
+    /// Accumulated CPU of the run's CHILD processes — cargo, rustc, node,
+    /// playwright (XNAUT-439). A ten-minute compile moves nothing else this
+    /// struct records, and reading that silence as abandonment is the bug.
+    pub cpu_ms: u64,
+    /// The revision of the run's own ticket, so an agent writing its progress
+    /// into the ticket body counts as progress (XNAUT-439).
+    pub ticket_revision: u64,
+    /// Bytes under the worktree's `.xnaut/` tree: the bundle being written and
+    /// the verify evidence beside it (XNAUT-439).
+    pub verify_log_bytes: u64,
 }
 impl Proofs {
     pub fn writers_gone(&self) -> bool {
         !self.pid_alive && !self.session_alive && self.capture_quiet
+    }
+    /// Did anything this machine can see move since the record was written?
+    ///
+    /// ONE definition, read by both the verdict and the reconciler. They used
+    /// to spell out `grew || commit changed` separately, which was already two
+    /// copies of a two-term condition; at six terms, two copies drift, and a
+    /// reconciler that disagrees with the verdict about what progress means is
+    /// how a run gets failed and then kept in the same pass.
+    pub fn progressed(&self, run: &RunManifest) -> bool {
+        self.capture_bytes > run.capture_bytes
+            || (!self.commit.is_empty() && self.commit != run.last_commit)
+            || self.cpu_ms > run.cpu_ms
+            || self.ticket_revision > run.ticket_revision
+            || self.verify_log_bytes > run.verify_log_bytes
     }
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -855,9 +904,20 @@ pub fn verdict(run: &RunManifest, proof: &Proofs, at: i64) -> Verdict {
     {
         return Verdict::Waiting;
     }
-    let progressing = grew || (!proof.commit.is_empty() && proof.commit != run.last_commit);
-    if !progressing && at.saturating_sub(run.last_progress_at) > PROGRESS_WINDOW_MS {
-        return Verdict::Failed("stalled: alive but capture, hooks and commits show no progress beyond the window; waiting_on empty".into());
+    // What counts as progress, and why it is six things and not three.
+    //
+    // On tron 2026-09-22 this window failed run 01M354JH4E9TVBGJ36H7SNJC5G
+    // while its agent sat in `cargo test` on a cold worktree — a ten-minute
+    // compile that writes no capture, fires no hook and makes no commit. The
+    // same window failed XNAUT-379's first run on 2026-09-14. Both agents were
+    // working; the detector was measuring the wrong things.
+    //
+    // A compile is invisible to capture, hooks and commits, and visible in
+    // three other places: the CPU its children burn, the ticket body the agent
+    // writes its results into, and the verify evidence growing in the
+    // worktree. A run whose children burn CPU is not stalled.
+    if !proof.progressed(run) && at.saturating_sub(run.last_progress_at) > PROGRESS_WINDOW_MS {
+        return Verdict::Failed("stalled: alive but capture, hooks, commits, child CPU, ticket revision and verify log show no progress beyond the window; waiting_on empty".into());
     }
     Verdict::Running
 }
@@ -999,7 +1059,215 @@ pub fn remote_proofs(run: &RunManifest, at: i64) -> Proofs {
         pid: run.pid,
         process_birth: None,
         exit_code: None,
+        // The three XNAUT-439 readings are carried through unchanged rather
+        // than measured. A sandboxed run's children live on the far side, so
+        // this machine's process table and this machine's copy of the worktree
+        // say nothing about them; reporting a local zero would read as a fall
+        // from the stored mark, which is silence the beacon has not claimed.
+        cpu_ms: run.cpu_ms,
+        ticket_revision: run.ticket_revision,
+        verify_log_bytes: run.verify_log_bytes,
     }
+}
+
+/// One row of the process table: enough to walk a subtree and read its work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProcRow {
+    pub pid: u32,
+    pub ppid: u32,
+    pub cpu_ms: u64,
+}
+
+/// `ps` prints accumulated CPU as `[[dd-]hh:]mm:ss.ff`.
+///
+/// ACCUMULATED, not instantaneous, and that is the whole point. A sample of
+/// `%cpu` taken in the gap between two rustc invocations reads zero and proves
+/// nothing; a total only ever climbs for a process that is doing work, so two
+/// readings a sweep apart answer "did this subtree work?" without needing to
+/// catch it in the act.
+pub fn parse_cpu_time(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    let (days, rest) = match raw.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, raw),
+    };
+    let mut parts = rest.split(':').rev();
+    let secs: f64 = parts.next()?.trim().parse().ok()?;
+    if !secs.is_finite() || secs < 0.0 {
+        return None;
+    }
+    let unit = |p: Option<&str>| -> Option<u64> {
+        match p {
+            Some(v) => v.trim().parse().ok(),
+            None => Some(0),
+        }
+    };
+    let mins = unit(parts.next())?;
+    let hours = unit(parts.next())?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(((days * 24 + hours) * 3600 + mins * 60) * 1000 + (secs * 1000.0).round() as u64)
+}
+
+pub fn parse_proc_row(line: &str) -> Option<ProcRow> {
+    let mut field = line.split_whitespace();
+    Some(ProcRow {
+        pid: field.next()?.parse().ok()?,
+        ppid: field.next()?.parse().ok()?,
+        cpu_ms: parse_cpu_time(field.next()?)?,
+    })
+}
+
+/// Pure: accumulated CPU of everything BELOW `root`, root itself excluded.
+///
+/// The exclusion is load-bearing. A run's own CLI process burns a little CPU
+/// every time it polls, so counting it would make every run look busy forever
+/// and this detector would never fire again — the opposite bug, and the worse
+/// one, because a genuinely abandoned run would then hold its ticket for good.
+/// What proves work is a CHILD burning CPU: cargo, rustc, node, playwright. An
+/// idle shell under the session accumulates nothing, so including it is free.
+pub fn descendant_cpu_ms(rows: &[ProcRow], root: u32) -> u64 {
+    // pid 0 is the kernel's, and `ppid == 0` is every orphan on the box: taking
+    // it as a root would sum the entire process table and call it progress.
+    if root == 0 {
+        return 0;
+    }
+    let mut frontier = vec![root];
+    let mut seen = BTreeSet::from([root]);
+    let mut total = 0u64;
+    while let Some(parent) = frontier.pop() {
+        for row in rows.iter().filter(|r| r.ppid == parent) {
+            if !seen.insert(row.pid) {
+                continue; // reparented into a cycle, or its own ancestor
+            }
+            total = total.saturating_add(row.cpu_ms);
+            frontier.push(row.pid);
+        }
+    }
+    total
+}
+
+pub fn process_table() -> Vec<ProcRow> {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,time="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(parse_proc_row)
+        .collect()
+}
+
+/// What every run in one sweep pass reads from the machine, sampled ONCE.
+///
+/// This exists for cost, and the cost is not hypothetical. `reconcile_in`
+/// observes every non-done run, which on this machine's registry is 121 of 211
+/// manifests — 109 of them already failed. Sampling the process table inside
+/// `observe_in` would fork `ps` 121 times and reload settings 121 times on
+/// every pass, which is precisely the per-call work that put 116 git processes
+/// at 786% CPU on the control repo in XNAUT-432. One sample per pass instead.
+///
+/// Staleness is irrelevant here: the readings are compared against a record
+/// written sweeps earlier, so a snapshot a few milliseconds old answers the
+/// same question as a fresh one.
+pub struct Machine {
+    pub rows: Vec<ProcRow>,
+    pub control_repo: Option<PathBuf>,
+}
+impl Machine {
+    pub fn sample() -> Self {
+        Self {
+            rows: process_table(),
+            control_repo: crate::project_management::repo_path_now(),
+        }
+    }
+    fn cpu_ms(&self, pid: Option<u32>) -> u64 {
+        pid.map_or(0, |p| descendant_cpu_ms(&self.rows, p))
+    }
+    fn ticket_revision(&self, project: &str, ticket: Option<&str>) -> u64 {
+        match (self.control_repo.as_deref(), ticket) {
+            (Some(repo), Some(ticket)) => ticket_revision_in(repo, project, ticket),
+            _ => 0,
+        }
+    }
+}
+
+/// Total bytes of the worktree's `.xnaut/` tree: the bundle an agent is
+/// writing, the verify evidence beside it, its measurements.
+///
+/// That tree is gitignored by design, which is exactly why it is worth
+/// reading — it moves while no commit does, through the same fifteen minutes
+/// this detector used to read as abandonment.
+///
+/// `file_type()` does not follow symlinks, so a link is neither file nor
+/// directory here and a loop cannot be walked into. The depth bound is belt
+/// and braces: a sweep must not be the thing that hangs.
+pub fn verify_log_bytes_in(worktree: &Path) -> u64 {
+    fn walk(dir: &Path, depth: u32, total: &mut u64) {
+        if depth == 0 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => walk(&entry.path(), depth - 1, total),
+                Ok(t) if t.is_file() => {
+                    if let Ok(meta) = entry.metadata() {
+                        *total = total.saturating_add(meta.len());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut total = 0;
+    walk(&worktree.join(".xnaut"), 8, &mut total);
+    total
+}
+
+/// The revision of the run's own ticket, or 0 when there is no ticket, no
+/// configured control repo, or no readable record.
+///
+/// An agent that is working writes its progress into the ticket body — the
+/// launch prompt instructs it to, and the run on 2026-09-22 did exactly that
+/// with its test results. That write is visible to this machine without the
+/// agent's cooperation, which is what makes it usable as a liveness proof.
+///
+/// The control repo records no ACTOR on a ticket edit (the `ticket.updated`
+/// event carries type, ticket, project, at, revision and title, and no
+/// writer), so this cannot prove the run's OWN agent made the edit rather than
+/// the owner or NautBot. It is scoped to the run's own ticket, which is the
+/// closest attribution the record allows, and a wrong reading here errs toward
+/// alive — the direction that does not kill a working agent.
+pub fn ticket_revision_in(repo: &Path, project: &str, ticket: &str) -> u64 {
+    // Both halves become path components, so anything that could climb out of
+    // the tickets directory is refused rather than sanitised.
+    let safe = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 64
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    if !safe(project) || !safe(ticket) {
+        return 0;
+    }
+    let path = repo
+        .join("projects")
+        .join(project)
+        .join("tickets")
+        .join(format!("{ticket}.json"));
+    // A partial parse, not `TicketRecord`: a field this build does not know
+    // must not turn a live agent's ticket edit into a zero.
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("revision")?.as_u64())
+        .unwrap_or(0)
 }
 
 pub fn process_birth(pid: u32) -> Option<String> {
@@ -1028,7 +1296,20 @@ fn pid_answers(pid: u32) -> bool {
 }
 /// The launcher writes the ACTUAL CLI pid and its birth stamp before exec.
 /// Zellij's viewport pid and the supervising app pid never prove the CLI.
+/// Observe one run, sampling the machine for it alone.
+///
+/// Convenient for a single-run caller and for tests. A sweep that observes many
+/// runs must sample once with `Machine::sample()` and call `observe_with`, or it
+/// pays for a `ps` and a settings load per run.
 pub fn observe_in(dir: &Path, run: &RunManifest, live_sessions: &[String]) -> Proofs {
+    observe_with(&Machine::sample(), dir, run, live_sessions)
+}
+pub fn observe_with(
+    machine: &Machine,
+    dir: &Path,
+    run: &RunManifest,
+    live_sessions: &[String],
+) -> Proofs {
     // A sandboxed run is observed by its beacon, never by this machine's
     // process table (XNAUT-307). Routed here rather than at the call sites so
     // the two production closures in `sweep.rs` and the one in
@@ -1051,6 +1332,24 @@ pub fn observe_in(dir: &Path, run: &RunManifest, live_sessions: &[String]) -> Pr
     let alive = pid
         .zip(birth.as_ref())
         .is_some_and(|(p, b)| pid_answers(p) && process_birth(p).as_ref() == Some(b));
+    // The three readings a compile DOES move (XNAUT-439). The CPU walk is
+    // rooted at the stamped CLI pid, which is the launcher's record of the real
+    // process; zellij's viewport pid would root it in the wrong place and sweep
+    // in every other pane's children.
+    //
+    // Taken only for a run that can still receive a fresh verdict. A terminal
+    // one cannot — `verdict` returns `Keep` and `reconcile_in` reads only its
+    // capture baseline — and skipping those is most of the saving: 109 of the
+    // 211 manifests on this machine's registry are already failed.
+    let (cpu_ms, ticket_revision, verify_log_bytes) = if run.state.terminal() {
+        (0, 0, 0)
+    } else {
+        (
+            machine.cpu_ms(pid),
+            machine.ticket_revision(&run.project, run.ticket.as_deref()),
+            verify_log_bytes_in(Path::new(&run.worktree_path)),
+        )
+    };
     Proofs {
         pid_alive: alive,
         pid_absent: pid.is_some_and(|p| !pid_answers(p)),
@@ -1091,11 +1390,14 @@ pub fn observe_in(dir: &Path, run: &RunManifest, live_sessions: &[String]) -> Pr
         branch_matches: run.branch.is_empty()
             || git_value(&run.worktree_path, &["symbolic-ref", "--short", "HEAD"]) == run.branch,
         commit: git_value(&run.worktree_path, &["rev-parse", "HEAD"]),
-        pid,
-        process_birth: birth,
         exit_code: std::fs::read_to_string(dir.join(format!("{}.exit", run.run_id)))
             .ok()
             .and_then(|s| s.trim().parse().ok()),
+        cpu_ms,
+        ticket_revision,
+        verify_log_bytes,
+        pid,
+        process_birth: birth,
     }
 }
 /// Reconcile one record with a fresh proof under the store lock. Failed runs
@@ -1121,13 +1423,19 @@ pub fn reconcile_in(
             if proof.pid_alive || proof.session_alive {
                 run.last_seen_at = at;
             }
-            if proof.capture_bytes > run.capture_bytes
-                || (!proof.commit.is_empty() && proof.commit != run.last_commit)
-            {
+            if proof.progressed(&run) {
                 run.last_progress_at = at;
             }
             run.capture_bytes = proof.capture_bytes;
             run.last_commit = proof.commit.clone();
+            // High-water marks (XNAUT-439): all three readings fall back as
+            // well as rise — a child exits, a bundle is rewritten shorter, a
+            // ticket is read from a repo that is briefly unreachable and reads
+            // 0. Taking the max means a fall is silence rather than progress,
+            // and silence is what the window is there to measure.
+            run.cpu_ms = run.cpu_ms.max(proof.cpu_ms);
+            run.ticket_revision = run.ticket_revision.max(proof.ticket_revision);
+            run.verify_log_bytes = run.verify_log_bytes.max(proof.verify_log_bytes);
             run.pid = proof.pid;
             run.process_birth = proof.process_birth.clone();
             match decision {
@@ -1634,6 +1942,9 @@ pub(crate) mod tests {
             waiting_on: None,
             capture_bytes: 0,
             last_commit: "first".into(),
+            cpu_ms: 0,
+            ticket_revision: 0,
+            verify_log_bytes: 0,
             last_signal: "test".into(),
             ticket_returned: false,
             revision: 0,
@@ -2066,6 +2377,381 @@ pub(crate) mod tests {
         run.last_progress_at = at;
         assert_eq!(verdict(&run, &proof, at), Verdict::Running);
     }
+    // ─── A compile is work (XNAUT-439) ─────────────────────────────────────
+
+    /// The bug, as a test. Run 01M354JH4E9TVBGJ36H7SNJC5G on tron was alive in
+    /// its zellij session, on its own branch, fifteen minutes into
+    /// `cargo test` on a cold worktree — and so wrote no capture, fired no
+    /// hook and made no commit. It was marked failed while it worked.
+    ///
+    /// Each of the three new readings alone must be enough to rescue it,
+    /// because a given minute of that compile may move only one of them.
+    #[test]
+    fn a_compile_is_progress_though_capture_hooks_and_commits_stand_still() {
+        let run = run();
+        let base = proof();
+        let at = run.started_at + PROGRESS_WINDOW_MS + 1;
+
+        // The exact shape of the 2026-09-22 run: alive, on its branch, with
+        // capture and HEAD unmoved since the record was written.
+        let alive = || Proofs { pid_alive: true, ..base.clone() };
+        assert_eq!(alive().capture_bytes, run.capture_bytes);
+        assert_eq!(alive().commit, run.last_commit);
+
+        // Before the fix this was the whole story, and it still is when
+        // genuinely nothing moves.
+        assert!(
+            matches!(verdict(&run, &alive(), at), Verdict::Failed(r) if r.contains("stalled")),
+            "six flat readings past the window is still a stall"
+        );
+
+        for (what, proof) in [
+            ("rustc burning CPU", Proofs { cpu_ms: 1, ..alive() }),
+            ("a ticket-body edit", Proofs { ticket_revision: 1, ..alive() }),
+            ("a growing verify log", Proofs { verify_log_bytes: 1, ..alive() }),
+        ] {
+            assert_eq!(
+                verdict(&run, &proof, at),
+                Verdict::Running,
+                "{what} is progress, however quiet the capture is"
+            );
+        }
+    }
+
+    /// Why `cpu_ms` is a high-water mark and not the latest reading.
+    ///
+    /// A subtree's accumulated CPU FALLS when a child exits: rustc finishes and
+    /// its time leaves the process table. Storing the latest reading would let
+    /// the next tick's small accrual beat the lowered mark and read as fresh
+    /// progress forever, so the detector would never fire again — an abandoned
+    /// run would hold its ticket for good. The max means a fall is silence.
+    #[test]
+    fn a_child_exiting_lowers_the_cpu_reading_without_counting_as_progress() {
+        let dir = std::env::temp_dir()
+            .join(format!("xnaut-439-cpu-water-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut run = run();
+        run.started_at = 1_000;
+        run.last_progress_at = 1_000;
+        run.last_commit = String::new();
+        std::fs::write(
+            dir.join(format!("{}.run.json", run.run_id)),
+            serde_json::to_string(&run).unwrap(),
+        )
+        .unwrap();
+
+        // A compile runs: the children's accumulated CPU climbs.
+        let busy = |run: &RunManifest| Proofs {
+            pid_alive: true,
+            cpu_ms: 600_000,
+            commit: run.last_commit.clone(),
+            worktree_exists: true,
+            branch_matches: true,
+            ..Default::default()
+        };
+        reconcile_in(&dir, 2_000, busy).unwrap();
+        let after_compile = load_manifest_in(&dir, &run.run_id).unwrap();
+        assert_eq!(after_compile.cpu_ms, 600_000);
+        assert_eq!(
+            after_compile.last_progress_at, 2_000,
+            "the compile moved the progress clock"
+        );
+
+        // The compile ends. Its children leave the table, so the reading falls,
+        // and the agent then sits idle past the window.
+        let idle = |run: &RunManifest| Proofs {
+            pid_alive: true,
+            cpu_ms: 12,
+            commit: run.last_commit.clone(),
+            worktree_exists: true,
+            branch_matches: true,
+            ..Default::default()
+        };
+        let at = 2_000 + PROGRESS_WINDOW_MS + 1;
+        reconcile_in(&dir, at, idle).unwrap();
+        let after_idle = load_manifest_in(&dir, &run.run_id).unwrap();
+        assert_eq!(
+            after_idle.cpu_ms, 600_000,
+            "the high-water mark stands against a fall"
+        );
+        assert_eq!(
+            after_idle.last_progress_at, 2_000,
+            "a fall is silence, not progress"
+        );
+        assert_eq!(
+            after_idle.state,
+            RunState::Failed,
+            "an idle run past the window is still caught"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The reconciler and the verdict must agree about what progress means.
+    /// They each used to spell the condition out, and a reconciler that keeps
+    /// a record the verdict has already failed is how a run reads failed on
+    /// the board while its ticket is held open.
+    #[test]
+    fn the_reconciler_and_the_verdict_read_progress_from_one_definition() {
+        let run = run();
+        for proof in [
+            Proofs { capture_bytes: 1, ..proof() },
+            Proofs { commit: "moved".into(), ..proof() },
+            Proofs { cpu_ms: 1, ..proof() },
+            Proofs { ticket_revision: 1, ..proof() },
+            Proofs { verify_log_bytes: 1, ..proof() },
+        ] {
+            assert!(proof.progressed(&run), "{proof:?}");
+        }
+        assert!(
+            !proof().progressed(&run),
+            "the baseline proof matches the record, so nothing moved"
+        );
+        // Equal is not greater: a reading that merely repeats itself is silence.
+        let mut flat = proof();
+        flat.cpu_ms = 0;
+        flat.ticket_revision = 0;
+        flat.verify_log_bytes = 0;
+        assert!(!flat.progressed(&run));
+    }
+
+    /// `ps` prints accumulated CPU in four shapes, and the detector reads all
+    /// of them or silently scores a busy subtree as zero.
+    #[test]
+    fn accumulated_cpu_parses_in_every_shape_ps_prints() {
+        assert_eq!(parse_cpu_time("0:00.00"), Some(0));
+        assert_eq!(parse_cpu_time("0:01.50"), Some(1_500));
+        assert_eq!(parse_cpu_time("503:51.52"), Some(503 * 60_000 + 51_520));
+        assert_eq!(parse_cpu_time("2:03:04.00"), Some(7_384_000));
+        assert_eq!(parse_cpu_time("1-02:03:04.00"), Some(93_784_000));
+        assert_eq!(parse_cpu_time("  0:02.00  "), Some(2_000));
+        for junk in ["", "-", "abc", "1:2:3:4.0", "0:-1.0", "x:00.00"] {
+            assert_eq!(parse_cpu_time(junk), None, "{junk:?}");
+        }
+    }
+
+    /// The walk sums DESCENDANTS and never the run's own process.
+    ///
+    /// Including the root would make every run look busy forever — a polling
+    /// CLI always accrues a little — and the detector would stop working
+    /// altogether. That is a worse bug than the one being fixed, so it gets a
+    /// test of its own rather than a comment.
+    #[test]
+    fn the_cpu_walk_sums_children_and_grandchildren_but_never_the_run_itself() {
+        let rows = [
+            ProcRow { pid: 100, ppid: 1, cpu_ms: 9_000 },   // the agent CLI
+            ProcRow { pid: 200, ppid: 100, cpu_ms: 50 },    // its shell
+            ProcRow { pid: 300, ppid: 200, cpu_ms: 400_000 }, // cargo
+            ProcRow { pid: 400, ppid: 300, cpu_ms: 600_000 }, // rustc
+            ProcRow { pid: 500, ppid: 1, cpu_ms: 777 },     // someone else's
+        ];
+        assert_eq!(descendant_cpu_ms(&rows, 100), 50 + 400_000 + 600_000);
+        assert_eq!(descendant_cpu_ms(&rows, 300), 600_000);
+        assert_eq!(descendant_cpu_ms(&rows, 400), 0, "a leaf has no children");
+        assert_eq!(descendant_cpu_ms(&rows, 999), 0, "an absent pid is not an error");
+        // pid 0 would otherwise match every orphan's ppid and sum the box.
+        assert_eq!(descendant_cpu_ms(&rows, 0), 0);
+        // A reparenting cycle must not hang the sweep.
+        let cyclic = [
+            ProcRow { pid: 10, ppid: 20, cpu_ms: 1 },
+            ProcRow { pid: 20, ppid: 10, cpu_ms: 2 },
+        ];
+        assert_eq!(descendant_cpu_ms(&cyclic, 10), 2);
+    }
+
+    #[test]
+    fn a_process_table_row_parses_and_junk_is_dropped() {
+        assert_eq!(
+            parse_proc_row(" 80149 32641   1:02.50 "),
+            Some(ProcRow { pid: 80_149, ppid: 32_641, cpu_ms: 62_500 })
+        );
+        for junk in ["", "80149", "80149 32641", "a b 0:00.00", "1 2 nope"] {
+            assert_eq!(parse_proc_row(junk), None, "{junk:?}");
+        }
+    }
+
+    /// The worktree's `.xnaut/` tree is gitignored, which is exactly why it is
+    /// worth reading: it grows through the same minutes no commit does.
+    #[test]
+    fn the_verify_log_reading_is_the_worktree_xnaut_tree() {
+        let tree = std::env::temp_dir()
+            .join(format!("xnaut-439-verify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        assert_eq!(
+            verify_log_bytes_in(&tree),
+            0,
+            "a worktree with no .xnaut tree reads zero, not an error"
+        );
+        std::fs::create_dir_all(tree.join(".xnaut/bundles")).unwrap();
+        assert_eq!(verify_log_bytes_in(&tree), 0, "empty directories weigh nothing");
+        std::fs::write(tree.join(".xnaut/verify.json"), "{}").unwrap();
+        std::fs::write(tree.join(".xnaut/bundles/XNAUT-439.md"), "totals").unwrap();
+        assert_eq!(verify_log_bytes_in(&tree), 2 + 6, "nested files are counted");
+        std::fs::remove_dir_all(&tree).unwrap();
+    }
+
+    /// The agent on 2026-09-22 wrote its test results into the ticket body.
+    /// That write is the one thing it did that this machine could have seen.
+    #[test]
+    fn the_ticket_revision_is_read_from_the_run_s_own_ticket() {
+        let repo = std::env::temp_dir()
+            .join(format!("xnaut-439-control-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        let tickets = repo.join("projects/XNAUT/tickets");
+        std::fs::create_dir_all(&tickets).unwrap();
+        std::fs::write(tickets.join("XNAUT-439.json"), r#"{"revision":7}"#).unwrap();
+        assert_eq!(ticket_revision_in(&repo, "XNAUT", "XNAUT-439"), 7);
+
+        // A record with no revision, or none at all, is no signal — never a panic.
+        std::fs::write(tickets.join("XNAUT-440.json"), r#"{"id":"XNAUT-440"}"#).unwrap();
+        assert_eq!(ticket_revision_in(&repo, "XNAUT", "XNAUT-440"), 0);
+        assert_eq!(ticket_revision_in(&repo, "XNAUT", "XNAUT-999"), 0);
+        std::fs::write(tickets.join("XNAUT-441.json"), "not json").unwrap();
+        assert_eq!(ticket_revision_in(&repo, "XNAUT", "XNAUT-441"), 0);
+
+        // Both halves become path components, so a crafted id is refused
+        // rather than allowed to read a file outside the tickets directory.
+        std::fs::write(repo.join("secret.json"), r#"{"revision":99}"#).unwrap();
+        for (project, ticket) in [
+            ("XNAUT", "../../../secret"),
+            ("..", "XNAUT-439"),
+            ("XNAUT", ""),
+            ("", "XNAUT-439"),
+            ("XNAUT", "a/b"),
+        ] {
+            assert_eq!(
+                ticket_revision_in(&repo, project, ticket),
+                0,
+                "{project:?}/{ticket:?} must not resolve"
+            );
+        }
+        std::fs::remove_dir_all(&repo).unwrap();
+    }
+
+    /// A sandboxed run's children live on the far side. Reporting this
+    /// machine's zero for them would read as a fall from the stored mark, so
+    /// the beacon's readings are carried through untouched.
+    #[test]
+    fn a_remote_run_carries_its_own_readings_rather_than_this_machine_s() {
+        let mut run = run();
+        run.remote_env = Some("gitvm".into());
+        run.cpu_ms = 600_000;
+        run.ticket_revision = 7;
+        run.verify_log_bytes = 4_096;
+        run.last_seen_at = 10_000;
+        let proof = remote_proofs(&run, 10_000);
+        assert_eq!(proof.cpu_ms, 600_000);
+        assert_eq!(proof.ticket_revision, 7);
+        assert_eq!(proof.verify_log_bytes, 4_096);
+        assert!(
+            !proof.progressed(&run),
+            "carried-through readings are not progress by themselves"
+        );
+    }
+
+    /// End to end against the real process table and a real directory.
+    ///
+    /// Everything above this test is pure, and a pure test would pass just as
+    /// happily if `ps` took different flags on this platform, printed a column
+    /// in another order, or returned nothing at all — the detector would score
+    /// every busy subtree at zero and go on failing working agents, with no
+    /// test red and no error anywhere. The same silent-no-op class as calling a
+    /// `window.*` global that was never assigned.
+    #[cfg(unix)]
+    #[test]
+    fn observe_reads_real_child_cpu_a_real_xnaut_tree_and_a_real_ticket() {
+        let root = std::env::temp_dir()
+            .join(format!("xnaut-439-observe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (registry, tree, repo) =
+            (root.join("registry"), root.join("tree"), root.join("control"));
+        std::fs::create_dir_all(registry.join("x")).unwrap();
+        std::fs::create_dir_all(tree.join(".xnaut/bundles")).unwrap();
+        std::fs::create_dir_all(repo.join("projects/XNAUT/tickets")).unwrap();
+        std::fs::write(tree.join(".xnaut/bundles/XNAUT-439.md"), "0123456789").unwrap();
+        std::fs::write(
+            repo.join("projects/XNAUT/tickets/XNAUT-439.json"),
+            r#"{"revision":11}"#,
+        )
+        .unwrap();
+
+        let mut run = run();
+        run.pid = Some(std::process::id());
+        run.worktree_path = tree.to_string_lossy().into();
+        run.branch = String::new(); // no git repo here; branch is not under test
+        run.ticket = Some("XNAUT-439".into());
+        run.project = "XNAUT".into();
+
+        // A real child burning real CPU, reaped on every path out of here.
+        let mut burner = std::process::Command::new("sh")
+            .args(["-c", "while :; do :; done"])
+            .spawn()
+            .expect("spawn a cpu burner");
+        let mut cpu = 0;
+        for _ in 0..100 {
+            cpu = observe_in(&registry, &run, &[]).cpu_ms;
+            if cpu > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = burner.kill();
+        let _ = burner.wait();
+        assert!(
+            cpu > 0,
+            "a child burning cpu must read as cpu: `ps -axo pid=,ppid=,time=` \
+             returned nothing this detector could use"
+        );
+
+        let proof = observe_in(&registry, &run, &[]);
+        assert_eq!(proof.verify_log_bytes, 10, "the real .xnaut tree is measured");
+        assert_eq!(
+            ticket_revision_in(&repo, "XNAUT", "XNAUT-439"),
+            11,
+            "the real ticket record is read"
+        );
+
+        // A terminal run never gets a fresh verdict, so the three readings are
+        // not taken for it. 109 of the 211 manifests on this machine's registry
+        // are already failed, and walking a worktree for each of them on every
+        // sweep is the cost this skip exists to avoid.
+        for state in [RunState::Failed, RunState::Done, RunState::Retired] {
+            let mut terminal = run.clone();
+            terminal.state = state;
+            let proof = observe_in(&registry, &terminal, &[]);
+            assert_eq!(
+                (proof.cpu_ms, proof.ticket_revision, proof.verify_log_bytes),
+                (0, 0, 0),
+                "{state:?} is not judged again, so it is not measured"
+            );
+            assert_eq!(
+                proof.capture_bytes, run.capture_bytes,
+                "the capture baseline is still read: the return path needs it"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Every manifest on tron predates these three fields. A registry that
+    /// cannot read its own records loses every run it is meant to reconcile,
+    /// which is worse than the stall window being wrong.
+    #[test]
+    fn a_manifest_written_before_the_progress_readings_existed_still_reads() {
+        let original = run();
+        let mut trimmed =
+            serde_json::to_value(&original).unwrap().as_object().unwrap().clone();
+        for field in ["cpu_ms", "ticket_revision", "verify_log_bytes"] {
+            assert!(trimmed.remove(field).is_some(), "{field} must be written");
+        }
+        let parsed: RunManifest = serde_json::from_value(trimmed.into()).unwrap();
+        assert_eq!(parsed.run_id, original.run_id);
+        assert_eq!(
+            (parsed.cpu_ms, parsed.ticket_revision, parsed.verify_log_bytes),
+            (0, 0, 0),
+            "an unstated reading is no reading, so the first sweep sets it"
+        );
+    }
+
     #[test]
     fn grace_and_terminal_states_do_not_turn_into_ghost_failures() {
         let mut run = run();
