@@ -109,7 +109,9 @@ fn append_in(root: &Path, name: &str, e: &Entry, context: &str) -> Result<(), St
 fn historical(p: &Project) -> Vec<Value> {
     let root = Path::new(&p.vault_path);
     let mut docs = Vec::new();
-    walk(root, &root.join("Development/handoffs"), &mut docs);
+    if let Ok(dir) = safe(root, "Development/handoffs") {
+        walk(root, &dir, &mut docs);
+    }
     docs.sort_by(|a, b| b["path"].as_str().cmp(&a["path"].as_str()));
     let mut seen = std::collections::HashSet::new();
     docs.into_iter().filter(|v|seen.insert(v["title"].as_str().unwrap_or("").to_string())).take(3).filter_map(|v| {
@@ -117,6 +119,72 @@ fn historical(p: &Project) -> Vec<Value> {
         let d=doc_in(root,rel).ok()?;
         Some(json!({"title":d.title,"path":rel,"content":body(&d.content),"updated_at":d.updated_at}))
     }).collect()
+}
+fn excerpt(text: &str, limit: usize) -> String {
+    let clean = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.chars().count() <= limit {
+        return clean;
+    }
+    let short = clean.chars().take(limit).collect::<String>();
+    format!(
+        "{}…",
+        short.rsplit_once(' ').map(|(s, _)| s).unwrap_or(&short)
+    )
+}
+fn signal_summary(signal: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(signal.trim()) else {
+        return excerpt(signal, 240);
+    };
+    let review = &value["review"];
+    let mut parts = Vec::new();
+    if let Some(decision) = review["decision"].as_str().or(value["decision"].as_str()) {
+        parts.push(format!("Review: {}.", decision.replace('_', " ")));
+    }
+    if let Some(summary) = value["summary"].as_str().or(value["outcome"].as_str()) {
+        parts.push(excerpt(summary, 220));
+    }
+    if let Some(reason) = review["reasons"]
+        .as_array()
+        .and_then(|v| v.first())
+        .and_then(Value::as_str)
+        .or(value["reason"].as_str())
+    {
+        parts.push(format!("Finding: {}", excerpt(reason, 220)));
+    }
+    if parts.is_empty() {
+        "A structured result was recorded. Open the evidence for details.".into()
+    } else {
+        parts.join(" ")
+    }
+}
+fn run_preview(e: &Entry) -> String {
+    let section = |heading: &str| {
+        e.content
+            .split_once(&format!("## {heading}\n"))
+            .map(|(_, s)| s.split("\n## ").next().unwrap_or(s).trim())
+            .unwrap_or("")
+    };
+    let goal = section("Goal");
+    let signal = e
+        .content
+        .lines()
+        .find_map(|l| l.strip_prefix("- Last signal: "))
+        .unwrap_or("");
+    let next = section("Where to continue")
+        .split("\n\nRead the linked")
+        .next()
+        .unwrap_or("");
+    format!(
+        "### {}\n\n{}\n\n{}\n\n{}",
+        e.title,
+        excerpt(goal, 260),
+        signal_summary(signal),
+        if next.is_empty() {
+            String::new()
+        } else {
+            format!("**Next:** {}", excerpt(next, 220))
+        }
+    )
 }
 fn context(p: &Project) -> String {
     let root = Path::new(&p.vault_path);
@@ -132,7 +200,10 @@ fn context(p: &Project) -> String {
             let selected: Vec<_> = entries(&text)
                 .into_iter()
                 .rev()
-                .filter(|e| ["summary", "decision", "question"].contains(&e.kind.as_str()))
+                .filter(|e| {
+                    e.run_id.is_empty()
+                        && ["summary", "decision", "question"].contains(&e.kind.as_str())
+                })
                 .take(3)
                 .collect();
             out.push_str(&format!("### [Previous Journal](../../{rel})\n\n"));
@@ -178,13 +249,13 @@ fn context(p: &Project) -> String {
             .next()
             .unwrap_or("");
         out.push_str(&format!(
-            "### [{}](../../{})\n\n{}\n\n**Recorded outcome:** {}. {}\n\n**Next:** {}\n\n",
+            "### [{}](../../{})\n\n{}\n\n**Execution:** {}. {}\n\n**Next:** {}\n\n",
             d["title"].as_str().unwrap_or("Handoff"),
             d["path"].as_str().unwrap_or(""),
             goal,
             state,
-            signal,
-            next
+            signal_summary(signal),
+            excerpt(next, 220)
         ));
     }
     out
@@ -202,7 +273,9 @@ fn append(p: &Project, e: &Entry) -> Result<(), String> {
 fn documents(p: &Project) -> Vec<Value> {
     let root = Path::new(&p.vault_path);
     let mut docs = Vec::new();
-    walk(root, &root.join("Development/journal"), &mut docs);
+    if let Ok(dir) = safe(root, "Development/journal") {
+        walk(root, &dir, &mut docs);
+    }
     docs.sort_by(|a, b| b["path"].as_str().cmp(&a["path"].as_str()));
     docs
 }
@@ -219,7 +292,16 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
     } else {
         String::new()
     };
-    let rows = entries(&text);
+    let rows: Vec<_> = entries(&text)
+        .into_iter()
+        .map(|e| {
+            let mut value = serde_json::to_value(&e).unwrap();
+            if !e.run_id.is_empty() {
+                value["preview"] = json!(run_preview(&e));
+            }
+            value
+        })
+        .collect();
     let opening = if text.is_empty() {
         context(&p)
     } else {
@@ -231,6 +313,20 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
             .unwrap_or("")
             .to_string()
     };
+    // Older preview documents retain their evidence, but do not dump a JSON
+    // receipt into the human-readable opening when displaying that document.
+    let opening = opening
+        .lines()
+        .map(|line| {
+            if line.starts_with("**Recorded outcome:**") || line.starts_with("**Execution:**") {
+                if let Some(index) = line.find('{') {
+                    return format!("{}{}", &line[..index], signal_summary(&line[index..]));
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let current: Vec<_> = runs(&p.key)
         .into_iter()
         .filter(|r| !r.state.terminal())
@@ -557,6 +653,16 @@ mod tests {
         assert!(opening.contains(&e.at));
         assert!(opening.contains("not fresh verification"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn historical_review_is_readable_without_dumping_json() {
+        let signal=json!({"run_id":"internal-id","review":{"decision":"changes_requested","reasons":["The diff is missing, so the code change cannot be reviewed."]},"input_hash":"internal-hash"}).to_string();
+        let summary = signal_summary(&signal);
+        assert!(summary.contains("changes requested"));
+        assert!(summary.contains("diff is missing"));
+        assert!(!summary.contains("input_hash"));
+        assert!(!summary.contains('{'));
+        assert!(excerpt(&"word ".repeat(1000), 240).chars().count() <= 241);
     }
     #[test]
     fn injected_metadata_cannot_forge_entries() {

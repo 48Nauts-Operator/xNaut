@@ -8,7 +8,10 @@
   const date = s => { const d = new Date(s); return Number.isNaN(d.getTime()) ? 'Time not recorded' : d.toLocaleString([], {dateStyle:'medium',timeStyle:'short'}); };
   const labels = {note:'Your notes',question:'Open question',proposal:'Proposed change',decision:'Decision',finding:'Finding',fix:'Fix · reported',verification:'Verification · reported',summary:'Work summary',execution:'Execution receipt',progress:'Agent progress'};
   function markdown(el, text, openWiki) {
-    const parsed = new DOMParser().parseFromString(window.xnautMarkdown ? window.xnautMarkdown.render(text) : `<pre>${esc(text)}</pre>`, 'text/html');
+    // The offline Markdown renderer only recognizes absolute links. Use a local
+    // sentinel while parsing, then route it directly to the existing Wiki.
+    const prepared=String(text).replace(/\]\(\.\.\/\.\.\/(Development\/[a-zA-Z0-9_./-]+\.md)\)/g,'](https://xnaut-wiki.invalid/$1)');
+    const parsed = new DOMParser().parseFromString(window.xnautMarkdown ? window.xnautMarkdown.render(prepared) : `<pre>${esc(text)}</pre>`, 'text/html');
     const allowed = new Set('P H1 H2 H3 H4 H5 H6 UL OL LI STRONG EM B I S DEL BLOCKQUOTE CODE PRE TABLE THEAD TBODY TR TH TD HR BR A DETAILS SUMMARY SPAN'.split(' '));
     parsed.body.querySelectorAll('*').forEach(node => {
       if(node.tagName==='DIV' && node.classList.contains('mermaid')) {const pre=parsed.createElement('pre');pre.textContent=node.textContent;node.replaceWith(pre);return;}
@@ -16,7 +19,7 @@
       for (const attr of [...node.attributes]) if (!(node.tagName === 'A' && attr.name === 'href') && !(node.tagName === 'CODE' && attr.name === 'class')) node.removeAttribute(attr.name);
       if (node.tagName === 'A') {
         const href = node.getAttribute('href') || '';
-        if (/^\.\.\/\.\.\/Development\/[a-zA-Z0-9_./-]+\.md$/.test(href)) { node.dataset.wikiPath=href.slice(6); node.removeAttribute('href'); }
+        if (/^https:\/\/xnaut-wiki\.invalid\/Development\/[a-zA-Z0-9_./-]+\.md$/.test(href)) { node.dataset.wikiPath=href.slice('https://xnaut-wiki.invalid/'.length); node.removeAttribute('href'); }
         else if (!/^https?:\/\//i.test(href)) node.removeAttribute('href');
         else { node.setAttribute('target','_blank'); node.setAttribute('rel','noopener noreferrer'); }
       }
@@ -79,7 +82,11 @@
         if(!node){
           node=document.createElement('section');node.className='pj-entry pj-'+entry.kind;node.dataset.id=entry.id;node.dataset.content=entry.content;
           node.innerHTML=`<div class="pj-entry-meta"><span>${esc(labels[entry.kind] || entry.kind)}</span><time>${esc(date(entry.at))}</time></div><div class="pj-author">${esc(entry.actor)}${entry.ticket?' · '+esc(entry.ticket):''}</div><div class="pj-body"></div><div class="pj-links"></div>`;
-          markdown(node.querySelector('.pj-body'),entry.content,openWiki);
+          const contentHost=node.querySelector('.pj-body');
+          if(entry.run_id && entry.preview){
+            const brief=document.createElement('div');markdown(brief,entry.preview,openWiki);contentHost.append(brief);
+            const evidence=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Execution details and evidence';const full=document.createElement('div');full.className='pj-evidence';markdown(full,entry.content,openWiki);evidence.append(summary,full);contentHost.append(evidence);
+          } else markdown(contentHost,entry.content,openWiki);
           const body=node.querySelector('.pj-body');
           const attribution=body.querySelector('h3 + p');
           if(attribution?.textContent === `${entry.at} · ${entry.actor} · ${entry.kind}`) attribution.remove();

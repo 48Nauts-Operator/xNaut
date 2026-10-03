@@ -6,7 +6,7 @@
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const date = value => { if (!value) return 'Not recorded'; const d = new Date(value); return isNaN(d) ? String(value) : d.toLocaleString(undefined, {dateStyle:'medium',timeStyle:'short'}) + ' · ' + Intl.DateTimeFormat().resolvedOptions().timeZone; };
   const terminal = state => ['done','failed','retired'].includes(state);
-  const strip = content => String(content).replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+  const strip = content => String(content).replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').replace(/^<!-- xnaut-journal-entry .* -->\r?\n/gm, '');
   const drafts = new Map();
   const instances = new WeakMap();
   const group = path => /Development\/journal\//.test(path) ? 'Journals' : /^Memory\//.test(path) ? 'Saved project memory' : /handoffs\//.test(path) ? 'Handoffs' : /(?:^|[\/_-])(?:recon|review|audit)(?:[\/_.-]|$)/i.test(path) ? 'Recon & reviews' : /(?:plans|features|decisions)/i.test(path) ? 'Plans & decisions' : /(?:docu|references)/i.test(path) ? 'Reference documents' : 'Project documents';
