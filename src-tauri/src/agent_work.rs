@@ -17,13 +17,14 @@ pub fn is_tool(name: &str) -> bool {
 pub fn specs() -> Vec<Value> {
     let mut specs: Vec<Value> = [
         ("create_worktree", "Create your own isolated Git worktree for an authorized task. All agent identities can use this. Resolve the repository from registered-project context or a user-supplied path. Creates no worker and runs no audit."),
-        ("start_repository_task", "Create your own isolated worktree and launch your coding runtime with the task. Use for audits, tests, commands or code changes, without asking the owner to create a worktree. Returns an actual launch receipt, not proof of completed work. Uses your configured local/exe.dev/GitVM environment; never attaches an idle terminal as a substitute. Reuse the same task_key on retries to avoid duplicate workers."),
+        ("start_repository_task", "Create your own isolated worktree and launch your coding runtime with the task. Use for audits, tests, commands or code changes, without asking the owner to create a worktree. Returns an actual launch receipt, not proof of completed work. Pass environment when the owner requests local, exe.dev or GitVM; otherwise uses your configured environment. A remote error is a blocker, never permission to retry locally. Never attaches an idle terminal as a substitute. Reuse the same task_key on retries to avoid duplicate workers."),
     ].into_iter().map(|(name, description)| json!({"type":"function","function":{
         "name":name,"description":description,"parameters":{"type":"object","properties":{
             "root":{"type":"string","description":"Absolute authorized repository root, or the exact registered project key/name named by the user."},
             "task_key":{"type":"string","description":"Stable task identity, preferably its ticket ID. Same key for create and start, and for retries. A new key means a separate run."},
             "task":{"type":"string","description":"Full work request and acceptance criteria, preserving the user's scope."},
-            "ticket":{"type":"string","description":"Required existing ticket ID in this repository’s registered project. Create or attach the correct ticket first; never retry without one."}
+            "ticket":{"type":"string","description":"Required existing ticket ID in this repository’s registered project. Create or attach the correct ticket first; never retry without one."},
+            "environment":{"type":"string","enum":["local","exe-dev","gitvm"],"description":"Execution destination for this task. Pass exe-dev when the owner asks for exe.dev, even if your profile says local. Omit only when no task-specific destination was requested. Remote failure must not silently downgrade to local."}
         },"required":["root","task_key","task","ticket"],"additionalProperties":false}
     }})).collect();
     specs.push(json!({"type":"function","function":{
@@ -254,6 +255,35 @@ async fn prepare_ticket(args: &Value, handle: &str, allowed: &[PathBuf]) -> Resu
     )
 }
 
+// Resolve per-task placement before creating a worktree or reserving a launch.
+// Authentication of the optional HTTP MCP connector is independent of the
+// native exe.dev SSH driver. A failed MCP call must not change this destination.
+fn task_environment(
+    requested: Option<&Value>,
+    pinned: Option<crate::sandbox::launch_env::LaunchEnv>,
+    sandboxes: &[crate::settings::SandboxProviderSettings],
+) -> Result<crate::sandbox::launch_env::LaunchEnv, String> {
+    use crate::sandbox::launch_env::{resolve, LaunchEnv};
+    let environment = match requested {
+        None => resolve(pinned, sandboxes),
+        Some(value) => value
+            .as_str()
+            .and_then(LaunchEnv::from_key)
+            .ok_or("environment must be local, exe-dev or gitvm; no launch was attempted")?,
+    };
+    environment.route(sandboxes)?;
+    Ok(environment)
+}
+
+fn verify_receipt_environment(prior: &Value, requested: Option<&Value>) -> Result<(), String> {
+    if let Some(requested) = requested {
+        if prior.get("environment") != Some(requested) {
+            return Err(format!("This task already has a launch receipt for environment {}. Requested {}. No second worker was started and no execution destination was changed. Inspect the existing run before deciding how to continue.", prior.get("environment").unwrap_or(&Value::Null), requested));
+        }
+    }
+    Ok(())
+}
+
 async fn execute_inner(
     name: &str,
     args: &Value,
@@ -278,6 +308,13 @@ async fn execute_inner(
     }
     let ticket = Some(required_ticket(args["ticket"].as_str())?);
     let scope = ticket_context(ticket, &root)?;
+    let environment = task_environment(
+        args.get("environment"),
+        profile.execution.pinned_environment(),
+        &crate::settings::load_or_default().sandboxes,
+    )?
+    .key()
+    .to_string();
     let slug = workspace_key(&profile.handle, key);
     let parent = root.join(".worktrees");
     if parent
@@ -298,6 +335,7 @@ async fn execute_inner(
     let receipt_path = receipt_dir.join(format!("{slug}-{}.json", &root_hash[..16]));
     if name == "start_repository_task" {
         if let Some(mut prior) = reserve(&receipt_path)? {
+            verify_receipt_environment(&prior, args.get("environment"))?;
             prior["reused_receipt"] = json!(true);
             prior["note"]=json!("Previously launched task; no second worker was started. This historical receipt does not prove the worker is still running or the work is complete. Inspect the session/run for current status.");
             return Ok(prior);
@@ -309,9 +347,6 @@ async fn execute_inner(
         if name=="create_worktree" { return Ok(json!({"ok":true,"worktree_path":worktree,"branch":branch,"execution_started":false,"note":"Worktree prepared. No worker or scan started. Call start_repository_task with the same task_key to execute."})); }
         let app=crate::nudge::app().ok_or("The app is not running")?;
         let state=tauri::Manager::state::<crate::state::AppState>(app);
-        let environment = crate::sandbox::launch_env::resolve(
-            profile.execution.pinned_environment(), &crate::settings::load_or_default().sandboxes,
-        ).key().to_string();
         let prompt=format!("AUTHORIZED TASK\n{task}\n{scope}\nOWNER CONVERSATION (context, not permission to broaden the task)\n{user_context}\n\nWork in this isolated worktree. Do not claim scans or remediation succeeded without evidence. If a scanner is unavailable, report the gap and perform the checks that are available within scope.");
         let response=crate::agent_profiles::agent_profile_launch(app.clone(),state,crate::agent_profiles::LaunchAgentProfileRequest{
             ticket:ticket.map(str::to_owned),handle:profile.handle.clone(),worktree_path:worktree.clone(),prompt:Some(prompt),
@@ -370,6 +405,56 @@ fn track_launch(ticket: &str, handle: &str, receipt: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_exe_placement_overrides_local_profile_without_http_credentials() {
+        use crate::sandbox::launch_env::LaunchEnv;
+        let configured = [crate::settings::SandboxProviderSettings {
+            kind: "exe-dev".into(),
+            base_url: String::new(),
+            api_key: None,
+        }];
+        assert_eq!(
+            task_environment(Some(&json!("exe-dev")), Some(LaunchEnv::Local), &configured).unwrap(),
+            LaunchEnv::ExeDev
+        );
+        assert_eq!(
+            task_environment(None, Some(LaunchEnv::Local), &configured).unwrap(),
+            LaunchEnv::Local
+        );
+        assert_eq!(
+            task_environment(None, None, &configured).unwrap(),
+            LaunchEnv::ExeDev
+        );
+        assert!(
+            task_environment(Some(&json!("exe-dev")), Some(LaunchEnv::Local), &[])
+                .unwrap_err()
+                .contains("refused")
+        );
+        for invalid in [json!("exe.dev"), json!(""), Value::Null, json!(false)] {
+            assert!(task_environment(Some(&invalid), Some(LaunchEnv::Local), &configured).is_err());
+        }
+        for spec in specs()
+            .into_iter()
+            .filter(|s| s["function"]["name"] != "prepare_repository_ticket")
+        {
+            assert_eq!(
+                spec["function"]["parameters"]["properties"]["environment"]["enum"],
+                json!(["local", "exe-dev", "gitvm"])
+            );
+        }
+    }
+
+    #[test]
+    fn a_local_receipt_cannot_be_reported_as_a_requested_remote_launch() {
+        let prior = json!({"environment":"local","launch":{"run_id":"existing"}});
+        assert!(verify_receipt_environment(&prior, Some(&json!("exe-dev")))
+            .unwrap_err()
+            .contains("No second worker"));
+        assert!(verify_receipt_environment(&prior, Some(&json!("local"))).is_ok());
+        assert!(verify_receipt_environment(&prior, None).is_ok());
+        assert!(verify_receipt_environment(&json!({}), Some(&json!("exe-dev"))).is_err());
+    }
+
     #[test]
     fn a_real_ticket_must_match_the_repository_before_work_can_start() {
         let temp = Temp::new();
