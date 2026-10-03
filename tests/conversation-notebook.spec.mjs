@@ -6,6 +6,7 @@ async function openNotes(page, chatKey='notes-a') {
   await page.evaluate(key => window.xnautAttachChatTab({chatKey:key,title:key}), chatKey);
   await page.evaluate(() => window.xnautRightPaneShow('workspace'));
   await page.locator('[data-sub="wiki"]').click();
+  await page.getByRole('button',{name:'Notebooks',exact:true}).click();
   await expect(page.getByRole('button',{name:'+ Add note',exact:true})).toBeEnabled();
   return page.locator('[data-notebook-host]');
 }
@@ -79,6 +80,6 @@ test('failed summaries do not replace notes and documentation remains available'
   await expect(pane.getByLabel('Note title')).toHaveValue('Remember');
   await page.getByRole('button',{name:'Documentation',exact:true}).click();
   await expect(page.locator('[data-wiki-url]')).toBeVisible();
-  await page.getByRole('button',{name:'Notes',exact:true}).click();
+  await page.getByRole('button',{name:'Notebooks',exact:true}).click();
   await expect(pane.getByLabel('Note title')).toHaveValue('Remember');
 });

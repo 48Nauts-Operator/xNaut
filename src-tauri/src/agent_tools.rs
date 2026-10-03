@@ -34,6 +34,9 @@ const MAX_ROUNDS: usize = 14;
 
 pub fn tool_specs() -> Vec<Value> {
     let mut specs = vec![
+        json!({"type":"function","function":{"name":"project_wiki_list","description":"Read this registered project's Wiki index, durable handoffs and current activity before continuing work. The project is a PM key (e.g. XNAUT) or its registered repository root.","parameters":{"type":"object","properties":{"project":{"type":"string"}},"required":["project"]}}}),
+        json!({"type":"function","function":{"name":"project_wiki_read","description":"Read a canonical Vault page and its current hash before editing it. Preserve human contributions and distinguish proposed work from verified outcomes.","parameters":{"type":"object","properties":{"project":{"type":"string"},"path":{"type":"string"}},"required":["project","path"]}}}),
+        json!({"type":"function","function":{"name":"project_wiki_write","description":"Create or revise a project Wiki page in the Vault with native author attribution and revision history. For existing pages, first read and supply expected_hash. For new pages use null. Keep a concise change summary; preserve source evidence and human edits. Document recon, decisions, actual results and remaining work as you proceed.","parameters":{"type":"object","properties":{"ticket":{"type":"string","description":"Existing ticket in this project authorizing the work"},"project":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"expected_hash":{"type":["string","null"]},"summary":{"type":"string"}},"required":["ticket","project","path","content","expected_hash","summary"]}}}),
         json!({
             "type": "function",
             "function": {
@@ -798,6 +801,9 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
             }
+        }
+        "project_wiki_list" | "project_wiki_read" | "project_wiki_write" => {
+            crate::project_wiki::agent_tool(name, args, canvas_key)
         }
         "vault_search" => {
             let query = args.get("query").and_then(Value::as_str).unwrap_or("");

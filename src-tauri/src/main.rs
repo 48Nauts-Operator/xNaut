@@ -96,6 +96,7 @@ mod policy;
 mod pm;
 mod project_management;
 mod project_todos;
+mod project_wiki;
 mod push;
 mod pty;
 mod repo_check;
@@ -174,6 +175,10 @@ fn print_startup_banner() {
 
 #[tokio::main]
 async fn main() {
+    if option_env!("XNAUT_WIKI_PREVIEW") == Some("1") {
+        project_wiki::preview();
+        return;
+    }
     // A release app launched by launchd/open can hold a CLOSED stdout, and
     // Rust's print! panics on the broken pipe — with panic=abort that killed
     // the whole app on its first log line (tron, 2026-08-31; same signature
@@ -662,6 +667,13 @@ async fn main() {
             vault::vault_tree,
             workspace::workspace_agentic_items,
             workspace::workspace_sessions,
+            project_wiki::project_wiki_projects,
+            project_wiki::project_wiki_overview,
+            project_wiki::project_wiki_read,
+            project_wiki::project_wiki_save,
+            project_wiki::project_wiki_source,
+            project_wiki::project_wiki_asset,
+            project_wiki::project_wiki_attach,
             wiki::wiki_fetch,
             wiki::wiki_slug,
             wiki::wiki_collection_read,
@@ -740,6 +752,10 @@ async fn main() {
             // because it reads settings and the agent registry and the window
             // has no reason to wait for either.
             std::thread::spawn(preflight::run_at_boot);
+            std::thread::spawn(|| loop {
+                project_wiki::reconcile();
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            });
 
             // Build native macOS menu
             let about_metadata = AboutMetadataBuilder::new()

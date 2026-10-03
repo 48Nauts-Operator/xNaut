@@ -1,0 +1,1 @@
+{"productName":"xNAUT Wiki Preview","identifier":"com.nautcode.xnaut.wiki-preview","app":{"windows":[{"label":"main","title":"xNAUT · Wiki Preview","url":"wiki-preview.html","width":1400,"height":900,"minWidth":800,"minHeight":600,"center":true,"devtools":true}]},"bundle":{"createUpdaterArtifacts":false,"targets":["app"]}}

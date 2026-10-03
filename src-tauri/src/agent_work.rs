@@ -347,11 +347,17 @@ async fn execute_inner(
         if name=="create_worktree" { return Ok(json!({"ok":true,"worktree_path":worktree,"branch":branch,"execution_started":false,"note":"Worktree prepared. No worker or scan started. Call start_repository_task with the same task_key to execute."})); }
         let app=crate::nudge::app().ok_or("The app is not running")?;
         let state=tauri::Manager::state::<crate::state::AppState>(app);
-        let prompt=format!("AUTHORIZED TASK\n{task}\n{scope}\nOWNER CONVERSATION (context, not permission to broaden the task)\n{user_context}\n\nWork in this isolated worktree. Do not claim scans or remediation succeeded without evidence. If a scanner is unavailable, report the gap and perform the checks that are available within scope.");
+        let prompt=format!("AUTHORIZED TASK\n{task}\n{scope}\nOWNER CONVERSATION (context, not permission to broaden the task)\n{user_context}\n\nBefore continuing, read this project's Vault documentation and saved handoffs. Maintain recon, decisions, evidence and a final handoff in the existing project Wiki/Vault, preserving human edits and provenance. Work in this isolated worktree. Do not claim scans or remediation succeeded without evidence. If a scanner is unavailable, report the gap and perform the checks that are available within scope.");
         let response=crate::agent_profiles::agent_profile_launch(app.clone(),state,crate::agent_profiles::LaunchAgentProfileRequest{
             ticket:ticket.map(str::to_owned),handle:profile.handle.clone(),worktree_path:worktree.clone(),prompt:Some(prompt),
             conversation_mode:false,conversation_id:None,resume:false,cols:Some(160),rows:Some(40),durable:Some(true),runtime_id:history.and_then(|h|h.runtime_id.clone()),environment:Some(environment.clone()),
         }).await?;
+        if let Some(run_id)=response.run_id.as_deref() {
+            let _=crate::run_control::update_in(&crate::agents::registry_dir()?,run_id,|run| {
+                run.initiated_by=std::env::var("USER").or_else(|_|std::env::var("USERNAME")).unwrap_or_else(|_|"Owner via Agent conversation".into());
+                run.origin_thread_id=history.map(|h|h.thread_id.clone()).unwrap_or_default();
+            });
+        }
         Ok(json!({"ok":true,"execution_started":true,"handle":profile.handle,"origin_thread_id":history.map(|h|h.thread_id.as_str()),"ticket":ticket,"task_key":key,"task":task,"repository_root":root,"worktree_path":worktree,"branch":branch,"environment":environment,"launch":response,"note":"Worker launched with the task. Check its output for progress and findings; no scan or security sign-off is claimed by this receipt."}))
     }.await;
     if name == "start_repository_task" {

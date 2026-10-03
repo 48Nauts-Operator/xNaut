@@ -514,10 +514,12 @@
     function page() {
       return `<div class="rpwk">
         <div class="rpwk-switch" role="group" aria-label="Wiki view">
-          <button class="rpwk-btn" data-wiki-mode="notes" aria-pressed="true">Notes</button>
+          <button class="rpwk-btn" data-wiki-mode="project" aria-pressed="true">Project Wiki</button>
+          <button class="rpwk-btn" data-wiki-mode="notes" aria-pressed="false">Notebooks</button>
           <button class="rpwk-btn" data-wiki-mode="docs" aria-pressed="false">Documentation</button>
         </div>
-        <div data-notebook-host></div>
+        <div data-project-wiki-host style="flex:1;min-height:0;overflow:hidden"></div>
+        <div data-notebook-host hidden></div>
         <div class="rpwk-docs" data-docs-host hidden>
         <div class="rpwk-bar">
           <input class="rpwk-url" data-wiki-url type="text" spellcheck="false"
@@ -770,8 +772,10 @@
       const e = els(); if (!e) return;
       const notebook = container.querySelector('[data-notebook-host]');
       const docs = container.querySelector('[data-docs-host]');
+      const knowledge = container.querySelector('[data-project-wiki-host]');
+      if (window.xnautProjectWiki) window.xnautProjectWiki.mount(knowledge, root);
       const choose = mode => {
-        notebook.hidden = mode !== 'notes'; docs.hidden = mode !== 'docs';
+        notebook.hidden = mode !== 'notes'; docs.hidden = mode !== 'docs'; knowledge.hidden = mode !== 'project';
         container.querySelectorAll('[data-wiki-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.wikiMode === mode)));
       };
       container.querySelectorAll('[data-wiki-mode]').forEach(b => { b.onclick = () => choose(b.dataset.wikiMode); });
@@ -808,6 +812,7 @@
       setRoot(next) {
         if (next === root) return Promise.resolve();
         root = next || '';
+        if (window.xnautProjectWiki) window.xnautProjectWiki.mount(container.querySelector('[data-project-wiki-host]'), root);
         currentUrl = ''; collection = null; slug = '';
         if (window.xnautNotebook) void window.xnautNotebook.mount(container.querySelector('[data-notebook-host]'), root);
         const e = els();

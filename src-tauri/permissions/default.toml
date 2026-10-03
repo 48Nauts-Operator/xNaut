@@ -457,6 +457,7 @@ commands.allow = ["workspace_agentic_items", "workspace_sessions"]
 identifier = "allow-wiki"
 description = "Allow the Wiki tab to fetch a docs page and keep its per-project collection"
 commands.allow = [
+  "project_wiki_projects", "project_wiki_overview", "project_wiki_read", "project_wiki_save", "project_wiki_source", "project_wiki_asset", "project_wiki_attach",
   "wiki_fetch", "wiki_slug", "wiki_collection_read",
   "wiki_collection_record", "wiki_collection_pin", "wiki_collection_forget",
 ]

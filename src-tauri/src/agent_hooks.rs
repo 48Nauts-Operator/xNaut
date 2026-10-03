@@ -131,6 +131,7 @@ pub struct ProjectMcpInfo {
 
 /// Tools that change something. Everything else is readable with either token.
 const WRITE_TOOLS: &[&str] = &[
+    "xnaut_wiki_write",
     "xnaut_create_ticket",
     "xnaut_update_ticket",
     "xnaut_create_document",
@@ -155,7 +156,7 @@ fn mcp_tool(name: &str, description: &str, properties: Value, required: &[&str])
 }
 
 fn project_mcp_tools() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         mcp_tool(
             "xnaut_list_projects",
             "List xNAUT projects from the configured control repository.",
@@ -284,7 +285,16 @@ fn project_mcp_tools() -> Vec<Value> {
             json!({ "marker": { "type": "string" } }),
             &["marker"],
         ),
-    ]
+    ];
+    for spec in crate::agent_tools::tool_specs().into_iter().filter(|s| {
+        s["function"]["name"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("project_wiki_"))
+    }) {
+        let f = &spec["function"];
+        tools.push(json!({"name":f["name"].as_str().unwrap().replace("project_wiki_","xnaut_wiki_"),"description":f["description"],"inputSchema":f["parameters"]}));
+    }
+    tools
 }
 
 fn required_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -613,6 +623,24 @@ async fn call_project_tool(
             serde_json::to_value(crate::markers::resolve_marker(marker))
                 .map_err(|error| error.to_string())
         }
+        "xnaut_wiki_list" | "xnaut_wiki_read" | "xnaut_wiki_write" => {
+            if name == "xnaut_wiki_write" && caller.is_none() {
+                return Err("An identified Agent session is required for Wiki authorship".into());
+            }
+            let result = crate::project_wiki::agent_tool(
+                &name.replace("xnaut_wiki_", "project_wiki_"),
+                &args,
+                caller.unwrap_or("Read-only caller"),
+            );
+            if result["ok"] == false {
+                Err(result["error"]
+                    .as_str()
+                    .unwrap_or("Wiki operation failed")
+                    .into())
+            } else {
+                Ok(result)
+            }
+        }
         "xnaut_list_documents"
         | "xnaut_search_documents"
         | "xnaut_read_document"
@@ -635,6 +663,9 @@ const MAX_ARTIFACTS: usize = 20;
 /// is exactly the omission worth catching before it ships.
 fn tool_next_actions(name: &str) -> Vec<&'static str> {
     match name {
+        "xnaut_wiki_list" => vec!["call xnaut_wiki_read with a document path before editing"],
+        "xnaut_wiki_read" => vec!["call xnaut_wiki_write with an existing project ticket and expected_hash from this page; preserve human edits"],
+        "xnaut_wiki_write" => vec!["read the saved page to verify its content and latest revision"],
         "xnaut_list_projects" => {
             vec!["call xnaut_list_tickets with one of the returned project keys"]
         }
@@ -2068,7 +2099,10 @@ mod tests {
                 "xnaut_create_document",
                 "xnaut_update_document",
                 "xnaut_log_decision",
-                "xnaut_resolve_marker"
+                "xnaut_resolve_marker",
+                "xnaut_wiki_list",
+                "xnaut_wiki_read",
+                "xnaut_wiki_write"
             ]
         );
         // `why` is required: a boundary logged without a rationale is the thing
@@ -2323,7 +2357,9 @@ mod tests {
                 "xnaut_list_documents",
                 "xnaut_search_documents",
                 "xnaut_read_document",
-                "xnaut_resolve_marker"
+                "xnaut_resolve_marker",
+                "xnaut_wiki_list",
+                "xnaut_wiki_read"
             ]
         );
     }

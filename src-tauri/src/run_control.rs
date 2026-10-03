@@ -75,6 +75,10 @@ pub struct RunManifest {
     /// Studio/tron drift of 2026-09-13.
     #[serde(default)]
     pub app_version: String,
+    #[serde(default)]
+    pub initiated_by: String,
+    #[serde(default)]
+    pub origin_thread_id: String,
     pub agent_handle: String,
     pub runtime_id: String,
     pub model: Option<String>,
@@ -215,6 +219,8 @@ impl RunManifest {
             instance: stamp.id,
             role: stamp.role,
             app_version: stamp.version,
+            initiated_by: String::new(),
+            origin_thread_id: String::new(),
             agent_handle: handle.trim_start_matches('@').to_lowercase(),
             runtime_id: runtime.into(),
             model,
@@ -539,8 +545,21 @@ pub fn update_in(
 ) -> Result<RunManifest, String> {
     let _lock = StoreLock::acquire(dir)?;
     let mut run = load_manifest_in(dir, id)?;
+    let old_state = run.state;
     change(&mut run);
     persist_locked(dir, &mut run)?;
+    drop(_lock);
+    #[cfg(not(test))]
+    if old_state != run.state && (run.state.terminal() || run.state == RunState::Blocked) {
+        let stopped = run.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = crate::project_wiki::capture_stop(&stopped) {
+                eprintln!("[wiki] stop checkpoint pending: {error}");
+            }
+        });
+    }
+    #[cfg(test)]
+    let _ = old_state;
     Ok(run)
 }
 
@@ -1233,6 +1252,8 @@ pub(crate) mod tests {
             instance: "inst-test".into(),
             role: "fleet".into(),
             app_version: "0.0.0-test".into(),
+            initiated_by: String::new(),
+            origin_thread_id: String::new(),
             agent_handle: "codex".into(),
             runtime_id: "codex".into(),
             model: None,

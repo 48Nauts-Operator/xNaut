@@ -127,6 +127,8 @@ test('the Build run pane carries a Wiki tab between Output and History', async (
   // And it is a tab that renders its own surface, not a nav entry wired to
   // nothing, which is the failure this whole file exists to catch.
   await nav.locator('button[data-sub="wiki"]').click();
+  await expect(page.locator('[data-project-wiki-host]')).toBeVisible();
+  await page.getByRole('button',{name:'Notebooks',exact:true}).click();
   await expect(page.getByRole('button',{name:'+ Add note',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Documentation',exact:true}).click();
   await expect(page.locator('.rpws-page[data-page="wiki"] .rpwk-url')).toBeVisible();
