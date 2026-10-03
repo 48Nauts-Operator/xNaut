@@ -1206,6 +1206,15 @@ impl Machine {
 /// directory here and a loop cannot be walked into. The depth bound is belt
 /// and braces: a sweep must not be the thing that hangs.
 pub fn verify_log_bytes_in(worktree: &Path) -> u64 {
+    // An empty worktree path would make this `./.xnaut` — RELATIVE to whatever
+    // directory the app happens to be running in, so a run with no worktree
+    // would be credited with the bytes of some other tree entirely. `verdict`
+    // fails such a run as "worktree absent" before it reads progress, but the
+    // bogus figure would still be stored as the high-water mark and would then
+    // hide real movement if the path were ever repaired.
+    if worktree.as_os_str().is_empty() {
+        return 0;
+    }
     fn walk(dir: &Path, depth: u32, total: &mut u64) {
         if depth == 0 {
             return;
@@ -2587,6 +2596,8 @@ pub(crate) mod tests {
         std::fs::write(tree.join(".xnaut/verify.json"), "{}").unwrap();
         std::fs::write(tree.join(".xnaut/bundles/XNAUT-439.md"), "totals").unwrap();
         assert_eq!(verify_log_bytes_in(&tree), 2 + 6, "nested files are counted");
+        // An empty path must not become `./.xnaut` and read some unrelated tree.
+        assert_eq!(verify_log_bytes_in(Path::new("")), 0);
         std::fs::remove_dir_all(&tree).unwrap();
     }
 
