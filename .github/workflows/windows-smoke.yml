@@ -111,6 +111,23 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          # Keep the app visible instead of capturing a foreground runner console.
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class SmokeWindow {
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+            [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int width, int height, uint flags);
+          }
+          '@
+          $app = Get-Process -Name xnaut -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+          if ($app) {
+            [SmokeWindow]::ShowWindow($app.MainWindowHandle, 9) | Out-Null
+            [SmokeWindow]::SetWindowPos($app.MainWindowHandle, [IntPtr](-1), 80, 60, 1100, 700, 0x0040) | Out-Null
+            [SmokeWindow]::SetForegroundWindow($app.MainWindowHandle) | Out-Null
+            Start-Sleep -Seconds 2
+          }
           $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
           $gfx = [System.Drawing.Graphics]::FromImage($bmp)
