@@ -11,7 +11,7 @@ test('switching harness persists the runtime and carries history into ticket-awa
   await expect(page.locator('.as-title h1')).toHaveText('Builder');
 
   // Builder's profile runtime is codex, so that is what the picker starts on.
-  const harness = page.locator('.as-harness');
+  const harness = page.getByLabel('Harness for this thread');
   await expect(harness).toHaveValue('codex');
 
   // Ticket-aware dispatch reads the selected runtime from the persisted thread,
