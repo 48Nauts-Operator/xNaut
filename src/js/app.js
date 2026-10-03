@@ -976,7 +976,7 @@ async function init() {
     await step('triggers', loadTriggers);
     await step('chat sessions', initChatSessions);
     await step('snippets', loadSnippets);
-    await step('notification permission', requestNotificationPermission);
+    if (!window.xnautFullWikiPreview) await step('notification permission', requestNotificationPermission);
     await step('shared status bar', initSharedStatusBar);
     await step('active worklog', checkActiveWorklog);
     await step('clawproxy', checkClawProxy);
@@ -1052,6 +1052,7 @@ function compareVersions(a, b) {
 }
 
 async function checkForUpdates() {
+  if (window.xnautFullWikiPreview) return;
   try {
     if (!window.__TAURI__) return;
     // Worktree test bundles always trail the newest release; nagging them to

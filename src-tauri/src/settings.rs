@@ -572,7 +572,7 @@ fn shellexpand_home(path: &str) -> String {
 
 fn config_dir() -> PathBuf {
     dirs::config_dir()
-        .map(|p| p.join("xnaut"))
+        .map(|p| p.join(if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
 }
 

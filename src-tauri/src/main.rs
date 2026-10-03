@@ -139,6 +139,9 @@ mod worktree_protection;
 mod zellij;
 
 use state::AppState;
+
+// Separate full-application acceptance build; never a runtime production switch.
+pub(crate) const FULL_WIKI_PREVIEW: bool = option_env!("XNAUT_FULL_WIKI_PREVIEW").is_some();
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::Manager;
 
@@ -184,9 +187,9 @@ async fn main() {
     // the whole app on its first log line (tron, 2026-08-31; same signature
     // in rust-panics.log since 08-18). Dev builds keep their pipes: cargo
     // tauri dev reads them.
-    #[cfg(not(debug_assertions))]
+    #[cfg(any(not(debug_assertions), target_os = "macos"))]
     unsafe {
-        if libc::isatty(1) == 0 {
+        if libc::isatty(1) == 0 && (!cfg!(debug_assertions) || FULL_WIKI_PREVIEW) {
             let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
             if devnull >= 0 {
                 libc::dup2(devnull, 1);
@@ -733,6 +736,7 @@ async fn main() {
             docsgen::docgen_generate,
         ])
         .setup(|app| {
+            if !FULL_WIKI_PREVIEW {
             // Credentials and evidence live here; nobody else on this machine
             // needs read access. Idempotent, and it also closes files written
             // by earlier versions (XNAUT-213).
@@ -756,6 +760,8 @@ async fn main() {
                 project_wiki::reconcile();
                 std::thread::sleep(std::time::Duration::from_secs(60));
             });
+
+            }
 
             // Build native macOS menu
             let about_metadata = AboutMetadataBuilder::new()
@@ -874,6 +880,10 @@ async fn main() {
                     _ => {}
                 }
             });
+
+            if FULL_WIKI_PREVIEW {
+                return Ok(());
+            }
 
             // Kick off the agent-status decay task (Phase 4).
             status::spawn_decay_task(app.handle().clone());
@@ -997,7 +1007,7 @@ async fn main() {
                     voice::release_window(handle.state::<state::AppState>().inner(), &label).await;
                 });
             }
-            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+            if !FULL_WIKI_PREVIEW && matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
                 let _ = mcp::stop_local_excalidraw_process();
             }
         });
