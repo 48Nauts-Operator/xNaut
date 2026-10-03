@@ -178,6 +178,7 @@ async fn prepare_ticket(args: &Value, handle: &str, allowed: &[PathBuf]) -> Resu
     if crate::switches::load().read_only {
         return Err("The read_only kill-switch is engaged.".into());
     }
+    crate::agent_profiles::agent_profile_get(handle.to_string())?;
     let root = authorize_root(args["root"].as_str().unwrap_or_default(), allowed)?;
     let key = args["task_key"].as_str().unwrap_or_default().trim();
     let task = args["task"].as_str().unwrap_or_default().trim();
