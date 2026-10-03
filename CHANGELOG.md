@@ -2,6 +2,20 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.29.2] - 2026-10-03
+
+### Fixed
+- Agents can retrieve older saved conversation messages and worker receipts instead of losing task context beyond the recent-message window.
+- Repository work now requires a ticket in the correct project before creating a worktree or launching a worker. Agents can register an authorized checkout and prepare its ticket themselves; launch receipts are recorded on the ticket.
+- Explicit local, exe.dev or GitVM task placement overrides the agent's saved Compute setting. Remote failures do not authorize a local retry, and an existing receipt cannot be reused as evidence of a different destination.
+- Preserve the selected runtime and older owner-supplied repository scope when launching work from an Agent conversation.
+- Resolve plugin executables and their runtime PATH correctly when xNAUT starts from Finder.
+- Publish signed updater artifacts and a complete update feed for Apple Silicon, Intel Mac and Windows. A missing platform artifact or signature stops feed publication.
+
+### Improved
+- Code Snippets retain their title and group Markdown headings into keyboard-accessible collapsible sections. Compact view restores the flat command list without changing the saved Markdown.
+- Fenced multiline code remains one command when copied or run; introductory notes and nested sections stay visible in the grouped view.
+
 ## [1.29.1] - 2026-10-02
 
 ### Added

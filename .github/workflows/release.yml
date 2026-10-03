@@ -229,40 +229,25 @@ jobs:
           done
           spctl -a -vvv -t open --context context:primary-signature "$DMG" || true
 
-      - name: Generate latest.json for updater (macOS aarch64 only)
-        if: matrix.target == 'aarch64-apple-darwin'
-        working-directory: src-tauri
-        shell: bash
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          SIG=$(cat target/aarch64-apple-darwin/release/bundle/macos/xNAUT.app.tar.gz.sig 2>/dev/null || echo "")
-          cat > target/latest.json << MANIFEST
-          {
-            "version": "${VERSION}",
-            "notes": "xNAUT ${VERSION} — see release notes for details",
-            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "platforms": {
-              "darwin-aarch64": {
-                "signature": "${SIG}",
-                "url": "https://github.com/48Nauts-Operator/xNaut/releases/download/v${VERSION}/xNAUT-macos-aarch64.app.tar.gz"
-              }
-            }
-          }
-          MANIFEST
-
       - name: Rename artifacts for clarity
         shell: bash
         working-directory: src-tauri
         run: |
+          set -euo pipefail
           VERSION=${GITHUB_REF_NAME#v}
-          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-            cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg target/xNAUT-${VERSION}-macos-aarch64.dmg 2>/dev/null || true
-            cp target/aarch64-apple-darwin/release/bundle/macos/xNAUT.app.tar.gz target/xNAUT-macos-aarch64.app.tar.gz 2>/dev/null || true
-          elif [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-            cp target/x86_64-apple-darwin/release/bundle/dmg/*.dmg target/xNAUT-${VERSION}-macos-x64.dmg 2>/dev/null || true
-          elif [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
-            cp target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi target/xNAUT-${VERSION}-windows-x64.msi 2>/dev/null || true
-            cp target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe target/xNAUT-${VERSION}-windows-x64-setup.exe 2>/dev/null || true
+          TARGET=${{ matrix.target }}
+          BUNDLE=target/$TARGET/release/bundle
+          if [ "$TARGET" = "aarch64-apple-darwin" ] || [ "$TARGET" = "x86_64-apple-darwin" ]; then
+            ARCH=x64
+            if [ "$TARGET" = "aarch64-apple-darwin" ]; then ARCH=aarch64; fi
+            cp "$BUNDLE"/dmg/*.dmg "target/xNAUT-${VERSION}-macos-${ARCH}.dmg"
+            cp "$BUNDLE/macos/xNAUT.app.tar.gz" "target/xNAUT-macos-${ARCH}.app.tar.gz"
+            cp "$BUNDLE/macos/xNAUT.app.tar.gz.sig" "target/xNAUT-macos-${ARCH}.app.tar.gz.sig"
+          else
+            cp "$BUNDLE"/msi/*.msi "target/xNAUT-${VERSION}-windows-x64.msi"
+            cp "$BUNDLE"/msi/*.msi.sig "target/xNAUT-${VERSION}-windows-x64.msi.sig"
+            cp "$BUNDLE"/nsis/*.exe "target/xNAUT-${VERSION}-windows-x64-setup.exe"
+            cp "$BUNDLE"/nsis/*.exe.sig "target/xNAUT-${VERSION}-windows-x64-setup.exe.sig"
           fi
 
       - name: Upload to GitHub Release
@@ -275,8 +260,29 @@ jobs:
             src-tauri/target/xNAUT-*.msi
             src-tauri/target/xNAUT-*-setup.exe
             src-tauri/target/xNAUT-*.app.tar.gz
-            src-tauri/target/latest.json
+            src-tauri/target/xNAUT-*.sig
           generate_release_notes: true
+
+  assemble-updater:
+    name: Assemble complete updater feed
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all staged updater artifacts and signatures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir updater \
+            --pattern '*.app.tar.gz' --pattern '*.msi' --pattern '*-setup.exe' --pattern '*.sig'
+      - name: Require every supported target before publishing the feed
+        run: python3 scripts/updater-manifest.py updater "${GITHUB_REF_NAME#v}" --repository "$GITHUB_REPOSITORY"
+      - name: Attach manifest to the staged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" updater/latest.json --repo "$GITHUB_REPOSITORY" --clobber
 
   # Keep the Homebrew cask in step with the release. It drifted to 1.9.4 while
   # four versions shipped, so brew users sat on a build without either half of
