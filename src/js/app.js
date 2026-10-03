@@ -4451,6 +4451,7 @@ async function switchTab(tabId) {
     }
   }
 
+  tab?.terminals.forEach(entry => entry.onActivate?.());
   renderTabs();
   // Phase 6: let browser-pane.js know which webviews to show/hide.
   if (typeof window.xnautOnTabSwitched === 'function') {

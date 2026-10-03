@@ -9,7 +9,10 @@ import sys
 if sys.platform != 'darwin':
     raise SystemExit('This local preview profile helper currently supports macOS.')
 source = Path.home() / 'Library/Application Support/xnaut'
-target = source / ('journal-preview' if '--journal' in sys.argv else 'full-wiki-preview')
+target = source / ('journal-preview-3' if '--journal' in sys.argv else 'full-wiki-preview')
+# Preserve the owner's latest Preview 2 conversations without sharing its DB.
+if '--journal' in sys.argv and (source / 'journal-preview/conversations.sqlite').exists():
+    source = source / 'journal-preview'
 target.mkdir(mode=0o700, parents=True, exist_ok=True)
 os.chmod(target, 0o700)
 settings = target / 'settings.json'

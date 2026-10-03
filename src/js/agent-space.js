@@ -353,6 +353,8 @@
       .as-status-dot { width:6px; height:6px; border-radius:50%; background:#71717a; }
       .as-harness { flex:0 0 auto; padding:5px 7px; border:1px solid var(--border-color,#303038); border-radius:7px;
         color:var(--text-secondary,#92929d); background:var(--editor-surface,#18181d); font-size:11px; cursor:pointer; }
+      .as-context-bar { display:flex; align-items:center; gap:10px; padding:7px 22px; border-bottom:1px solid var(--border-color,#303038); color:var(--text-secondary,#92929d); font-size:11px; }
+      .as-project-context { flex:1; max-width:280px; min-width:0; text-overflow:ellipsis; }
       .as-harness:hover { color:var(--text-primary,#e4e4e9); }
       .as-status-dot.working { background:#4da3ff; box-shadow:0 0 0 3px rgba(77,163,255,.12); }
       .as-status-dot.attention { background:#ff5f56; }
@@ -855,6 +857,7 @@
       pane.querySelector('[data-new]').onclick = () => window.xnautOpenNewAgent();
       return;
     }
+    const journalProjects = await invoke('project_wiki_projects').catch(() => []);
     const recent = threadsFor(profile.handle);
     // Reuse an existing EMPTY thread before creating another one. Eager
     // creation stacked identical "New thread" rows, and the auto-create on
@@ -886,7 +889,8 @@
       <header class="as-head">
         <div class="as-avatar">${esc(initials(profile))}</div>
         <div class="as-title"><div class="as-title-row"><h1>${esc(profile.display_name)}</h1><span class="as-handle">@${esc(profile.handle)}</span></div>
-          <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div></div>
+          <div class="as-status"><span class="as-status-dot ${esc(status)}"></span><span>${esc(status === 'idle' ? 'Ready' : status)}</span>${session ? '<span>· terminal attached</span>' : ''}</div>
+        </div>
         <select class="as-harness" data-harness title="Harness this thread runs under" aria-label="Harness for this thread">${(runtimes.length ? runtimes : [{ id: profile.runtime_id, label: profile.runtime_id }]).map((runtime) => `<option value="${esc(runtime.id)}" ${runtime.id === threadRuntime ? 'selected' : ''} ${runtime.available === false && runtime.id !== threadRuntime ? 'disabled' : ''}>${esc(runtime.label || runtime.id)}${runtime.available === false ? ' · not installed' : ''}</option>`).join('')}</select>
         <button class="as-button" data-terminal aria-label="Open terminal" title="Open terminal" ${sessionId ? '' : 'hidden'}>&gt;_</button>
         <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — a build will ask'}" aria-label="Project folder">${profile.default_project ? '📁' : '📂'}</button>
@@ -894,6 +898,7 @@
         <button class="as-button" data-attach title="Plugins for this agent" aria-label="Plugins">+</button>
         <button class="as-button" data-settings>Settings</button>
       </header>
+      <div class="as-context-bar"><span>Journal &amp; Wiki</span><select class="as-harness as-project-context" data-journal-project aria-label="Conversation project" title="Journal and Wiki follow this conversation. Select a project to pin it."><option value="">Auto · follow chat</option>${(Array.isArray(journalProjects) ? journalProjects : []).map(p => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('')}</select></div>
       <div class="as-body as-thread">
         <div class="as-messages" data-messages></div>
       </div>
@@ -1114,6 +1119,31 @@
     // in any later wiring step used to leave the right pane blank, which is
     // indistinguishable from the pane being broken.
     if (window.xnautRightPaneOpenAgent) window.xnautRightPaneOpenAgent(profile, {preserveNotebook:true});
+
+    const projectPicker = pane.querySelector('[data-journal-project]');
+    const resolveJournal = (text = '') => window.xnautAgentProjectContext.resolve({
+      text, thread, profile, projects:Array.isArray(journalProjects) ? journalProjects : [],
+      fallback:window.xnautActiveProjectPath?.() || '',
+    });
+    const syncJournal = (context = resolveJournal()) => {
+      projectPicker.value = thread.journalPinnedProject || '';
+      projectPicker.options[0].textContent = context.project ? `Auto · ${context.project.name}`
+        : context.reason === 'multiple' ? 'Multiple projects · choose' : 'Auto · choose a project';
+      projectPicker.title = context.project
+        ? `${thread.journalPinnedProject ? 'Pinned to' : 'Following chat:'} ${context.project.name}. Journal and Wiki use this project.`
+        : 'No single project identified. Choose one to capture this conversation in its Journal.';
+      // A retained microphone/background reply cannot move another chat's pane.
+      if (pane.isConnected && !pane.hidden && pane.getClientRects().length) window.xnautAgentProjectContext.follow(context.project);
+      return context.project?.key || '';
+    };
+    pane._followJournal = () => syncJournal();
+    projectPicker.onchange = () => {
+      thread = updateThread(profile.handle, thread.id, next => {
+        next.journalPinnedProject = projectPicker.value;
+        return next;
+      });
+      syncJournal();
+    };
 
     const composer = pane.querySelector('[data-compose]');
     const send = pane.querySelector('[data-send]');
@@ -1710,7 +1740,7 @@
       }
       send.disabled = true;
       // Freeze scope at send time; later project navigation must not move a message.
-      const journalProject = window.xnautActiveProjectPath?.() || thread.workspace || profile.default_project || '';
+      const journalProject = syncJournal(resolveJournal(text));
 
       if (!buildTask) {
         const userMessageId = `m-${Date.now()}`;
@@ -1864,12 +1894,14 @@
         if (role === 'assistant' && voiceReplyTurns.delete(turn)) { voiceCaptionId = null; return; }
         const id = voiceCaptionId || `voice-${crypto.randomUUID()}`;
         const asRole = role === 'user' ? 'user' : 'agent';
+        const voiceJournalProject = role === 'user' ? syncJournal(resolveJournal(text))
+          : [...thread.messages].reverse().find(m => m.role === 'user' && !m.voiceTranscript)?.journalProject || '';
         thread = updateThread(profile.handle, thread.id, (next) => {
           let message = next.messages.find((m) => m.id === id && m.role === asRole);
           if (!message) { message = { id: `voice-${crypto.randomUUID()}`, role: asRole, at: nowIso() }; next.messages.push(message); }
           message.text = text;
           delete message.voiceTranscript;
-          message.journalProject = window.xnautActiveProjectPath?.() || thread.workspace || profile.default_project || '';
+          message.journalProject = voiceJournalProject;
           if (role === 'user' && next.messages.filter((m) => m.role === 'user').length === 1) next.title = text.replace(/\s+/g, ' ').slice(0, 48);
           saveSharedMessage({ ...message, role: role === 'user' ? 'user' : 'assistant', agent: profile.handle });
           return next;
@@ -2332,7 +2364,7 @@
         view.querySelector('.voice-live-button[aria-pressed="true"]') &&
         view.dataset.voiceAgent === handleOf(requested.handle) && (!requested.threadId || view.dataset.voiceThread === requested.threadId));
       views.forEach(view => { view.hidden = true; });
-      if (existing) { existing.hidden = false; return; }
+      if (existing) { existing.hidden = false; existing._followJournal?.(); return; }
       const view = document.createElement('div'); view.className = 'as-retained-view';
       view.style.cssText = 'display:flex;flex:1;min-width:0;min-height:0;width:100%;height:100%';
       // hidden must win over the display:flex inline style.
@@ -2347,6 +2379,7 @@
         if (!view.querySelector('.voice-live-button[aria-pressed="true"]')) { view._agentSpaceCleanup?.(); view.remove(); views.splice(views.indexOf(view), 1); }
         return;
       }
+      view._followJournal?.();
       // Keep the active microphone's view alive while navigating. Inactive
       // screens can be recreated from their saved history without retaining DOM.
       for (const old of [...views]) {
@@ -2354,7 +2387,7 @@
         old._agentSpaceCleanup?.(); old.remove(); views.splice(views.indexOf(old), 1);
       }
     };
-    const entry = { kind:'agent-space', label, pane, updateOptions(next) { current = { ...(next || {}) }; void render(); }, dispose() {
+    const entry = { kind:'agent-space', label, pane, onActivate() { views.find(view => !view.hidden)?._followJournal?.(); }, updateOptions(next) { current = { ...(next || {}) }; void render(); }, dispose() {
       views.forEach(view => { view._agentSpaceCleanup?.(); view.remove(); });
     } };
     panes.set(label, entry);

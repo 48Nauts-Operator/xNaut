@@ -27,7 +27,7 @@ fn allowed(key: &str) -> bool {
 pub(crate) fn root() -> Result<PathBuf, String> {
     Ok(dirs::config_dir()
         .ok_or("Configuration directory unavailable")?
-        .join(if crate::JOURNAL_PREVIEW { "xnaut/journal-preview" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
+        .join(if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
 }
 fn connect(root: &Path) -> Result<Connection, String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;

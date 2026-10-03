@@ -694,7 +694,7 @@
   else (window.__xnautRightPaneQueue = window.__xnautRightPaneQueue || []).push({ key:'agent', view });
 
   window.xnautRightPaneOpenAgent = (profile, options = {}) => {
-    const keepNotebook = options.preserveNotebook && [...document.querySelectorAll('[data-page="wiki"]')]
+    const keepNotebook = options.preserveNotebook && [...document.querySelectorAll('[data-page="wiki"], [data-page="journal"]')]
       .some(node => node.getClientRects().length && !node.closest('[hidden]'));
     selected = profile || null;
     machinesAt = 0; // opening the pane is a deliberate look: re-ask exe.dev.

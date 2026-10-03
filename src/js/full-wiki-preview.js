@@ -19,6 +19,7 @@
           localStorage.setItem('xnaut-workspace-subtab:' + p.root, 'journal');
           window.xnautRightPaneSetRoot(p.root);
           window.xnautRightPaneShow('workspace');
+          if (new URLSearchParams(location.search).has('journal-preview')) window.xnautOpenAgentSpace?.();
         }
       } catch (error) { console.error('Full Wiki preview project load:', error); }
     }, 300);
