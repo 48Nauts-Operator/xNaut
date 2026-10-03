@@ -34,6 +34,8 @@ const MAX_ROUNDS: usize = 14;
 
 pub fn tool_specs() -> Vec<Value> {
     let mut specs = vec![
+        json!({"type":"function","function":{"name":"project_wiki_journal_read","description":"Read the live project working document and prior handoffs before continuing. Capture important progress as it happens with project_wiki_journal_append, not only at the end.","parameters":{"type":"object","properties":{"project":{"type":"string"},"path":{"type":"string"}},"required":["project"]}}}),
+        json!({"type":"function","function":{"name":"project_wiki_journal_append","description":"Maintain the live working document while working: record findings, proposals, decisions with who agreed, fixes with exact code/revision links, actual checks and remaining work. Use Markdown, fenced code/diffs and external references. Record important user questions/comments faithfully. Agent-authored verification is a report, not independent proof. Entries are durable and appended without replacing human content. Before stopping write a summary of changes, verified checks, open questions and next steps. Reuse source_id on retry.","parameters":{"type":"object","properties":{"project":{"type":"string"},"ticket":{"type":"string"},"kind":{"type":"string","enum":["note","question","proposal","decision","finding","fix","verification","summary"]},"title":{"type":"string"},"content":{"type":"string"},"run_id":{"type":"string"},"source_id":{"type":"string"}},"required":["project","ticket","kind","title","content"]}}}),
         json!({"type":"function","function":{"name":"project_wiki_list","description":"Read this registered project's Wiki index, durable handoffs and current activity before continuing work. The project is a PM key (e.g. XNAUT) or its registered repository root.","parameters":{"type":"object","properties":{"project":{"type":"string"}},"required":["project"]}}}),
         json!({"type":"function","function":{"name":"project_wiki_read","description":"Read a canonical Vault page and its current hash before editing it. Preserve human contributions and distinguish proposed work from verified outcomes.","parameters":{"type":"object","properties":{"project":{"type":"string"},"path":{"type":"string"}},"required":["project","path"]}}}),
         json!({"type":"function","function":{"name":"project_wiki_write","description":"Create or revise a project Wiki page in the Vault with native author attribution and revision history. For existing pages, first read and supply expected_hash. For new pages use null. Keep a concise change summary; preserve source evidence and human edits. Document recon, decisions, actual results and remaining work as you proceed.","parameters":{"type":"object","properties":{"ticket":{"type":"string","description":"Existing ticket in this project authorizing the work"},"project":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"},"expected_hash":{"type":["string","null"]},"summary":{"type":"string"}},"required":["ticket","project","path","content","expected_hash","summary"]}}}),
@@ -802,7 +804,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
-        "project_wiki_list" | "project_wiki_read" | "project_wiki_write" => {
+        "project_wiki_journal_read" | "project_wiki_journal_append" | "project_wiki_list" | "project_wiki_read" | "project_wiki_write" => {
             crate::project_wiki::agent_tool(name, args, canvas_key)
         }
         "vault_search" => {

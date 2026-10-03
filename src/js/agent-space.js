@@ -1709,6 +1709,8 @@
         return;
       }
       send.disabled = true;
+      // Freeze scope at send time; later project navigation must not move a message.
+      const journalProject = window.xnautActiveProjectPath?.() || thread.workspace || profile.default_project || '';
 
       if (!buildTask) {
         const userMessageId = `m-${Date.now()}`;
@@ -1716,7 +1718,7 @@
           const firstUser = !(thread.messages || []).some((message) => message.role === 'user');
           thread = updateThread(profile.handle, thread.id, (next) => {
             next.title = firstUser ? text.replace(/\s+/g, ' ').slice(0, 48) : next.title;
-            next.messages.push({ id: userMessageId, role: 'user', text, at: nowIso() });
+            next.messages.push({ id: userMessageId, role: 'user', text, at: nowIso(), journalProject });
             return next;
           });
           saveSharedMessage({ id: userMessageId, role: 'user', text, at: nowIso() });
@@ -1724,7 +1726,7 @@
         }
         const replyId = `a-${Date.now()}`;
         thread = updateThread(profile.handle, thread.id, (next) => {
-          next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso() });
+          next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso(), journalProject, journalPending: true });
           return next;
         });
         if (voiceRequest) voiceReplyTurns.add(voiceRequest.turn);
@@ -1788,6 +1790,7 @@
               messages: chatHistory(),
               repositoryContext: repositoryContext(),
               threadId: thread.id,
+              projectScope: journalProject,
             }) || '').trim();
           } finally {
             try { stopStream(); } catch (_) {}
@@ -1811,6 +1814,11 @@
           updateAgentMessage(replyId, `Could not answer: ${String(error)}`);
           if (voiceRequest) throw error;
         } finally {
+          thread = updateThread(profile.handle, thread.id, next => {
+            const message = next.messages.find(m => m.id === replyId);
+            if (message) message.journalPending = false;
+            return next;
+          });
           send.disabled = false;
         }
         return;
@@ -1861,6 +1869,7 @@
           if (!message) { message = { id: `voice-${crypto.randomUUID()}`, role: asRole, at: nowIso() }; next.messages.push(message); }
           message.text = text;
           delete message.voiceTranscript;
+          message.journalProject = window.xnautActiveProjectPath?.() || thread.workspace || profile.default_project || '';
           if (role === 'user' && next.messages.filter((m) => m.role === 'user').length === 1) next.title = text.replace(/\s+/g, ' ').slice(0, 48);
           saveSharedMessage({ ...message, role: role === 'user' ? 'user' : 'assistant', agent: profile.handle });
           return next;

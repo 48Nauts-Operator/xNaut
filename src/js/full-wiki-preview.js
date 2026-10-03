@@ -6,7 +6,7 @@
   localStorage.setItem('xnaut-sidebar-visible', '1');
   localStorage.setItem('xnaut-right-pane-visible', '1');
   localStorage.setItem('xnaut-right-pane-width', '680');
-  localStorage.setItem('xnaut-workspace-subtab', 'wiki');
+  localStorage.setItem('xnaut-workspace-subtab', 'journal');
   document.addEventListener('DOMContentLoaded', () => {
     const timer = setInterval(async () => {
       if (!window.xnautStartupHealth?.sealed() || !window.__TAURI__?.core || !window.xnautRightPaneShow?.('workspace')) return;
@@ -16,7 +16,7 @@
         const p = projects.find(p => p.key === 'XNAUT') || projects[0];
         if (p) {
           window.xnautOpenWorkspace?.({ project: p.key });
-          localStorage.setItem('xnaut-workspace-subtab:' + p.root, 'wiki');
+          localStorage.setItem('xnaut-workspace-subtab:' + p.root, 'journal');
           window.xnautRightPaneSetRoot(p.root);
           window.xnautRightPaneShow('workspace');
         }

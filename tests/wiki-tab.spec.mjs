@@ -122,10 +122,12 @@ test('the Build run pane carries a Wiki tab between Output and History', async (
   await expect(nav).toBeVisible();
   // The order is the ask, not merely the presence: "a sub-menu before History
   // called Wiki".
-  await expect(nav.locator('button')).toHaveText(['Plan', 'Looms', 'Output', 'Wiki', 'History']);
+  await expect(nav.locator('button')).toHaveText(['Plan', 'Looms', 'Output', 'Journal', 'Wiki', 'History']);
 
   // And it is a tab that renders its own surface, not a nav entry wired to
   // nothing, which is the failure this whole file exists to catch.
+  await nav.locator('button[data-sub="journal"]').click();
+  await expect(page.locator('.pj')).toBeVisible();
   await nav.locator('button[data-sub="wiki"]').click();
   await expect(page.locator('[data-project-wiki-host]')).toBeVisible();
   await page.getByRole('button',{name:'Notebooks',exact:true}).click();

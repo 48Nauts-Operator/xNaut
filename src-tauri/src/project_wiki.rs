@@ -7,6 +7,8 @@ use sha2::{Digest, Sha256};
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
+pub(crate) mod journal;
+
 const MAX_DOC: u64 = 2 * 1024 * 1024;
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -732,6 +734,7 @@ pub(crate) fn agent_tool(name: &str, args: &Value, actor: &str) -> Value {
             .ok_or("A project is required")?
             .to_string();
         match name {
+            "project_wiki_journal_read" | "project_wiki_journal_append" => journal::tool(name, args, actor),
             "project_wiki_list" => overview(key),
             "project_wiki_read" => serde_json::to_value(project_wiki_read(
                 key,

@@ -141,6 +141,7 @@ mod zellij;
 use state::AppState;
 
 // Separate full-application acceptance build; never a runtime production switch.
+pub(crate) const JOURNAL_PREVIEW: bool = option_env!("XNAUT_JOURNAL_PREVIEW").is_some();
 pub(crate) const FULL_WIKI_PREVIEW: bool = option_env!("XNAUT_FULL_WIKI_PREVIEW").is_some();
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::Manager;
@@ -670,6 +671,8 @@ async fn main() {
             vault::vault_tree,
             workspace::workspace_agentic_items,
             workspace::workspace_sessions,
+            project_wiki::journal::project_journal_read,
+            project_wiki::journal::project_journal_add,
             project_wiki::project_wiki_projects,
             project_wiki::project_wiki_overview,
             project_wiki::project_wiki_read,
@@ -736,6 +739,8 @@ async fn main() {
             docsgen::docgen_generate,
         ])
         .setup(|app| {
+            // Journal capture is passive and runs for all projects, including previews.
+            std::thread::spawn(project_wiki::journal::capture_loop);
             if !FULL_WIKI_PREVIEW {
             // Credentials and evidence live here; nobody else on this machine
             // needs read access. Idempotent, and it also closes files written

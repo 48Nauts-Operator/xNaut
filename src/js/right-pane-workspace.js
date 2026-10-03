@@ -52,6 +52,7 @@
     ['output', 'Output'],
     // Wiki sits before History because that is where André asked for it
     // (XNAUT-438): read the docs while the run you just started is working.
+    ['journal', 'Journal'],
     ['wiki', 'Wiki'],
     ['agentic', 'History'],
   ];
@@ -595,6 +596,16 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
     // js/wiki-pane.js; this view owns only the slot it renders into and the
     // one-time mount. The module is loaded by index.html, so a build that
     // forgot the script tag shows the reason rather than an empty box.
+    function journalPage() { return '<div class="rpws-page" data-page="journal" data-journal-host></div>'; }
+    function loadJournal() {
+      const host = container && container.querySelector('[data-journal-host]');
+      if (!host || host.querySelector('.pj')) return;
+      if (!window.xnautJournal) { host.textContent = 'Journal could not load.'; return; }
+      window.xnautJournal.mount(host, root, path => {
+        switchTab('wiki');
+        if (path) window.xnautProjectWiki.open(container.querySelector('[data-project-wiki-host]'), path);
+      });
+    }
     function wikiPage() {
       return '<div class="rpws-page" data-page="wiki" data-wiki-host></div>';
     }
@@ -665,6 +676,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       else if (key === 'plan') loadPlan();
       else if (key === 'output') loadRunSessions();
       else if (key === 'wiki') loadWiki();
+      else if (key === 'journal') loadJournal();
     }
     function switchTab(key) {
       active = key;
@@ -1418,7 +1430,7 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       container.innerHTML = `<div class="rpws">
         <div class="rpws-head"><div class="rpws-scope">Workspace · <strong>${escapeText(basename(root))}</strong></div></div>
         <div class="rpws-nav">${SUBTABS.map(([k, label]) => `<button data-sub="${k}"${k === active ? ' class="active"' : ''}>${label}</button>`).join('')}</div>
-        <div class="rpws-body">${planPage()}${loopsPage()}${outputPage()}${wikiPage()}${agenticPage()}</div>
+        <div class="rpws-body">${planPage()}${loopsPage()}${outputPage()}${journalPage()}${wikiPage()}${agenticPage()}</div>
       </div>`;
       applyActive();
       loadTab(active);

@@ -9,7 +9,7 @@
   const strip = content => String(content).replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
   const drafts = new Map();
   const instances = new WeakMap();
-  const group = path => /^Memory\//.test(path) ? 'Saved project memory' : /handoffs\//.test(path) ? 'Handoffs' : /(?:^|[\/_-])(?:recon|review|audit)(?:[\/_.-]|$)/i.test(path) ? 'Recon & reviews' : /(?:plans|features|decisions)/i.test(path) ? 'Plans & decisions' : /(?:docu|references)/i.test(path) ? 'Reference documents' : 'Project documents';
+  const group = path => /Development\/journal\//.test(path) ? 'Journals' : /^Memory\//.test(path) ? 'Saved project memory' : /handoffs\//.test(path) ? 'Handoffs' : /(?:^|[\/_-])(?:recon|review|audit)(?:[\/_.-]|$)/i.test(path) ? 'Recon & reviews' : /(?:plans|features|decisions)/i.test(path) ? 'Plans & decisions' : /(?:docu|references)/i.test(path) ? 'Reference documents' : 'Project documents';
   function mount(host, root) {
     if (!host) return;
     instances.get(host)?.dispose();
@@ -90,8 +90,8 @@
     async function attach(){const file=$('[data-file]').files[0];if(!file)return;if(file.size>10*1024*1024){notice('Attachments must be smaller than 10 MB.',true);return;}try{notice('Saving attachment…');const saved=await invoke('project_wiki_attach',{project:data.project.key,name:file.name,bytes:Array.from(new Uint8Array(await file.arrayBuffer()))});const path=$('[data-path]').value;const parent=path.split('/');parent.pop();const target=saved.path.split('/');while(parent.length&&target.length&&parent[0]===target[0]){parent.shift();target.shift();}const rel='../'.repeat(parent.length)+target.join('/');const text=file.type.startsWith('video/')?`\n<video controls src="${rel}"></video>\n`:`\n![${file.name}](${rel})\n`;const ta=$('[data-content]');ta.setRangeText(text,ta.selectionStart,ta.selectionEnd,'end');remember();notice('Attachment saved; save the page to retain its link.');}catch(e){notice(String(e),true);}}
     async function refresh(redraw=true) { if(refreshing)return; refreshing=true; const seq=++generation;try {const next=await invoke('project_wiki_overview',{project:root});if(stopped||seq!==generation)return;data=next;$('[data-project-name]').textContent=next.project.name;$('[data-project-purpose]').textContent=next.project.purpose || 'Documents, decisions and the work behind them';$('[data-observed]').textContent='Updated '+date(next.observed_at);if(next.warnings.length)notice(next.warnings.join(' · '),true);drawNav();if(redraw&&!editing){if(tab==='overview')overview();else if(tab==='activity')activity();}}catch(e){if(!stopped)notice(String(e),true);}finally{refreshing=false;} }
     $('[data-home]').onclick=()=>{leave();if(data)overview();};$('[data-activity]').onclick=()=>{leave();if(data)activity();};$('[data-search]').oninput=e=>{filter=e.target.value;if(data)drawNav();};$('[data-refresh]').onclick=()=>{if(editing){notice('Your draft is open. Save or leave editing before refreshing.');return;}if(tab==='page'&&selected)openPage(selected);else refresh();};$('[data-add]').onclick=()=>{if(!data)return;leave();selected='';doc=null;tab='page';drawNav();edit();};
-    refresh();timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);return;}if(!editing&&!document.hidden&&(tab==='overview'||tab==='activity'))refresh(true);},15000);
-    const instance={dispose(){remember();stopped=true;clearInterval(timer);},refresh};instances.set(host,instance);return instance;
+    const ready=refresh();timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);return;}if(!editing&&!document.hidden&&(tab==='overview'||tab==='activity'))refresh(true);},15000);
+    const instance={dispose(){remember();stopped=true;clearInterval(timer);},refresh,openPage,ready};instances.set(host,instance);return instance;
   }
-  window.xnautProjectWiki={mount};
+  window.xnautProjectWiki={mount,open:async(host,path)=>{const instance=instances.get(host);if(instance){await instance.ready;await instance.openPage(path);}}};
 })();

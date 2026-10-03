@@ -9,7 +9,7 @@ import sys
 if sys.platform != 'darwin':
     raise SystemExit('This local preview profile helper currently supports macOS.')
 source = Path.home() / 'Library/Application Support/xnaut'
-target = source / 'full-wiki-preview'
+target = source / ('journal-preview' if '--journal' in sys.argv else 'full-wiki-preview')
 target.mkdir(mode=0o700, parents=True, exist_ok=True)
 os.chmod(target, 0o700)
 settings = target / 'settings.json'

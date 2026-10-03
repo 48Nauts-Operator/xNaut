@@ -132,6 +132,7 @@ pub struct ProjectMcpInfo {
 /// Tools that change something. Everything else is readable with either token.
 const WRITE_TOOLS: &[&str] = &[
     "xnaut_wiki_write",
+    "xnaut_wiki_journal_append",
     "xnaut_create_ticket",
     "xnaut_update_ticket",
     "xnaut_create_document",
@@ -623,8 +624,8 @@ async fn call_project_tool(
             serde_json::to_value(crate::markers::resolve_marker(marker))
                 .map_err(|error| error.to_string())
         }
-        "xnaut_wiki_list" | "xnaut_wiki_read" | "xnaut_wiki_write" => {
-            if name == "xnaut_wiki_write" && caller.is_none() {
+        "xnaut_wiki_journal_read" | "xnaut_wiki_journal_append" | "xnaut_wiki_list" | "xnaut_wiki_read" | "xnaut_wiki_write" => {
+            if (name == "xnaut_wiki_write" || name == "xnaut_wiki_journal_append") && caller.is_none() {
                 return Err("An identified Agent session is required for Wiki authorship".into());
             }
             let result = crate::project_wiki::agent_tool(
@@ -663,6 +664,8 @@ const MAX_ARTIFACTS: usize = 20;
 /// is exactly the omission worth catching before it ships.
 fn tool_next_actions(name: &str) -> Vec<&'static str> {
     match name {
+        "xnaut_wiki_journal_read" => vec!["record important findings and decisions using xnaut_wiki_journal_append"],
+        "xnaut_wiki_journal_append" => vec!["read the journal to verify the saved entry; record a summary before stopping"],
         "xnaut_wiki_list" => vec!["call xnaut_wiki_read with a document path before editing"],
         "xnaut_wiki_read" => vec!["call xnaut_wiki_write with an existing project ticket and expected_hash from this page; preserve human edits"],
         "xnaut_wiki_write" => vec!["read the saved page to verify its content and latest revision"],
@@ -2100,6 +2103,8 @@ mod tests {
                 "xnaut_update_document",
                 "xnaut_log_decision",
                 "xnaut_resolve_marker",
+                "xnaut_wiki_journal_read",
+                "xnaut_wiki_journal_append",
                 "xnaut_wiki_list",
                 "xnaut_wiki_read",
                 "xnaut_wiki_write"
@@ -2358,6 +2363,7 @@ mod tests {
                 "xnaut_search_documents",
                 "xnaut_read_document",
                 "xnaut_resolve_marker",
+                "xnaut_wiki_journal_read",
                 "xnaut_wiki_list",
                 "xnaut_wiki_read"
             ]

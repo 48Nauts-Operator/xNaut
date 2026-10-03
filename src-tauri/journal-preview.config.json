@@ -1,0 +1,1 @@
+{"productName":"xNAUT Journal Preview","identifier":"com.nautcode.xnaut.journal-preview","app":{"windows":[{"label":"main","title":"xNAUT Journal Preview · Live Journal","url":"index.html?full-wiki-preview=1","width":1600,"height":1000,"minWidth":1000,"minHeight":700,"center":true,"devtools":true}]},"bundle":{"createUpdaterArtifacts":false,"targets":["app"]}}

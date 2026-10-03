@@ -546,6 +546,8 @@ pub fn update_in(
     let _lock = StoreLock::acquire(dir)?;
     let mut run = load_manifest_in(dir, id)?;
     let old_state = run.state;
+    let old_signal = run.last_signal.clone();
+    let old_commit = run.last_commit.clone();
     change(&mut run);
     persist_locked(dir, &mut run)?;
     drop(_lock);
@@ -558,8 +560,17 @@ pub fn update_in(
             }
         });
     }
+    #[cfg(not(test))]
+    if old_state != run.state || old_signal != run.last_signal || old_commit != run.last_commit {
+        let observed=run.clone();
+        std::thread::spawn(move || {
+            if let Err(error)=crate::project_wiki::journal::capture_run(&observed) {
+                eprintln!("[journal] receipt capture pending: {error}");
+            }
+        });
+    }
     #[cfg(test)]
-    let _ = old_state;
+    let _ = (old_state,old_signal,old_commit);
     Ok(run)
 }
 
