@@ -31,6 +31,7 @@ let triggers = [];
 let editingTriggerId = null;
 let commandSnippets = [];
 let editingSnippetId = null;
+const snippetSectionState = new Map();
 let snippetCategories = ['Docker', 'Deployment', 'Build', 'Git', 'Database', 'Testing'];
 let activeSnippetCategory = null; // Filter by category
 
@@ -7011,9 +7012,20 @@ function renderSnippets() {
   const container = document.getElementById('snippets-list');
   if (!container) return;
 
-  // Filter by active category
-  let filteredSnippets = [...commandSnippets];
-  if (activeSnippetCategory) {
+  const openedId = [...container.querySelectorAll('.snippet-card')].find(card => card.querySelector('.snippet-commands')?.style.display === 'block')?.dataset.snippetId;
+  const compact = localStorage.getItem('xnaut-snippets-compact') === 'true';
+  const toggle = document.getElementById('snippet-compact-view');
+  if (toggle) {
+    toggle.checked = compact;
+    toggle.onchange = () => {
+      localStorage.setItem('xnaut-snippets-compact', String(toggle.checked));
+      renderSnippets();
+    };
+  }
+  // Filtering also applies when the view preference changes.
+  const query = (document.getElementById('snippet-search')?.value || '').trim().toLowerCase();
+  let filteredSnippets = commandSnippets.filter(snippet => !query || [snippet.name,snippet.description,snippet.content,snippet.category].some(value => String(value || '').toLowerCase().includes(query)));
+  if (activeSnippetCategory && !query) {
     filteredSnippets = filteredSnippets.filter(s => s.category === activeSnippetCategory);
   }
   // Sort: favorites first, then alphabetical
@@ -7039,31 +7051,9 @@ function renderSnippets() {
     return;
   }
 
-  // Extract commands from markdown content
-  function extractCommands(content) {
-    const commands = [];
-    const codeBlockRegex = /```(?:bash|sh|shell|zsh)?\n([\s\S]*?)```/g;
-    let match;
-    while ((match = codeBlockRegex.exec(content)) !== null) {
-      match[1].trim().split('\n').forEach(line => {
-        const cmd = line.trim();
-        if (cmd && !cmd.startsWith('#')) commands.push(cmd);
-      });
-    }
-    // If no code blocks, treat each non-empty line as a command
-    if (commands.length === 0) {
-      content.split('\n').forEach(line => {
-        const cmd = line.trim();
-        if (cmd && !cmd.startsWith('#') && !cmd.startsWith('//')) commands.push(cmd);
-      });
-    }
-    return commands;
-  }
-
   container.innerHTML = filteredSnippets.map(snippet => {
-    const commands = extractCommands(snippet.content);
-
-    const commandRows = commands.map(cmd => `
+    const parsed = window.xnautSnippetSections.parse(snippet.content);
+    const commandRow = cmd => `
       <div class="snippet-cmd" data-cmd="${escapeHtml(cmd)}">
         <code>${escapeHtml(cmd)}</code>
         <div class="snippet-cmd-actions">
@@ -7078,24 +7068,34 @@ function renderSnippets() {
           </button>
         </div>
       </div>
-    `).join('');
+    `;
+    const renderBlocks = blocks => blocks.map(block => {
+      if (block.type === 'code') return commandRow(block.text);
+      if (block.type === 'text') return `<div class="snippet-prose">${escapeHtml(block.text)}</div>`;
+      const key = `${snippet.id}:${block.id}`;
+      return `<details class="snippet-section" data-section-key="${escapeHtml(key)}" ${snippetSectionState.get(key) === false ? '' : 'open'}>
+        <summary><span role="heading" aria-level="${block.level}">${escapeHtml(block.title)}</span></summary>
+        <div class="snippet-section-content">${renderBlocks(block.children)}</div>
+      </details>`;
+    }).join('');
+    const commandRows = compact ? parsed.commands.map(commandRow).join('') : renderBlocks(parsed.blocks);
 
     const isFav = (snippet.favorite === true);
     return `
-      <div class="snippet-card" data-snippet-id="${snippet.id}">
-        <div class="snippet-card-header" data-toggle-commands>
+      <div class="snippet-card" data-snippet-id="${escapeHtml(snippet.id)}">
+        <div class="snippet-card-header">
           <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <button class="snippet-action-btn fav-snippet" data-snippet-id="${snippet.id}" title="Favorite" style="color:${isFav ? '#f59e0b' : 'var(--text-secondary)'}; font-size:14px; padding:0;">
+            <button class="snippet-action-btn fav-snippet" data-snippet-id="${escapeHtml(snippet.id)}" title="Favorite" style="color:${isFav ? '#f59e0b' : 'var(--text-secondary)'}; font-size:14px; padding:0;">
               ${isFav ? '★' : '☆'}
             </button>
-            <span style="font-size:13px; font-weight:500; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(snippet.name)}</span>
+            <button class="snippet-title" data-toggle-commands aria-expanded="false">${escapeHtml(snippet.name)}</button>
             ${snippet.category ? '<span style="font-size:9px; padding:1px 5px; border-radius:2px; background:rgba(255,255,255,0.08); color:var(--text-secondary);">' + escapeHtml(snippet.category) + '</span>' : ''}
           </div>
           <div class="snippet-card-actions">
-            <button class="snippet-action-btn share-snippet" data-snippet-id="${snippet.id}" title="Share">
+            <button class="snippet-action-btn share-snippet" data-snippet-id="${escapeHtml(snippet.id)}" title="Share">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
             </button>
-            <button class="snippet-action-btn edit-snippet" data-snippet-id="${snippet.id}" title="Edit">
+            <button class="snippet-action-btn edit-snippet" data-snippet-id="${escapeHtml(snippet.id)}" title="Edit">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
           </div>
@@ -7104,6 +7104,18 @@ function renderSnippets() {
       </div>
     `;
   }).join('');
+
+  container.querySelectorAll('.snippet-section').forEach(section => {
+    section.addEventListener('toggle', () => snippetSectionState.set(section.dataset.sectionKey,section.open));
+  });
+  if (openedId && filteredSnippets.some(snippet => String(snippet.id) === openedId)) {
+    container.querySelectorAll('.snippet-card').forEach(card => {
+      const selected = card.dataset.snippetId === openedId;
+      card.style.display = selected ? '' : 'none';
+      card.querySelector('.snippet-commands').style.display = selected ? 'block' : 'none';
+      card.querySelector('[data-toggle-commands]').setAttribute('aria-expanded',String(selected));
+    });
+  }
 
   // Attach command action listeners
   container.querySelectorAll('.copy-cmd').forEach(btn => {
@@ -7131,19 +7143,21 @@ function renderSnippets() {
   container.querySelectorAll('[data-toggle-commands]').forEach(header => {
     header.onclick = (e) => {
       if (e.target.closest('.snippet-action-btn')) return;
-      const card = header.parentNode;
+      const card = header.closest('.snippet-card');
       const cmds = card.querySelector('.snippet-commands');
       const isOpen = cmds && cmds.style.display !== 'none';
 
       // Collapse all cards first
       container.querySelectorAll('.snippet-card').forEach(c => {
         c.querySelector('.snippet-commands').style.display = 'none';
+        c.querySelector('[data-toggle-commands]').setAttribute('aria-expanded','false');
         c.style.display = '';
       });
 
       if (!isOpen) {
         // Expand this one and hide all others
         cmds.style.display = 'block';
+        header.setAttribute('aria-expanded','true');
         container.querySelectorAll('.snippet-card').forEach(c => {
           if (c !== card) c.style.display = 'none';
         });
