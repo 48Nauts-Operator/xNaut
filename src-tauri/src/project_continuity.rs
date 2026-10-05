@@ -794,6 +794,56 @@ pub fn snapshot(project: &str) -> Result<ProjectSnapshot, String> {
     Ok(result)
 }
 
+/// Git omits empty directories when a newly registered project is cloned.
+/// Missing tickets are empty only when the registered identity and this exact
+/// control checkout prove that no ticket files are tracked. Failed Git queries
+/// and directories deleted from an existing ticket tree remain unavailable.
+fn proven_empty_ticket_checkout(control_repo: &Path, project: &str, ticket_dir: &Path) -> bool {
+    if !std::fs::symlink_metadata(ticket_dir)
+        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    {
+        return false;
+    }
+    let project_path = control_repo
+        .join("projects")
+        .join(project)
+        .join("project.json");
+    let Ok(record) = crate::project_management::read_json::<crate::project_management::ProjectRecord>(
+        &project_path,
+    ) else {
+        return false;
+    };
+    if record.key != project {
+        return false;
+    }
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .current_dir(control_repo)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .args(args)
+            .output()
+    };
+    let Ok(root) = git(&["rev-parse", "--show-toplevel"]) else {
+        return false;
+    };
+    if !root.status.success() {
+        return false;
+    }
+    let Ok(root) = std::str::from_utf8(&root.stdout) else {
+        return false;
+    };
+    let Ok(actual_root) = Path::new(root.trim_end()).canonicalize() else {
+        return false;
+    };
+    if control_repo.canonicalize().ok().as_ref() != Some(&actual_root) {
+        return false;
+    }
+    let Ok(tracked) = git(&["ls-files", "--", &format!("projects/{project}/tickets")]) else {
+        return false;
+    };
+    tracked.status.success() && tracked.stdout.is_empty()
+}
+
 /// Read existing stores without creating them or reconciling their lifecycle.
 /// A missing PM/registry source is reported explicitly; absent optional transfer
 /// and chat-launch directories mean those mechanisms have recorded no work.
@@ -812,7 +862,8 @@ pub fn snapshot_in(
     }
     let mut diagnostics = vec![];
     let ticket_dir = control_repo.join("projects").join(project).join("tickets");
-    let tickets: Vec<TicketRecord> = read_jsons(&ticket_dir, false, &mut diagnostics)
+    let fresh_checkout = proven_empty_ticket_checkout(control_repo, project, &ticket_dir);
+    let tickets: Vec<TicketRecord> = read_jsons(&ticket_dir, fresh_checkout, &mut diagnostics)
         .into_iter()
         .map(|(_, r)| r)
         .collect();
@@ -1434,5 +1485,79 @@ mod tests {
         let d: Diagnostic =
             serde_json::from_value(json!({"source":"old reader","message":"unavailable"})).unwrap();
         assert!(d.blocking);
+    }
+    fn fixture_git(repo: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args([
+                "-c",
+                "user.name=Continuity Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fn registered_control_fixture(scratch: &Scratch) -> std::path::PathBuf {
+        let repo = scratch.0.join("control");
+        std::fs::create_dir_all(repo.join("projects/XNAUT/tickets")).unwrap();
+        std::fs::write(
+            repo.join("projects/XNAUT/project.json"),
+            serde_json::to_vec(
+                &json!({"key":"XNAUT","name":"Fixture","created_at":"2026-10-05T12:00:00Z"}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        fixture_git(&repo, &["init"]);
+        fixture_git(&repo, &["add", "projects/XNAUT/project.json"]);
+        fixture_git(&repo, &["commit", "-m", "Register fresh project"]);
+        repo
+    }
+    #[test]
+    fn fresh_registered_clone_without_empty_ticket_directory_is_not_blocked() {
+        let scratch = Scratch::new();
+        let source = registered_control_fixture(&scratch);
+        fixture_git(&scratch.0, &["clone", source.to_str().unwrap(), "clone"]);
+        let clone = scratch.0.join("clone");
+        let tickets = clone.join("projects/XNAUT/tickets");
+        assert!(!tickets.exists());
+        let snapshot = snapshot_in(&clone, &scratch.0.join("registry"), "XNAUT", 2_000).unwrap();
+        assert!(snapshot.tickets.is_empty());
+        assert!(snapshot.diagnostics.iter().all(|d| !d.blocking));
+        assert!(
+            !tickets.exists(),
+            "The reader must not create missing directories"
+        );
+    }
+    #[test]
+    fn missing_previously_tracked_ticket_directory_stays_blocking() {
+        let scratch = Scratch::new();
+        let repo = registered_control_fixture(&scratch);
+        let tickets = repo.join("projects/XNAUT/tickets");
+        std::fs::write(
+            tickets.join("XNAUT-900.json"),
+            serde_json::to_vec(&ticket()).unwrap(),
+        )
+        .unwrap();
+        fixture_git(&repo, &["add", "projects/XNAUT/tickets"]);
+        fixture_git(&repo, &["commit", "-m", "Record assignment"]);
+        std::fs::remove_dir_all(&tickets).unwrap();
+        let snapshot = snapshot_in(&repo, &scratch.0.join("registry"), "XNAUT", 2_000).unwrap();
+        assert!(snapshot
+            .diagnostics
+            .iter()
+            .any(|d| d.blocking && d.source == tickets.display().to_string()));
+        assert!(!tickets.exists());
     }
 }
