@@ -176,9 +176,16 @@ pub(crate) fn compact_project(snapshot: &Value, current_request: &str) -> Value 
     let brief: Vec<_> = assignments_sorted.iter().take(12).map(|row|json!({"run_id":row["run_id"],"ticket":row["ticket"],
         "owner":row["owner"],"state":row["state"],"run_state":row["run_state"],"branch":row["branch"],
         "worktree":row["worktree"],"pr_url":row["pr_url"]})).collect();
+    let diagnostics: Vec<_> = snapshot["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(8)
+        .cloned()
+        .collect();
     json!({"project":snapshot["project"],"observed_at":snapshot["observed_at"],"ticket_count":tickets.len(),
         "assignment_count":assignments.len(),"tickets":selected,"assignments":brief,
-        "diagnostics":snapshot["diagnostics"],"more":tickets.len()>10 || assignments.len()>12,
+        "diagnostics":diagnostics,"diagnostic_count":snapshot["diagnostics"].as_array().map(Vec::len).unwrap_or(0),"more":tickets.len()>10 || assignments.len()>12,
         "retrieve":"read_project_work(root=project key, ticket=optional ticket ID, offset=0); follow next_offset"})
 }
 
