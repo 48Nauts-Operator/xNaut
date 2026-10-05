@@ -262,19 +262,21 @@ pub async fn pm_ticket_dispatch(
     let registry = crate::agents::registry_dir()?;
     let receipt_path = crate::agent_work::launch_receipt_path(&registry, &root, &ticket.id,
         continuation.as_ref().map(|run| run.run_id.as_str()))?;
-    let pending = serde_json::json!({"pending":true,"ticket":ticket.id,"project":project,
-        "repository_root":root,"continuation_run_id":continuation.as_ref().map(|run| &run.run_id)});
-    if let Some(prior) = crate::agent_work::reserve(&receipt_path, &pending)? {
-        return Err(format!("{} already has a launch receipt; no duplicate worker started. Recover: {prior}", ticket.id));
-    }
-
-    let mut reservation = crate::agent_work::LaunchReservation::new(receipt_path.clone());
     let branch = continuation.as_ref().map(|r| r.branch.clone())
         .unwrap_or_else(|| branch_for_ticket(&ticket, &handle));
     let worktree_path = match &continuation {
         Some(run) => run.worktree_path.clone(),
         None => crate::worktree::worktree_suggest_path(repo.clone(), branch.clone())?,
     };
+    let pending = serde_json::json!({"pending":true,"ticket":ticket.id,"project":project,
+        "repository_root":root,"continuation_run_id":continuation.as_ref().map(|run| &run.run_id),
+        "handle":handle,"branch":branch,"worktree_path":worktree_path,"environment":destination.key(),
+        "requested_at":crate::run_control::now_ms()});
+    if let Some(prior) = crate::agent_work::reserve(&receipt_path, &pending)? {
+        return Err(format!("{} already has a launch receipt; no duplicate worker started. Recover: {prior}", ticket.id));
+    }
+
+    let mut reservation = crate::agent_work::LaunchReservation::new(receipt_path.clone());
     // Re-dispatching a ticket must not fail on "branch already exists". If the
     // worktree from the last run is still there, the agent goes back into it.
     let existing = crate::worktree::worktree_list(repo.clone())
@@ -348,6 +350,12 @@ pub async fn pm_ticket_dispatch(
             if let Some(reserved) = &continuation {
                 match crate::agent_work::release_refused_continuation(&registry, &receipt_path, reserved) {
                     Ok(true) => return Err(format!("{error}. Native admission was refused before execution; the continuation reservation was released for a verified retry.")),
+                    Ok(false) => {},
+                    Err(recovery_error) => return Err(format!("{error}. Reservation retained at {}: {recovery_error}", receipt_path.display())),
+                }
+            } else {
+                match crate::agent_work::bind_initial_refusal(&registry, &receipt_path, &recovered) {
+                    Ok(true) => return Err(format!("{error}. Native admission refused before execution; retry the existing continuation in its preserved branch and worktree.")),
                     Ok(false) => {},
                     Err(recovery_error) => return Err(format!("{error}. Reservation retained at {}: {recovery_error}", receipt_path.display())),
                 }

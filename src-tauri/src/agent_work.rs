@@ -298,6 +298,73 @@ pub(crate) fn release_refused_continuation(
     Ok(true)
 }
 
+/// Bind a newly refused first launch to its native run instead of erasing the
+/// reservation. Only the owner of an attempted reservation calls this after
+/// launch returned Err; unknown failures stay pending. The preserved receipt
+/// then joins the normal continuation chain on the next turn/restart.
+pub(crate) fn bind_initial_refusal(
+    registry: &Path,
+    receipt_path: &Path,
+    before: &Value,
+) -> Result<bool, String> {
+    let mut pending: Value =
+        serde_json::from_slice(&std::fs::read(receipt_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let Some(ticket) = pending["ticket"].as_str() else {
+        return Ok(false);
+    };
+    let Some(requested_at) = pending["requested_at"].as_i64() else {
+        return Ok(false);
+    };
+    if pending["pending"] != true
+        || !pending["continuation_run_id"].is_null()
+        || before["assignments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|row| row["ticket"].as_str() == Some(ticket))
+    {
+        return Ok(false);
+    }
+    let Some(run) = crate::run_control::continuation_in(registry, ticket)? else {
+        return Ok(false);
+    };
+    if !crate::run_control::initial_admission_refused(&run)
+        || run.started_at < requested_at
+        || pending["branch"] != run.branch
+        || pending["worktree_path"] != run.worktree_path
+        || pending["handle"] != run.agent_handle
+    {
+        return Ok(false);
+    }
+    pending["pending"] = json!(false);
+    pending["ok"] = json!(false);
+    pending["execution_started"] = json!(false);
+    pending["admission_refused"] = json!(true);
+    pending["launch"] = json!({"run_id":run.run_id});
+    pending["note"] = json!("Native admission refused before worker execution. Retry through the existing continuation, preserving this branch and worktree.");
+    save_launch_receipt(receipt_path, &pending)?;
+    Ok(true)
+}
+
+fn workspace_target(
+    root: &Path,
+    handle: &str,
+    task_key: &str,
+    continuation: Option<&crate::run_control::RunManifest>,
+) -> (PathBuf, String) {
+    match continuation {
+        Some(run) => (PathBuf::from(&run.worktree_path), run.branch.clone()),
+        None => {
+            let slug = workspace_key(handle, task_key);
+            (
+                root.join(".worktrees").join(&slug),
+                format!("agent/{handle}/{slug}"),
+            )
+        }
+    }
+}
+
 pub(crate) fn save_launch_receipt(path: &Path, receipt: &Value) -> Result<(), String> {
     let temp = path.with_extension("tmp");
     let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
@@ -530,19 +597,27 @@ async fn execute_inner(
         .ok_or("Launch ticket disappeared")?
         .project;
     let registry = crate::agents::registry_dir()?;
-    let receipt_path = launch_receipt_path(&registry, &root, ticket_id, None)?;
+    let continuation = crate::run_control::continuation_in(&registry, ticket_id)?;
+    let receipt_path = launch_receipt_path(
+        &registry,
+        &root,
+        ticket_id,
+        continuation.as_ref().map(|run| run.run_id.as_str()),
+    )?;
     // Return an existing durable result before checking mutable runtime state.
     // A new task key/agent/thread cannot turn this receipt into a fresh launch.
     if name == "start_repository_task" {
         if let Some(mut prior) = read_launch_receipt(&receipt_path)? {
             verify_receipt_environment(&prior, args.get("environment"))?;
-            prior["reused_receipt"] = json!(true);
-            prior["note"] = json!("Recovered this ticket's previous launch; no second worker started. Inspect its branch/PR and current registry before deciding how to continue.");
-            return Ok(prior);
+            if prior["admission_refused"] != true {
+                prior["reused_receipt"] = json!(true);
+                prior["note"] = json!("Recovered this ticket's previous launch; no second worker started. Inspect its branch/PR and current registry before deciding how to continue.");
+                return Ok(prior);
+            }
         }
     }
     let recovered = json!(crate::project_continuity::snapshot(&project)?);
-    recovery_guard(&recovered, ticket_id, None)?;
+    recovery_guard(&recovered, ticket_id, continuation.as_ref())?;
     let slug = workspace_key(&profile.handle, key);
     let parent = root.join(".worktrees");
     if parent
@@ -552,14 +627,15 @@ async fn execute_inner(
     {
         return Err("Refusing a symlink as the worktree container.".into());
     }
-    let dest = parent.join(&slug);
-    let branch = format!("agent/{}/{slug}", profile.handle);
-    if dest.exists() {
+    let (dest, branch) = workspace_target(&root, &profile.handle, key, continuation.as_ref());
+    if continuation.is_some() || dest.exists() {
         verify_workspace(&root, &dest, &branch)?;
     }
     if name == "start_repository_task" {
-        let pending =
-            json!({"pending":true,"ticket":ticket,"project":project,"repository_root":root});
+        let pending = json!({"pending":true,"ticket":ticket,"project":project,"repository_root":root,
+                "handle":profile.handle,"branch":branch,"worktree_path":dest,
+                "requested_at":crate::run_control::now_ms(),"environment":environment,
+                "continuation_run_id":continuation.as_ref().map(|run|&run.run_id)});
         if let Some(prior) = reserve(&receipt_path, &pending)? {
             verify_receipt_environment(&prior, args.get("environment"))?;
             return Ok(
@@ -570,7 +646,8 @@ async fn execute_inner(
     let prompt_recovery = crate::agent_history::compact_project(&recovered, ticket_id);
     let mut launch_attempted = false;
     let mut result=async {
-        let worktree=crate::agent_profiles::agent_build_workspace(profile.handle.clone(),root.to_string_lossy().into_owned(),slug).await?;
+        let worktree = if continuation.is_some() { dest.to_string_lossy().into_owned() }
+            else { crate::agent_profiles::agent_build_workspace(profile.handle.clone(),root.to_string_lossy().into_owned(),slug).await? };
         verify_workspace(&root,Path::new(&worktree),&branch)?;
         if name=="create_worktree" { return Ok(json!({"ok":true,"worktree_path":worktree,"branch":branch,"execution_started":false,"note":"Worktree prepared. No worker or scan started. Call start_repository_task with the same task_key to execute."})); }
         let app=crate::nudge::app().ok_or("The app is not running")?;
@@ -605,6 +682,13 @@ async fn execute_inner(
                 let _ = std::fs::remove_file(&receipt_path);
             }
             Err(error) => {
+                let refused = match &continuation {
+                    Some(run) => release_refused_continuation(&registry, &receipt_path, run),
+                    None => bind_initial_refusal(&registry, &receipt_path, &recovered),
+                };
+                if matches!(refused, Ok(true)) {
+                    return Err(format!("{error}. Native admission refused before execution. Retry the existing continuation; its branch and worktree are preserved."));
+                }
                 return Err(format!("{error}. Launch admission was attempted; recovery reservation retained at {}. Reconcile the run before retrying.", receipt_path.display()));
             }
         }
@@ -797,6 +881,134 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn first_admission_refusal_binds_receipt_and_retries_in_native_existing_workspace() {
+        let temp = Temp::new();
+        let registry = temp.path();
+        let mut initial = crate::run_control::tests::run();
+        initial.run_id = "first-refused".into();
+        initial.ticket = Some("TEST-1".into());
+        initial.project = "TEST".into();
+        initial.state = crate::run_control::RunState::Requested;
+        initial.pty_session = None;
+        let receipt = launch_receipt_path(registry, Path::new("/repo"), "TEST-1", None).unwrap();
+        let pending = json!({"pending":true,"ticket":"TEST-1","project":"TEST","handle":initial.agent_handle,
+            "branch":initial.branch,"worktree_path":initial.worktree_path,"requested_at":initial.started_at});
+        reserve(&receipt, &pending).unwrap();
+        let before = recovered_fixture();
+        assert!(!bind_initial_refusal(registry, &receipt, &before).unwrap());
+        assert!(
+            crate::run_control::request_in(registry, initial.clone(), || Err(
+                "spend ceiling".into()
+            ))
+            .is_err()
+        );
+        let refused = crate::run_control::continuation_in(registry, "TEST-1")
+            .unwrap()
+            .unwrap();
+        assert!(crate::run_control::initial_admission_refused(&refused));
+        let mut has_prior_work = before.clone();
+        has_prior_work["assignments"] = json!([{"ticket":"TEST-1","run_id":"existing-worker"}]);
+        assert!(!bind_initial_refusal(registry, &receipt, &has_prior_work).unwrap());
+        let mut wrong = pending.clone();
+        wrong["requested_at"] = json!(initial.started_at + 1);
+        save_launch_receipt(&receipt, &wrong).unwrap();
+        assert!(!bind_initial_refusal(registry, &receipt, &before).unwrap());
+        wrong = pending.clone();
+        wrong["worktree_path"] = json!("/replacement");
+        save_launch_receipt(&receipt, &wrong).unwrap();
+        assert!(!bind_initial_refusal(registry, &receipt, &before).unwrap());
+        save_launch_receipt(&receipt, &pending).unwrap();
+        assert!(bind_initial_refusal(registry, &receipt, &before).unwrap());
+        let bound = read_launch_receipt(&receipt).unwrap().unwrap();
+        assert_eq!(bound["execution_started"], false);
+        assert_eq!(bound["launch"]["run_id"], refused.run_id);
+        let mut snapshot =
+            crate::project_continuity::reconcile("TEST", &[], &[refused.clone()], &[], 2_000);
+        crate::project_continuity::add_launch_receipt(&mut snapshot, &bound, "fixture-receipt");
+        assert_eq!(snapshot.assignments.len(), 1); // no unknown synthetic reservation
+        let mut recovered = before.clone();
+        recovered["assignments"] = json!(snapshot.assignments);
+        recovery_guard(&recovered, "TEST-1", Some(&refused)).unwrap();
+        for (handle, key) in [("codex", "original-key"), ("another-agent", "new-key")] {
+            assert_eq!(
+                workspace_target(Path::new("/repo"), handle, key, Some(&refused)),
+                (
+                    PathBuf::from(&refused.worktree_path),
+                    refused.branch.clone()
+                )
+            );
+        }
+        let mut retry = initial.clone();
+        retry.run_id = "first-retry".into();
+        retry.agent_handle = "another-agent".into();
+        let mut relocated = retry.clone();
+        relocated.worktree_path = "/replacement".into();
+        assert!(
+            crate::run_control::request_in(registry, relocated, || panic!(
+                "must refuse before admission"
+            ))
+            .unwrap_err()
+            .contains("same worktree")
+        );
+        let mut rebranched = retry.clone();
+        rebranched.branch = "replacement".into();
+        assert!(
+            crate::run_control::request_in(registry, rebranched, || panic!(
+                "must refuse before admission"
+            ))
+            .unwrap_err()
+            .contains("same worktree")
+        );
+        // Retry still obeys current admission policy and records its lineage.
+        assert!(
+            crate::run_control::request_in(registry, retry.clone(), || Err(
+                "still over ceiling".into()
+            ))
+            .is_err()
+        );
+        let second_refusal = crate::run_control::continuation_in(registry, "TEST-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            second_refusal.previous_run_id.as_deref(),
+            Some("first-refused")
+        );
+        retry.run_id = "accepted-retry".into();
+        let accepted = crate::run_control::request_in(registry, retry, || Ok(())).unwrap();
+        assert_eq!(accepted.previous_run_id.as_deref(), Some("first-retry"));
+        assert_eq!(accepted.worktree_path, initial.worktree_path);
+        assert_eq!(accepted.branch, initial.branch);
+        assert_eq!(accepted.state, crate::run_control::RunState::Starting);
+        assert!(crate::run_control::continuation_in(registry, "TEST-1")
+            .unwrap()
+            .is_none());
+        assert!(
+            crate::run_control::load_manifest_in(registry, "first-refused")
+                .unwrap()
+                .admission_refused
+        );
+    }
+
+    #[test]
+    fn first_refusal_recovery_never_accepts_admitted_or_uncertain_workers() {
+        let mut run = crate::run_control::tests::run();
+        run.state = crate::run_control::RunState::Failed;
+        run.admission_refused = true;
+        // A failed flag with a session is contradictory and cannot anchor retry.
+        assert!(!crate::run_control::initial_admission_refused(&run));
+        run.pty_session = None;
+        assert!(crate::run_control::initial_admission_refused(&run));
+        run.admission_refused = false;
+        assert!(!crate::run_control::initial_admission_refused(&run));
+        run.admission_refused = true;
+        run.pid = Some(999);
+        assert!(!crate::run_control::initial_admission_refused(&run));
+        run.pid = None;
+        run.state = crate::run_control::RunState::Running;
+        assert!(!crate::run_control::initial_admission_refused(&run));
     }
 
     #[test]

@@ -499,6 +499,13 @@ pub fn request_in(
         let mut ancestor = previous.clone();
         let mut visited = BTreeSet::new();
         while ancestor.retirement.is_none() {
+            // A first admission refusal never owned a running worker. Its
+            // exact workspace can anchor a retry chain without fabricating a
+            // retirement/stop proof. The current admit callback still checks
+            // ticket model, spend, quarantine, read-only and writer policies.
+            if ancestor.previous_run_id.is_none() && initial_admission_refused(&ancestor) {
+                break;
+            }
             if !visited.insert(ancestor.run_id.clone()) {
                 return Err("cyclic continuation chain".into());
             }
@@ -510,9 +517,11 @@ pub fn request_in(
                     .ok_or("missing continuation policy")?,
             )?;
         }
-        let requirement = &ancestor.retirement.as_ref().unwrap().requirement;
-        if !model_meets(run.model.as_deref().unwrap_or_default(), requirement) {
-            return Err(format!("successor model does not meet {requirement}"));
+        if let Some(retirement) = &ancestor.retirement {
+            let requirement = &retirement.requirement;
+            if !model_meets(run.model.as_deref().unwrap_or_default(), requirement) {
+                return Err(format!("successor model does not meet {requirement}"));
+            }
         }
         if retry {
             run.previous_run_id = Some(previous.run_id.clone());
@@ -1939,6 +1948,15 @@ pub fn swap_required(run: &RunManifest, requirement: &str) -> bool {
             .is_none_or(|w| w.trim().is_empty())
 }
 
+/// Native proof that an initial request never reached worker execution.
+/// A failure after admission or any process/session evidence is ineligible.
+pub(crate) fn initial_admission_refused(run: &RunManifest) -> bool {
+    run.kind == RunKind::Agent && run.state == RunState::Failed && run.admission_refused
+        && run.previous_run_id.is_none() && run.pid.is_none() && run.process_birth.is_none()
+        && run.pty_session.is_none() && run.zellij_session.is_none()
+        && run.last_hook_at.is_none() && run.capture_bytes == 0
+}
+
 /// Admission and retirement share this lock. A pending successor reserves its
 /// predecessor's worktree but is not runnable until triage binds a profile.
 pub fn continuation_in(dir: &Path, ticket: &str) -> Result<Option<RunManifest>, String> {
@@ -1949,7 +1967,7 @@ pub fn continuation_in(dir: &Path, ticket: &str) -> Result<Option<RunManifest>, 
     let mut pending = None;
     for run in &runs {
         if run.ticket.as_deref() != Some(ticket)
-            || run.previous_run_id.is_none()
+            || (run.previous_run_id.is_none() && !initial_admission_refused(run))
             || run.next_run_id.is_some()
             || runs
                 .iter()
