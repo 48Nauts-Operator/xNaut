@@ -653,8 +653,9 @@ mod tests {
         let tickets = control.join("projects/TEST/tickets");
         std::fs::create_dir_all(&tickets).unwrap();
         std::fs::create_dir(&registry).unwrap();
-        let mut ticket = json!({"id":"TEST-1","project":"TEST","title":"Existing assignment","status":"ready",
+        let mut ticket = json!({"id":"TEST-1","project":"TEST","title":"Existing assignment","type":"task","status":"ready","priority":"high",
             "revision":1,"created_at":"fixture","updated_at":"fixture","body":""});
+        serde_json::from_value::<crate::project_management::TicketRecord>(ticket.clone()).unwrap();
         let ticket_path = tickets.join("TEST-1.json");
         std::fs::write(&ticket_path, ticket.to_string()).unwrap();
         let fresh = json!(crate::project_continuity::snapshot_in(
