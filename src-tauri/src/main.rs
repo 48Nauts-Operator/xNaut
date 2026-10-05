@@ -889,6 +889,11 @@ async fn main() {
             });
 
             if FULL_WIKI_PREVIEW {
+                // Continuity preview permits owner-initiated Agent tools while
+                // keeping all automatic dispatch/reconciliation below disabled.
+                if CONTINUITY_PREVIEW {
+                    nudge::set_app(app.handle().clone());
+                }
                 return Ok(());
             }
 
