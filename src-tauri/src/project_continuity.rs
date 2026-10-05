@@ -909,9 +909,9 @@ pub fn snapshot_in(
         )
     {
         for (prefix, dir, suffix) in [
-            ("ticket:", &ticket_dir, ".json"),
+            ("ticket:", ticket_dir.as_path(), ".json"),
             ("run:", registry, ".events.jsonl"),
-            ("transfer:", &transfer_dir, ".json"),
+            ("transfer:", transfer_dir.as_path(), ".json"),
         ] {
             if let Some(rest) = ev.source.strip_prefix(prefix) {
                 let (id, fragment) = rest.split_once('#').unwrap_or((rest, ""));
