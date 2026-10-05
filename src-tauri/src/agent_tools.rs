@@ -693,6 +693,7 @@ fn appended_body(current: &str, added: &str) -> String {
 pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
     if crate::agent_work::is_tool(name) { return json!({"ok":false,"error":"Worktree tools require the agent chat loop and its authorized repository context."}); }
     if crate::repository_read::is_tool(name) { return crate::repository_read::execute(name, args, &[]); }
+    if name == "read_project_work" { return crate::agent_history::read_project_work(args, &[]); }
     if name == "request_repository_review" {return json!({"ok":false,"error":"PR review requires the chat loop and its user-authorized task context"});}
     match name {
         "list_plugins" => {
