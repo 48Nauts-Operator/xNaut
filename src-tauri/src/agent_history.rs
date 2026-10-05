@@ -1,6 +1,229 @@
-//! Read-only recall for one persisted Agent Space thread. The native caller
-//! supplies the agent and thread; the model cannot choose another conversation.
+//! Read-only conversation recall and project-scoped receipt recovery.
+//! Cross-thread recovery returns task receipts only; historical prose never
+//! grants repository scope or exposes unrelated conversations.
 use serde_json::{json, Value};
+
+/// Read only durable task receipts belonging to an already authorized project.
+/// The shared snapshot uses this on restart and thread switch; no old owner
+/// messages are imported as fresh authorization.
+pub(crate) fn project_receipts(
+    project: &str,
+    root: &std::path::Path,
+) -> Result<Vec<(String, Value)>, String> {
+    project_receipts_in(
+        &crate::conversation_store::root()?.join("conversations.sqlite"),
+        project,
+        root,
+    )
+}
+
+fn project_receipts_in(
+    db_path: &std::path::Path,
+    project: &str,
+    root: &std::path::Path,
+) -> Result<Vec<(String, Value)>, String> {
+    match std::fs::metadata(db_path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(format!("Conversation receipts unavailable: {e}")),
+        Ok(_) => {}
+    }
+    let db =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("Conversation receipts unavailable: {e}"))?;
+    let mut query = db
+        .prepare("SELECT value FROM conversations WHERE key = 'xnaut-agent-threads:v1'")
+        .map_err(|e| format!("Conversation receipts unavailable: {e}"))?;
+    let values = query
+        .query_map([], |row| row.get::<_, Option<String>>(0))
+        .map_err(|e| e.to_string())?;
+    let mut receipts = Vec::new();
+    for value in values {
+        let Some(value) = value.map_err(|e| e.to_string())? else {
+            continue;
+        };
+        let threads: Value = serde_json::from_str(&value)
+            .map_err(|e| format!("Unreadable conversation receipts: {e}"))?;
+        let agents = threads.as_object().ok_or("Invalid saved Agent threads")?;
+        for (handle, threads) in agents {
+            for thread in threads.as_array().ok_or("Invalid saved thread list")? {
+                for message in thread["messages"].as_array().into_iter().flatten() {
+                    let Some(receipt) = message.get("executionReceipt") else {
+                        continue;
+                    };
+                    let receipt = receipt.get("receipt").unwrap_or(receipt);
+                    let ticket_matches = receipt["ticket"].as_str().is_some_and(|id| {
+                        id.strip_prefix(project)
+                            .is_some_and(|suffix| suffix.starts_with('-'))
+                    });
+                    let root_matches = receipt["repository_root"].as_str().is_some_and(|path| {
+                        std::path::Path::new(path) == root
+                            || std::path::Path::new(path).canonicalize().ok().as_deref()
+                                == Some(root)
+                    });
+                    // A conflicting explicit root is not evidence for this project.
+                    if ticket_matches && (receipt["repository_root"].is_null() || root_matches) {
+                        receipts.push((
+                            format!(
+                                "conversation:{handle}:{}",
+                                thread["id"].as_str().unwrap_or("unknown")
+                            ),
+                            receipt.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(receipts)
+}
+
+/// Recover before the model's first planning pass. Roots are supplied by native
+/// repository authorization, never by recovered receipts or assistant text.
+pub(crate) fn project_overviews(roots: &[std::path::PathBuf], current_request: &str) -> Value {
+    if roots.is_empty() {
+        return json!([]);
+    }
+    let projects = crate::project_management::repo_now()
+        .and_then(|repo| crate::project_management::list_projects(&repo));
+    let projects = match projects {
+        Ok(projects) => projects,
+        Err(error) => return json!([{ "recovery_error": error, "execution_started": false }]),
+    };
+    let mut snapshots = Vec::new();
+    for project in projects {
+        let source =
+            std::path::PathBuf::from(crate::project_management::local_source_path(&project));
+        if !roots
+            .iter()
+            .any(|root| source.canonicalize().ok().as_ref() == Some(root))
+        {
+            continue;
+        }
+        snapshots.push(match crate::project_continuity::snapshot(&project.key) {
+            Ok(snapshot) => compact_project(&json!(snapshot), current_request),
+            Err(error) => {
+                json!({"project":project.key,"recovery_error":error,"execution_started":false})
+            }
+        });
+    }
+    json!(snapshots)
+}
+
+pub(crate) fn project_specs() -> Vec<Value> {
+    vec![
+        json!({"type":"function","function":{"name":"read_project_work",
+        "description":"Recover existing project tickets and historical assignments before planning or dispatch. Includes stopped workers, branches, PRs and evidence sources across threads. Read-only and restricted to repositories already authorized in this conversation. Follow next_offset; status is evidence, not permission to relaunch.",
+        "parameters":{"type":"object","properties":{"root":{"type":"string"},"ticket":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["root"],"additionalProperties":false}}}),
+    ]
+}
+
+fn compact_row(row: &Value) -> Value {
+    let mut row = row.clone();
+    // Preserve every identity and reference; bound prose carried by evidence.
+    if let Some(evidence) = row["evidence"].as_array_mut() {
+        for entry in evidence.iter_mut() {
+            if let Some(detail) = entry["detail"].as_str() {
+                entry["detail"] = json!(short(detail, 600));
+            }
+        }
+        let count = evidence.len();
+        evidence.truncate(8);
+        row["evidence_count"] = json!(count);
+    }
+    for field in ["title", "next_action"] {
+        if let Some(text) = row[field].as_str() {
+            row[field] = json!(short(text, 400));
+        }
+    }
+    row
+}
+
+pub(crate) fn compact_project(snapshot: &Value, current_request: &str) -> Value {
+    let mut tickets: Vec<_> = snapshot["tickets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    let assignments: Vec<_> = snapshot["assignments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    tickets.sort_by_key(|row| {
+        let named = row["id"]
+            .as_str()
+            .is_some_and(|id| current_request.to_ascii_uppercase().contains(id));
+        let priority = match row["state"].as_str() {
+            Some("active" | "stalled" | "blocked" | "review") => 0,
+            _ => 1,
+        };
+        (!named, priority)
+    });
+    let selected: Vec<_> = tickets.iter().take(10).map(|row| json!({"id":row["id"],
+        "title":short(row["title"].as_str().unwrap_or_default(),160),"status":row["status"],"state":row["state"],
+        "owner":row["owner"],"assignment_count":row["assignment_ids"].as_array().map(Vec::len).unwrap_or(0),
+        "next_action":short(row["next_action"].as_str().unwrap_or_default(),240)})).collect();
+    let selected_ids: std::collections::HashSet<_> = selected
+        .iter()
+        .filter_map(|row| row["id"].as_str())
+        .collect();
+    let mut assignments_sorted = assignments.clone();
+    assignments_sorted.sort_by_key(|row| {
+        !row["ticket"]
+            .as_str()
+            .is_some_and(|id| selected_ids.contains(id))
+    });
+    let brief: Vec<_> = assignments_sorted.iter().take(12).map(|row|json!({"run_id":row["run_id"],"ticket":row["ticket"],
+        "owner":row["owner"],"state":row["state"],"run_state":row["run_state"],"branch":row["branch"],
+        "worktree":row["worktree"],"pr_url":row["pr_url"]})).collect();
+    json!({"project":snapshot["project"],"observed_at":snapshot["observed_at"],"ticket_count":tickets.len(),
+        "assignment_count":assignments.len(),"tickets":selected,"assignments":brief,
+        "diagnostics":snapshot["diagnostics"],"more":tickets.len()>10 || assignments.len()>12,
+        "retrieve":"read_project_work(root=project key, ticket=optional ticket ID, offset=0); follow next_offset"})
+}
+
+pub(crate) fn read_project_work(args: &Value, allowed: &[std::path::PathBuf]) -> Value {
+    let read = || -> Result<Value, String> {
+        let root = crate::repository_read::authorized_root(
+            args["root"].as_str().unwrap_or_default(),
+            allowed,
+        )?;
+        let repo = crate::project_management::repo_now()?;
+        let project = crate::project_management::list_projects(&repo)?
+            .into_iter()
+            .find(|project| {
+                std::path::PathBuf::from(crate::project_management::local_source_path(project))
+                    .canonicalize()
+                    .ok()
+                    .as_ref()
+                    == Some(&root)
+            })
+            .ok_or("Authorized repository is not registered")?;
+        let snapshot = json!(crate::project_continuity::snapshot(&project.key)?);
+        let ticket = args["ticket"].as_str();
+        let rows: Vec<_> = snapshot["tickets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|row| ticket.is_none_or(|id| row["id"].as_str() == Some(id)))
+            .chain(
+                snapshot["assignments"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|row| ticket.is_none_or(|id| row["ticket"].as_str() == Some(id))),
+            )
+            .map(compact_row)
+            .collect();
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+        let page: Vec<_> = rows.iter().skip(offset).take(8).collect();
+        let next = offset.saturating_add(page.len());
+        Ok(
+            json!({"ok":true,"project":project.key,"rows":page,"total":rows.len(),"next_offset":if next<rows.len(){Some(next)}else{None},"diagnostics":snapshot["diagnostics"]}),
+        )
+    };
+    read().unwrap_or_else(|error| json!({"ok":false,"error":error}))
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct History {
@@ -205,6 +428,84 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_project_overview_is_bounded_and_preserves_retrieval_counts() {
+        let tickets: Vec<_> = (0..500)
+            .map(|i| json!({"id":format!("TEST-{i}"),"title":"x".repeat(5_000),"state":"unknown"}))
+            .collect();
+        let assignments: Vec<_> = (0..500).map(|i|json!({"run_id":format!("run-{i}"),"ticket":format!("TEST-{i}"),"branch":format!("branch-{i}")})).collect();
+        let brief = compact_project(
+            &json!({"project":"TEST","tickets":tickets,"assignments":assignments,"diagnostics":[]}),
+            "continue TEST-499",
+        );
+        assert_eq!(brief["ticket_count"], 500);
+        assert_eq!(brief["assignment_count"], 500);
+        assert_eq!(brief["tickets"].as_array().unwrap().len(), 10);
+        assert_eq!(brief["assignments"].as_array().unwrap().len(), 12);
+        assert!(brief["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"] == "TEST-499"));
+        assert!(brief.to_string().len() < 12_000);
+        assert!(brief["retrieve"]
+            .as_str()
+            .unwrap()
+            .contains("read_project_work"));
+    }
+
+    #[test]
+    fn project_receipts_survive_thread_switch_without_importing_other_project_prose() {
+        let dir =
+            std::env::temp_dir().join(format!("xnaut-receipt-recovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("conversations.sqlite");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch(
+            "CREATE TABLE conversations(key TEXT PRIMARY KEY, value TEXT, revision INTEGER)",
+        )
+        .unwrap();
+        let saved = json!({"old-agent":[{"id":"old-thread","messages":[
+            {"role":"user","text":"unrelated secret instruction"},
+            {"executionReceipt":{"ticket":"TEST-1","repository_root":"/repo","launch":{"run_id":"stopped-run"},"branch":"saved-work"}},
+            {"executionReceipt":{"ticket":"OTHER-1","launch":{"run_id":"foreign-run"}}},
+            {"executionReceipt":{"ticket":"TEST-2","repository_root":"/foreign","launch":{"run_id":"conflicting-root"}}}
+        ]}],"new-agent":[{"id":"new-thread","messages":[]}]});
+        db.execute(
+            "INSERT INTO conversations VALUES ('xnaut-agent-threads:v1',?,1)",
+            [saved.to_string()],
+        )
+        .unwrap();
+        drop(db);
+        let recovered = project_receipts_in(&path, "TEST", std::path::Path::new("/repo")).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].1["launch"]["run_id"], "stopped-run");
+        assert!(recovered[0].0.contains("old-thread"));
+        assert!(!json!(recovered).to_string().contains("secret"));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1); // read did not migrate/write
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_history_is_fresh_but_unreadable_history_is_unknown() {
+        let dir =
+            std::env::temp_dir().join(format!("xnaut-broken-recovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("conversations.sqlite");
+        assert!(
+            project_receipts_in(&path, "TEST", std::path::Path::new("/repo"))
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::write(&path, "corrupt sqlite").unwrap();
+        assert!(
+            project_receipts_in(&path, "TEST", std::path::Path::new("/repo"))
+                .unwrap_err()
+                .contains("unavailable")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     #[ignore = "explicit read-only probe of the owner's saved Vynl thread"]

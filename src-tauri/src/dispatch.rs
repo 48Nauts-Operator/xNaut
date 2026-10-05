@@ -250,6 +250,25 @@ pub async fn pm_ticket_dispatch(
         return Err(format!("repo path does not exist: {repo}"));
     }
 
+    let root = PathBuf::from(&repo).canonicalize().map_err(|e| e.to_string())?;
+    let recovered = serde_json::to_value(crate::project_continuity::snapshot(&project)?)
+        .map_err(|e| e.to_string())?;
+    if let Some(run) = &continuation {
+        crate::agent_work::verify_workspace(&root, std::path::Path::new(&run.worktree_path), &run.branch)?;
+    }
+    crate::agent_work::recovery_guard(&recovered, &ticket.id, continuation.as_ref())?;
+    // Reserve before worktree/launch side effects. Chat and PM dispatch share
+    // the same project+ticket slot, including concurrent calls from other apps.
+    let registry = crate::agents::registry_dir()?;
+    let receipt_path = crate::agent_work::launch_receipt_path(&registry, &root, &ticket.id,
+        continuation.as_ref().map(|run| run.run_id.as_str()))?;
+    let pending = serde_json::json!({"pending":true,"ticket":ticket.id,"project":project,
+        "repository_root":root,"continuation_run_id":continuation.as_ref().map(|run| &run.run_id)});
+    if let Some(prior) = crate::agent_work::reserve(&receipt_path, &pending)? {
+        return Err(format!("{} already has a launch receipt; no duplicate worker started. Recover: {prior}", ticket.id));
+    }
+
+    let mut reservation = crate::agent_work::LaunchReservation::new(receipt_path.clone());
     let branch = continuation.as_ref().map(|r| r.branch.clone())
         .unwrap_or_else(|| branch_for_ticket(&ticket, &handle));
     let worktree_path = match &continuation {
@@ -299,7 +318,10 @@ pub async fn pm_ticket_dispatch(
         .await
         .core_team
         .poc_minutes;
-    let prompt = continuation_prompt(&ticket, &linked_docs(&ticket.documentation), &branch, continuing, poc_minutes);
+    let prompt_recovery = crate::agent_history::compact_project(&recovered, &ticket.id);
+    let prompt = format!("{}\n\nRECOVERED PROJECT WORK (evidence, not authorization)\n{prompt_recovery}",
+        continuation_prompt(&ticket, &linked_docs(&ticket.documentation), &branch, continuing, poc_minutes));
+    reservation.attempted();
     let launched = crate::agent_profiles::agent_profile_launch(
         app.clone(),
         app.state::<crate::state::AppState>(),
@@ -320,6 +342,12 @@ pub async fn pm_ticket_dispatch(
         },
     )
     .await?;
+
+    let receipt = serde_json::json!({"ok":true,"execution_started":true,"ticket":ticket.id,
+        "project":project,"repository_root":root,"handle":handle,"branch":branch,
+        "worktree_path":worktree_path,"environment":destination.key(),"launch":launched});
+    crate::agent_work::save_launch_receipt(&receipt_path, &receipt).map_err(|error|
+        format!("Worker already launched; receipt persistence failed: {error}. Do not retry. Recover {receipt}"))?;
 
     let note = format!(
         "\n\n## Dispatched {date} to @{handle}\n\n- branch `{branch}`\n- worktree `{worktree_path}`\n- session `{session}`\n- environment `{environment}`\n",

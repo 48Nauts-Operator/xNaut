@@ -64,7 +64,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn verify_workspace(repo: &Path, dest: &Path, branch: &str) -> Result<(), String> {
+pub(crate) fn verify_workspace(repo: &Path, dest: &Path, branch: &str) -> Result<(), String> {
     if dest
         .symlink_metadata()
         .map(|m| m.file_type().is_symlink())
@@ -111,8 +111,8 @@ fn ticket_context_in(registry: &Path, id: &str, root: &Path) -> Result<String, S
         .into_iter()
         .find(|t| t.id == id)
         .ok_or_else(|| format!("Ticket {id} not found"))?;
-    if matches!(record.status.as_str(), "done" | "complete") {
-        return Err("This ticket is already done or complete. Reconcile its existing work before reopening or creating follow-up work.".into());
+    if matches!(record.status.as_str(), "review" | "done" | "complete") {
+        return Err("This ticket is already in review, done or complete. Reconcile its existing work before reopening or creating follow-up work.".into());
     }
     let project = crate::project_management::list_projects(registry)?
         .into_iter()
@@ -127,29 +127,178 @@ fn ticket_context_in(registry: &Path, id: &str, root: &Path) -> Result<String, S
     Ok(format!("\nREGISTERED TICKET {} — {}\n{}\nPreserve this scope (including read-only restrictions). Do not expand it implicitly. Report execution evidence, findings, tests actually run and coverage gaps. A launch is not a completed audit.\n", record.id,record.title,record.body))
 }
 
+/// Native admission is ticket-scoped, independent of agent, task key or thread.
+/// A retired/failed runtime can still own implementation. Only run_control's
+/// verified successor path may continue it, in exactly the same Git worktree.
+pub(crate) fn recovery_guard(
+    snapshot: &Value,
+    ticket: &str,
+    continuation: Option<&crate::run_control::RunManifest>,
+) -> Result<(), String> {
+    if snapshot["diagnostics"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().any(|row| row["blocking"] != false))
+    {
+        return Err(format!("Project recovery is incomplete; no worker was started. Repair these evidence sources before retrying: {}", snapshot["diagnostics"]));
+    }
+    let row = snapshot["tickets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["id"].as_str() == Some(ticket))
+        .ok_or("Ticket missing from recovered project evidence")?;
+    if matches!(row["status"].as_str(), Some("review" | "done" | "complete")) {
+        return Err(format!("{ticket} is {}; reconcile its existing work before reopening. Ticket status alone is not independent verification. Evidence: {}", row["status"], row["evidence"]));
+    }
+    let assignments: Vec<_> = snapshot["assignments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|run| run["ticket"].as_str() == Some(ticket))
+        .collect();
+    if let Some(next) = continuation {
+        let mut lineage = std::collections::HashSet::from([next.run_id.clone()]);
+        let mut previous = next.previous_run_id.clone();
+        while let Some(id) = previous {
+            if !lineage.insert(id.clone()) {
+                return Err("Cyclic recovered continuation".into());
+            }
+            previous = assignments
+                .iter()
+                .find(|run| run["run_id"].as_str() == Some(&id))
+                .and_then(|run| run["previous_run_id"].as_str())
+                .map(str::to_owned);
+        }
+        if !assignments.is_empty()
+            && assignments.iter().all(|run| {
+                run["run_id"]
+                    .as_str()
+                    .is_some_and(|id| lineage.contains(id))
+                    && run["branch"] == next.branch
+                    && run["worktree"] == next.worktree_path
+            })
+        {
+            // Admission still verifies predecessor retirement/proof and model
+            // policy atomically in run_control::request_in.
+            return Ok(());
+        }
+    }
+    // The ticket's own launch notes outlive local registry retention. Explicit
+    // artifact evidence must be reconciled even when there is no manifest.
+    let artifacts = row["evidence"].as_array().into_iter().flatten().any(|e| {
+        matches!(
+            e["kind"].as_str(),
+            Some(
+                "branch"
+                    | "worktree"
+                    | "pr"
+                    | "launch"
+                    | "receipt"
+                    | "commit"
+                    | "assignment"
+                    | "pull_request"
+                    | "handback"
+                    | "launch_receipt"
+                    | "transfer"
+            )
+        )
+    });
+    if !assignments.is_empty() || artifacts || row["status"] == "blocked" {
+        return Err(format!("{ticket} has existing or unresolved work; no replacement was started. Recover the ticket handoff and inspect its branch/PR. Continue through the verified existing-run handoff, preserving its worktree. Assignments: {}; ticket evidence: {}", json!(assignments), row["evidence"]));
+    }
+    Ok(())
+}
+
+/// One persistent admission slot across chat and PM dispatch. A successor gets
+/// a distinct slot only after native recovery verifies its existing lineage.
+pub(crate) fn launch_receipt_path(
+    registry: &Path,
+    root: &Path,
+    ticket: &str,
+    continuation: Option<&str>,
+) -> Result<PathBuf, String> {
+    let dir = registry.join("chat-launches");
+    let digest = Sha256::digest(
+        format!(
+            "{}\0{ticket}\0{}",
+            root.display(),
+            continuation.unwrap_or("initial")
+        )
+        .as_bytes(),
+    );
+    Ok(dir.join(format!("ticket-{digest:x}.json")))
+}
+
+/// Remove a reservation only when we know launch admission was never reached.
+/// Once attempted, even an error can hide a live or partially created worker.
+pub(crate) struct LaunchReservation {
+    path: PathBuf,
+    attempted: bool,
+}
+impl LaunchReservation {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            attempted: false,
+        }
+    }
+    pub(crate) fn attempted(&mut self) {
+        self.attempted = true;
+    }
+}
+impl Drop for LaunchReservation {
+    fn drop(&mut self) {
+        if !self.attempted {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+pub(crate) fn save_launch_receipt(path: &Path, receipt: &Value) -> Result<(), String> {
+    let temp = path.with_extension("tmp");
+    let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
+    file.write_all(&serde_json::to_vec_pretty(receipt).map_err(|e| e.to_string())?)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    std::fs::rename(temp, path).map_err(|e| e.to_string())
+}
+
+fn read_launch_receipt(path: &Path) -> Result<Option<Value>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("Unreadable launch reservation at {}: {e}", path.display()))?;
+    if value["pending"] == true {
+        return Err(format!("This ticket already has a pending launch at {}: {value}. Check its run before retrying; no second worker was created.", path.display()));
+    }
+    Ok(Some(value))
+}
+
 /// Exclusive on-disk reservation: retries, concurrent chats and app restarts
 /// cannot launch the same logical task twice. A pending receipt is deliberately
 /// not retried blindly after a crash; its run must first be reconciled.
-fn reserve(path: &Path) -> Result<Option<Value>, String> {
+pub(crate) fn reserve(path: &Path, pending: &Value) -> Result<Option<Value>, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
     {
         Ok(mut file) => {
-            file.write_all(br#"{"pending":true}"#)
+            file.write_all(&serde_json::to_vec(pending).map_err(|e| e.to_string())?)
                 .and_then(|_| file.sync_all())
                 .map_err(|e| e.to_string())?;
             Ok(None)
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let value: Value =
-                serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-                    .map_err(|e| format!("Unreadable launch reservation: {e}"))?;
-            if value["pending"] == true {
-                return Err("This task already has a pending launch. Check its run before retrying; no second worker was created.".into());
-            }
-            Ok(Some(value))
+            read_launch_receipt(path)?.map(Some).ok_or_else(|| {
+                "Launch reservation changed concurrently; recover before retrying".into()
+            })
         }
         Err(e) => Err(e.to_string()),
     }
@@ -237,13 +386,27 @@ async fn prepare_ticket(args: &Value, handle: &str, allowed: &[PathBuf]) -> Resu
         "agent-task:{:x}",
         Sha256::digest(format!("{}\0{key}", root.display()).as_bytes())
     );
+    let recovered = json!(crate::project_continuity::snapshot(&project.key)?);
+    if recovered["diagnostics"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().any(|row| row["blocking"] != false))
+    {
+        return Err(format!(
+            "Cannot prepare duplicate-safe tracking while project recovery is incomplete: {}",
+            recovered["diagnostics"]
+        ));
+    }
     if let Some(ticket) =
         crate::project_management::ticket_list_in(&repo, Some(project.key.clone()))?
             .into_iter()
-            .find(|t| t.source_id == source_id)
+            .find(|t| {
+                t.source_id == source_id
+                    || t.id.eq_ignore_ascii_case(key)
+                    || (t.title.trim().eq_ignore_ascii_case(title) && t.body.trim() == task)
+            })
     {
         return Ok(
-            json!({"ok":true,"ticket":ticket.id,"project":project.key,"status":ticket.status,"reused":true,"execution_started":false}),
+            json!({"ok":true,"ticket":ticket.id,"project":project.key,"status":ticket.status,"reused":true,"execution_started":false,"recovered_project":recovered}),
         );
     }
     let request = serde_json::from_value(json!({"project":project.key,"title":title,"body":task,
@@ -315,6 +478,26 @@ async fn execute_inner(
     )?
     .key()
     .to_string();
+    let control = crate::project_management::repo_now()?;
+    let project = crate::project_management::ticket_list_in(&control, None)?
+        .into_iter()
+        .find(|record| Some(record.id.as_str()) == ticket)
+        .ok_or("Launch ticket disappeared")?
+        .project;
+    let registry = crate::agents::registry_dir()?;
+    let receipt_path = launch_receipt_path(&registry, &root, ticket.unwrap(), None)?;
+    // Return an existing durable result before checking mutable runtime state.
+    // A new task key/agent/thread cannot turn this receipt into a fresh launch.
+    if name == "start_repository_task" {
+        if let Some(mut prior) = read_launch_receipt(&receipt_path)? {
+            verify_receipt_environment(&prior, args.get("environment"))?;
+            prior["reused_receipt"] = json!(true);
+            prior["note"] = json!("Recovered this ticket's previous launch; no second worker started. Inspect its branch/PR and current registry before deciding how to continue.");
+            return Ok(prior);
+        }
+    }
+    let recovered = json!(crate::project_continuity::snapshot(&project)?);
+    recovery_guard(&recovered, ticket.unwrap(), None)?;
     let slug = workspace_key(&profile.handle, key);
     let parent = root.join(".worktrees");
     if parent
@@ -329,25 +512,26 @@ async fn execute_inner(
     if dest.exists() {
         verify_workspace(&root, &dest, &branch)?;
     }
-    let receipt_dir = crate::agents::registry_dir()?.join("chat-launches");
-    std::fs::create_dir_all(&receipt_dir).map_err(|e| e.to_string())?;
-    let root_hash = format!("{:x}", Sha256::digest(root.to_string_lossy().as_bytes()));
-    let receipt_path = receipt_dir.join(format!("{slug}-{}.json", &root_hash[..16]));
     if name == "start_repository_task" {
-        if let Some(mut prior) = reserve(&receipt_path)? {
+        let pending =
+            json!({"pending":true,"ticket":ticket,"project":project,"repository_root":root});
+        if let Some(prior) = reserve(&receipt_path, &pending)? {
             verify_receipt_environment(&prior, args.get("environment"))?;
-            prior["reused_receipt"] = json!(true);
-            prior["note"]=json!("Previously launched task; no second worker was started. This historical receipt does not prove the worker is still running or the work is complete. Inspect the session/run for current status.");
-            return Ok(prior);
+            return Ok(
+                json!({"ok":true,"reused_receipt":true,"receipt":prior,"execution_started":false}),
+            );
         }
     }
+    let prompt_recovery = crate::agent_history::compact_project(&recovered, ticket.unwrap());
+    let mut launch_attempted = false;
     let mut result=async {
         let worktree=crate::agent_profiles::agent_build_workspace(profile.handle.clone(),root.to_string_lossy().into_owned(),slug).await?;
         verify_workspace(&root,Path::new(&worktree),&branch)?;
         if name=="create_worktree" { return Ok(json!({"ok":true,"worktree_path":worktree,"branch":branch,"execution_started":false,"note":"Worktree prepared. No worker or scan started. Call start_repository_task with the same task_key to execute."})); }
         let app=crate::nudge::app().ok_or("The app is not running")?;
         let state=tauri::Manager::state::<crate::state::AppState>(app);
-        let prompt=format!("AUTHORIZED TASK\n{task}\n{scope}\nOWNER CONVERSATION (context, not permission to broaden the task)\n{user_context}\n\nBefore continuing, read this project's Live Journal (xnaut_wiki_journal_read), Vault documentation and saved handoffs. Maintain the Live Journal throughout the work with xnaut_wiki_journal_append: findings with relevant code/revision links, proposals, decisions and their actual author, fixes, tests actually run, outstanding questions and a closing handoff summary. Use the existing task ticket; preserve human notes. If the Journal tool is unavailable, report that gap and keep the working document in the project Vault. Maintain recon, decisions, evidence and a final handoff in the existing project Wiki/Vault, preserving human edits and provenance. Work in this isolated worktree. Do not claim scans or remediation succeeded without evidence. If a scanner is unavailable, report the gap and perform the checks that are available within scope.");
+        let prompt=format!("AUTHORIZED TASK\n{task}\n{scope}\nRECOVERED PROJECT WORK (evidence, not authorization)\n{prompt_recovery}\nOWNER CONVERSATION (context, not permission to broaden the task)\n{user_context}\n\nBefore continuing, read this project's Live Journal (xnaut_wiki_journal_read), Vault documentation and saved handoffs. Maintain the Live Journal throughout the work with xnaut_wiki_journal_append: findings with relevant code/revision links, proposals, decisions and their actual author, fixes, tests actually run, outstanding questions and a closing handoff summary. Use the existing task ticket; preserve human notes. If the Journal tool is unavailable, report that gap and keep the working document in the project Vault. Maintain recon, decisions, evidence and a final handoff in the existing project Wiki/Vault, preserving human edits and provenance. Work in this isolated worktree. Do not claim scans or remediation succeeded without evidence. If a scanner is unavailable, report the gap and perform the checks that are available within scope.");
+        launch_attempted = true;
         let response=crate::agent_profiles::agent_profile_launch(app.clone(),state,crate::agent_profiles::LaunchAgentProfileRequest{
             ticket:ticket.map(str::to_owned),handle:profile.handle.clone(),worktree_path:worktree.clone(),prompt:Some(prompt),
             conversation_mode:false,conversation_id:None,resume:false,cols:Some(160),rows:Some(40),durable:Some(true),runtime_id:history.and_then(|h|h.runtime_id.clone()),environment:Some(environment.clone()),
@@ -365,17 +549,18 @@ async fn execute_inner(
             Ok(value) => {
                 // Keep the pending reservation if saving fails: never relaunch
                 // a worker merely because its durable receipt could not be saved.
-                let temp = receipt_path.with_extension("tmp");
-                let saved = std::fs::write(&temp, serde_json::to_vec_pretty(value).unwrap())
-                    .and_then(|_| std::fs::rename(&temp, &receipt_path));
+                let saved = save_launch_receipt(&receipt_path, value);
                 if let Err(e) = saved {
                     return Ok(
                         json!({"ok":true,"execution_started":true,"receipt":value,"warning":format!("Worker launched but receipt persistence failed: {e}. Do not retry blindly.")}),
                     );
                 }
             }
-            Err(_) => {
+            Err(_) if !launch_attempted => {
                 let _ = std::fs::remove_file(&receipt_path);
+            }
+            Err(error) => {
+                return Err(format!("{error}. Launch admission was attempted; recovery reservation retained at {}. Reconcile the run before retrying.", receipt_path.display()));
             }
         }
         if let Ok(receipt) = &mut result {
@@ -411,6 +596,177 @@ fn track_launch(ticket: &str, handle: &str, receipt: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn recovered_fixture() -> Value {
+        json!({"project":"TEST","tickets":[{"id":"TEST-1","status":"ready","evidence":[]}],
+            "assignments":[],"diagnostics":[]})
+    }
+
+    #[test]
+    fn persisted_ticket_and_receipt_recovery_blocks_new_thread_replacement() {
+        let temp = Temp::new();
+        let control = temp.path().join("control");
+        let registry = temp.path().join("registry");
+        let tickets = control.join("projects/TEST/tickets");
+        std::fs::create_dir_all(&tickets).unwrap();
+        std::fs::create_dir(&registry).unwrap();
+        let mut ticket = json!({"id":"TEST-1","project":"TEST","title":"Existing assignment","status":"ready",
+            "revision":1,"created_at":"fixture","updated_at":"fixture","body":""});
+        let ticket_path = tickets.join("TEST-1.json");
+        std::fs::write(&ticket_path, ticket.to_string()).unwrap();
+        let fresh = json!(crate::project_continuity::snapshot_in(
+            &control, &registry, "TEST", 1_000
+        )
+        .unwrap());
+        recovery_guard(&fresh, "TEST-1", None).unwrap();
+        ticket["body"] = json!("## Dispatched 2026-10-05 to @old-agent\n\n- branch `saved-implementation`\n- worktree `/preserved`\n- session `stopped`\nExisting PR https://forge.invalid/pulls/44");
+        std::fs::write(&ticket_path, ticket.to_string()).unwrap();
+        let recovered = json!(crate::project_continuity::snapshot_in(
+            &control, &registry, "TEST", 2_000
+        )
+        .unwrap());
+        let error = recovery_guard(&recovered, "TEST-1", None).unwrap_err();
+        assert!(error.contains("saved-implementation") && error.contains("pulls/44"));
+        let receipt = launch_receipt_path(&registry, Path::new("/repo"), "TEST-1", None).unwrap();
+        reserve(
+            &receipt,
+            &json!({"pending":true,"ticket":"TEST-1","project":"TEST"}),
+        )
+        .unwrap();
+        let restarted = json!(crate::project_continuity::snapshot_in(
+            &control, &registry, "TEST", 3_000
+        )
+        .unwrap());
+        assert!(
+            restarted["assignments"].as_array().unwrap().len()
+                > recovered["assignments"].as_array().unwrap().len()
+        );
+        assert!(recovery_guard(&restarted, "TEST-1", None).is_err());
+    }
+
+    #[test]
+    fn recovery_admission_allows_initial_work_but_not_stopped_work_or_closed_tickets() {
+        let mut snapshot = recovered_fixture();
+        recovery_guard(&snapshot, "TEST-1", None).unwrap();
+        snapshot["tickets"][0]["status"] = json!("in_progress");
+        recovery_guard(&snapshot, "TEST-1", None).unwrap(); // assignment is not a launch
+        for state in ["failed", "retired", "done", "running"] {
+            snapshot["assignments"] = json!([{"ticket":"TEST-1","run_id":"old-run","run_state":state,
+                "branch":"preserved-work","worktree":"/old-work","pr_url":"https://forge.invalid/pulls/4"}]);
+            let error = recovery_guard(&snapshot, "TEST-1", None).unwrap_err();
+            assert!(
+                error.contains("old-run")
+                    && error.contains("preserved-work")
+                    && error.contains("pulls/4")
+            );
+        }
+        snapshot["assignments"] = json!([]);
+        for status in ["review", "done", "complete", "blocked"] {
+            snapshot["tickets"][0]["status"] = json!(status);
+            assert!(recovery_guard(&snapshot, "TEST-1", None).is_err());
+        }
+        snapshot["tickets"][0]["status"] = json!("ready");
+        snapshot["tickets"][0]["evidence"] =
+            json!([{"kind":"branch","detail":"existing-implementation"}]);
+        assert!(recovery_guard(&snapshot, "TEST-1", None)
+            .unwrap_err()
+            .contains("existing-implementation"));
+        snapshot["tickets"][0]["evidence"] = json!([]);
+        snapshot["diagnostics"] = json!([{"source":"registry","message":"unavailable"}]);
+        assert!(recovery_guard(&snapshot, "TEST-1", None)
+            .unwrap_err()
+            .contains("incomplete"));
+    }
+
+    #[test]
+    fn continuation_must_preserve_every_recovered_assignment_in_its_lineage() {
+        let mut next = crate::run_control::tests::run();
+        next.run_id = "successor".into();
+        next.previous_run_id = Some("predecessor".into());
+        next.branch = "existing-branch".into();
+        next.worktree_path = "/existing-worktree".into();
+        let mut snapshot = recovered_fixture();
+        snapshot["assignments"] = json!([
+            {"ticket":"TEST-1","run_id":"predecessor","branch":next.branch,"worktree":next.worktree_path},
+            {"ticket":"TEST-1","run_id":"successor","branch":next.branch,"worktree":next.worktree_path,"previous_run_id":"predecessor"}
+        ]);
+        recovery_guard(&snapshot, "TEST-1", Some(&next)).unwrap();
+        snapshot["assignments"][0]["worktree"] = json!("/replacement");
+        assert!(recovery_guard(&snapshot, "TEST-1", Some(&next)).is_err());
+        snapshot["assignments"][0]["worktree"] = json!(next.worktree_path);
+        snapshot["assignments"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"ticket":"TEST-1","run_id":"unresolved-other-worker"}));
+        assert!(recovery_guard(&snapshot, "TEST-1", Some(&next)).is_err());
+    }
+
+    #[test]
+    fn ticket_reservation_survives_restart_and_serializes_concurrent_retries() {
+        let temp = Temp::new();
+        let path = launch_receipt_path(temp.path(), Path::new("/repo"), "TEST-1", None).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    matches!(
+                        reserve(&path, &json!({"pending":true,"ticket":"TEST-1"})),
+                        Ok(None)
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>(),
+            1
+        );
+        assert!(reserve(&path, &json!({"pending":true}))
+            .unwrap_err()
+            .contains("pending"));
+        save_launch_receipt(&path, &json!({"launch":{"run_id":"survives-restart"}})).unwrap();
+        let reopened =
+            launch_receipt_path(temp.path(), Path::new("/repo"), "TEST-1", None).unwrap();
+        assert_eq!(
+            reserve(&reopened, &json!({"pending":true}))
+                .unwrap()
+                .unwrap()["launch"]["run_id"],
+            "survives-restart"
+        );
+        assert_ne!(
+            path,
+            launch_receipt_path(temp.path(), Path::new("/other-project"), "TEST-1", None).unwrap()
+        );
+        assert_ne!(
+            path,
+            launch_receipt_path(
+                temp.path(),
+                Path::new("/repo"),
+                "TEST-1",
+                Some("verified-successor")
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn only_pre_admission_failure_releases_reservation() {
+        let temp = Temp::new();
+        let path = temp.path().join("reservation.json");
+        reserve(&path, &json!({"pending":true})).unwrap();
+        drop(LaunchReservation::new(path.clone()));
+        assert!(!path.exists());
+        reserve(&path, &json!({"pending":true})).unwrap();
+        let mut guard = LaunchReservation::new(path.clone());
+        guard.attempted();
+        drop(guard);
+        assert!(path.exists());
+    }
+
     #[test]
     fn explicit_exe_placement_overrides_local_profile_without_http_credentials() {
         use crate::sandbox::launch_env::LaunchEnv;
@@ -596,15 +952,17 @@ mod tests {
     fn duplicate_and_uncertain_launches_are_not_restarted() {
         let dir = Temp::new();
         let path = dir.path().join("receipt.json");
-        assert!(reserve(&path).unwrap().is_none());
-        assert!(reserve(&path).unwrap_err().contains("pending"));
+        assert!(reserve(&path, &json!({"pending":true})).unwrap().is_none());
+        assert!(reserve(&path, &json!({"pending":true}))
+            .unwrap_err()
+            .contains("pending"));
         std::fs::write(
             &path,
             br#"{"ok":true,"launch":{"session_id":"actual-session"}}"#,
         )
         .unwrap();
         assert_eq!(
-            reserve(&path).unwrap().unwrap()["launch"]["session_id"],
+            reserve(&path, &json!({"pending":true})).unwrap().unwrap()["launch"]["session_id"],
             "actual-session"
         );
     }
