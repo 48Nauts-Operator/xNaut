@@ -60,6 +60,8 @@ pub struct AssignmentSnapshot {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TicketSnapshot {
     pub id: String,
+    #[serde(default)]
+    pub updated_at: String,
     pub title: String,
     pub status: String,
     pub owner: Option<String>,
@@ -360,6 +362,7 @@ pub fn reconcile(
         }
         result.tickets.push(TicketSnapshot {
             id: ticket.id.clone(),
+            updated_at: ticket.updated_at.clone(),
             title: ticket.title.clone(),
             status: ticket.status.clone(),
             owner: ticket.owner.clone(),

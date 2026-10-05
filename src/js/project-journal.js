@@ -53,6 +53,9 @@
   function continuityMarkup(snapshot, filter) {
     const assignments = snapshot.assignments || [];
     const tickets = (snapshot.tickets || []).filter(t=>!filter || t.id===filter);
+    // A mature project may have years of unverified handbacks. Show live work
+    // first, then recently updated tickets; retain the complete older record.
+    tickets.sort((a,b)=>(a.state==='active'?0:1)-(b.state==='active'?0:1) || (Date.parse(b.updated_at)||0)-(Date.parse(a.updated_at)||0));
     const current = t => ['active','stalled','blocked','review'].includes(t.state) || ['in_progress','in_review','review','blocked'].includes(t.status);
     const card = t => {
       const linked=assignments.filter(a=>(t.assignment_ids || []).includes(a.run_id));
@@ -63,7 +66,7 @@
     const orphaned=assignments.filter(a=>(!filter || a.ticket===filter) && !(snapshot.tickets || []).some(t=>(t.assignment_ids || []).includes(a.run_id)));
     const diagnostics=snapshot.diagnostics || [];
     return `${diagnostics.length?`<div class="pj-continuity-warning" role="status"><strong>Current state is incomplete.</strong><ul>${diagnostics.map(d=>`<li>${esc(d.message)} <small>Source: ${esc(d.source)}</small></li>`).join('')}</ul></div>`:''}
-      <p class="pj-muted">${diagnostics.length?'Available records show ':''}${active.length} current work item${active.length===1?'':'s'}${filter?' in '+esc(filter):''}. Status comes from saved records; a recorded signal does not confirm a worker is still running.</p>
+      <p class="pj-muted">${diagnostics.length?'Available records show ':''}${active.length} recorded work item${active.length===1?'':'s'} needing attention${filter?' in '+esc(filter):''}. Status comes from saved records; a recorded signal does not confirm a worker is still running.</p>
       ${active.map(card).join('')}
       ${!tickets.length&&!orphaned.length?'<p class="pj-muted">'+(diagnostics.length?'Work could not be established from the available records.':'No work is recorded for this selection.')+'</p>':''}
       ${other.length?`<details data-continuity-detail="other"><summary>Other recorded work · ${other.length} · outcomes and unstarted work</summary><div class="pj-evidence">${other.map(card).join('')}</div></details>`:''}

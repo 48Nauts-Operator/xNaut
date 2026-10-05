@@ -146,3 +146,18 @@ test('date changes during a slow read queue the selected document without showin
  await expect(page.locator('[data-opening]')).toHaveText('Selected historical context');
  await expect(page.locator('[data-continuity-time]')).toContainText('independent of the selected Journal date');
 });
+
+test('recent project work precedes older reviews while live workers stay first',async({page})=>{
+ await start(page);await currentWork(page);
+ await page.evaluate(()=>{
+  const sample=window.journalData.continuity.tickets[0];
+  window.journalData.continuity.tickets=[
+   {...sample,id:'DEMO-OLD',state:'review',status:'done',updated_at:'2025-01-01T00:00:00Z'},
+   {...sample,id:'DEMO-RECENT',state:'unknown',status:'in_progress',updated_at:'2026-10-06T00:00:00Z'},
+   {...sample,id:'DEMO-LIVE',state:'active',updated_at:'2026-10-05T00:00:00Z'}
+  ];
+  return window.journalInstance.refresh();
+ });
+ expect(await page.locator('[data-continuity-ticket]').evaluateAll(rows=>rows.map(row=>row.dataset.continuityTicket))).toEqual(['DEMO-LIVE','DEMO-RECENT','DEMO-OLD']);
+ await expect(page.locator('[data-continuity]')).toContainText('3 recorded work items needing attention');
+});
