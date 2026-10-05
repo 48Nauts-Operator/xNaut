@@ -450,7 +450,7 @@ async fn prepare_ticket(args: &Value, handle: &str, allowed: &[PathBuf]) -> Resu
             })
     {
         return Ok(
-            json!({"ok":true,"ticket":ticket.id,"project":project.key,"status":ticket.status,"reused":true,"execution_started":false,"recovered_project":recovered}),
+            json!({"ok":true,"ticket":ticket.id,"project":project.key,"status":ticket.status,"reused":true,"execution_started":false,"recovered_project":crate::agent_history::compact_project(&recovered, &ticket.id)}),
         );
     }
     let request = serde_json::from_value(json!({"project":project.key,"title":title,"body":task,
