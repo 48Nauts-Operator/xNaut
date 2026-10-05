@@ -32,8 +32,13 @@ pub struct Evidence {
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Diagnostic {
+    #[serde(default = "default_blocking")]
+    pub blocking: bool,
     pub source: String,
     pub message: String,
+}
+fn default_blocking() -> bool {
+    true
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AssignmentSnapshot {
@@ -202,7 +207,7 @@ pub fn reconcile(
     for r in runs.iter().filter(|r| r.project == project) {
         if let Some(old) = selected.get(r.run_id.as_str()) {
             if *old != r {
-                result.diagnostics.push(Diagnostic { source: format!("run:{}", r.run_id), message: "Conflicting copies of this run; highest revision selected. Inspect source history.".into() });
+                result.diagnostics.push(Diagnostic { blocking: true, source: format!("run:{}", r.run_id), message: "Conflicting copies of this run; highest revision selected. Inspect source history.".into() });
             }
             if (old.revision, serde_json::to_string(old).unwrap_or_default())
                 >= (r.revision, serde_json::to_string(r).unwrap_or_default())
@@ -597,6 +602,7 @@ fn read_jsons<T: serde::de::DeserializeOwned>(
         Err(e) => {
             if !(optional && e.kind() == std::io::ErrorKind::NotFound) {
                 diagnostics.push(Diagnostic {
+                    blocking: true,
                     source: dir.display().to_string(),
                     message: format!("Source unavailable: {e}"),
                 });
@@ -612,6 +618,7 @@ fn read_jsons<T: serde::de::DeserializeOwned>(
             }
             Ok(_) => {}
             Err(e) => diagnostics.push(Diagnostic {
+                blocking: true,
                 source: dir.display().to_string(),
                 message: e.to_string(),
             }),
@@ -628,6 +635,7 @@ fn read_jsons<T: serde::de::DeserializeOwned>(
                 Ok(row) => Some((path, row)),
                 Err(e) => {
                     diagnostics.push(Diagnostic {
+                        blocking: true,
                         source: path.display().to_string(),
                         message: format!("Unreadable evidence: {e}"),
                     });
@@ -638,6 +646,112 @@ fn read_jsons<T: serde::de::DeserializeOwned>(
         .collect()
 }
 
+// Shared stores contain other projects. Deserialize the scope envelope before
+// typed data so corrupt foreign records cannot expose content or block this one.
+fn record_scope(value: &Value, project: &str) -> Option<bool> {
+    let value = value.get("receipt").unwrap_or(value);
+    if let Some(key) = value["project"].as_str().filter(|s| !s.is_empty()) {
+        return Some(key == project);
+    }
+    value["ticket"]
+        .as_str()
+        .map(|id| id.starts_with(&format!("{project}-")))
+}
+fn unscoped_diagnostic(source: &str, diagnostics: &mut Vec<Diagnostic>) {
+    diagnostics.push(Diagnostic {
+        blocking: false,
+        source: source.into(),
+        message: "Some shared records could not be attributed to a project. Their contents are omitted; inspect the shared store separately if expected work is missing.".into(),
+    });
+}
+fn scoped_jsons<T: serde::de::DeserializeOwned>(
+    dir: &Path,
+    project: &str,
+    label: &str,
+    known: &std::collections::BTreeSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<(std::path::PathBuf, T)> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return vec![],
+        Err(_) => {
+            diagnostics.push(Diagnostic {
+                blocking: true,
+                source: label.into(),
+                message: "Shared store unavailable; cannot recover this project's records.".into(),
+            });
+            return vec![];
+        }
+    };
+    let mut rows = vec![];
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                unscoped_diagnostic(label, diagnostics);
+                continue;
+            }
+        };
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let linked = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|id| known.contains(id));
+        let raw = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let scope = raw.as_ref().and_then(|value| record_scope(value, project));
+        if scope == Some(false) {
+            if linked {
+                diagnostics.push(Diagnostic { blocking: true, source: label.into(), message: "Project references a record attributed to another project; resolve the identity conflict.".into() });
+            }
+            continue;
+        }
+        if scope != Some(true) && !linked {
+            unscoped_diagnostic(label, diagnostics);
+            continue;
+        }
+        match raw
+            .ok_or_else(|| "JSON unavailable or invalid".to_string())
+            .and_then(|raw| serde_json::from_value(raw).map_err(|e| e.to_string()))
+        {
+            Ok(row) => rows.push((path, row)),
+            Err(e) => diagnostics.push(Diagnostic {
+                blocking: true,
+                source: path.display().to_string(),
+                message: format!("Unreadable project evidence: {e}"),
+            }),
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
+fn failed_run_scope(registry: &Path, id: &str, project: &str) -> Option<bool> {
+    let mut scopes = vec![];
+    if let Ok(bytes) = std::fs::read(registry.join(format!("{id}.run.json"))) {
+        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+            scopes.push(record_scope(&value, project));
+        }
+    }
+    if let Ok(bytes) = std::fs::read_to_string(registry.join(format!("{id}.events.jsonl"))) {
+        for line in bytes.lines() {
+            if let Ok(value) = serde_json::from_str::<Value>(line) {
+                scopes.push(record_scope(&value["run"], project));
+            }
+        }
+    }
+    if scopes.contains(&Some(true)) {
+        Some(true)
+    } else if !scopes.is_empty() && scopes.iter().all(|scope| *scope == Some(false)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub fn snapshot(project: &str) -> Result<ProjectSnapshot, String> {
     let repo = crate::project_management::repo_now()?;
     let mut result = snapshot_in(
@@ -646,28 +760,32 @@ pub fn snapshot(project: &str) -> Result<ProjectSnapshot, String> {
         project,
         run_control::now_ms(),
     )?;
-    match crate::project_management::list_projects(&repo) {
-        Ok(projects) => {
-            if let Some(record) = projects.iter().find(|p| p.key == project) {
-                let local = crate::project_management::local_source_path(record);
-                if !local.is_empty() {
-                    match crate::agent_history::project_receipts(project, Path::new(&local)) {
-                        Ok(receipts) => {
-                            for (source, receipt) in receipts {
-                                add_launch_receipt(&mut result, &receipt, &source);
-                            }
+    let project_path = repo.join("projects").join(project).join("project.json");
+    match crate::project_management::read_json::<crate::project_management::ProjectRecord>(
+        &project_path,
+    ) {
+        Ok(record) if record.key == project => {
+            let local = crate::project_management::local_source_path(&record);
+            if !local.is_empty() {
+                match crate::agent_history::project_receipts(project, Path::new(&local)) {
+                    Ok(receipts) => {
+                        for (source, receipt) in receipts {
+                            add_launch_receipt(&mut result, &receipt, &source);
                         }
-                        Err(message) => result.diagnostics.push(Diagnostic {
-                            source: "conversation launch receipts".into(),
-                            message,
-                        }),
                     }
+                    Err(message) => result.diagnostics.push(Diagnostic {
+                        blocking: true,
+                        source: "conversation launch receipts".into(),
+                        message,
+                    }),
                 }
             }
         }
-        Err(message) => result.diagnostics.push(Diagnostic {
-            source: repo.display().to_string(),
-            message,
+        _ => result.diagnostics.push(Diagnostic {
+            blocking: true,
+            source: project_path.display().to_string(),
+            message: "Project identity unavailable; conversation receipts could not be scoped."
+                .into(),
         }),
     }
     refresh(&mut result);
@@ -696,45 +814,85 @@ pub fn snapshot_in(
         .into_iter()
         .map(|(_, r)| r)
         .collect();
-    let mut runs = vec![];
-    if !registry.is_dir() {
-        diagnostics.push(Diagnostic {
-            source: registry.display().to_string(),
-            message: "Run registry unavailable; absence is not evidence of no assignments.".into(),
-        });
-    }
-    match run_control::list_ids_in(registry) {
-        Ok(ids) => {
-            for id in ids {
-                match run_control::load_manifest_in(registry, &id) {
-                    Ok(run) => runs.push(run),
-                    Err(e) => diagnostics.push(Diagnostic {
-                        source: registry
-                            .join(format!("{id}.run.json"))
-                            .display()
-                            .to_string(),
-                        message: format!("Unreadable run history: {e}"),
-                    }),
-                }
-            }
+    // Recover explicit IDs first, so even invalid global records can be
+    // attributed when a project-local handback/launch receipt names them.
+    let ticket_evidence = reconcile(project, &tickets, &[], &[], at_ms);
+    let mut known: std::collections::BTreeSet<String> = ticket_evidence
+        .assignments
+        .iter()
+        .map(|a| a.run_id.clone())
+        .collect();
+    let transfer_dir = registry.join("repository-transfers");
+    let transfers: Vec<Transfer> = scoped_jsons(
+        &transfer_dir,
+        project,
+        "repository transfers",
+        &known,
+        &mut diagnostics,
+    )
+    .into_iter()
+    .map(|(_, r)| r)
+    .collect();
+    known.extend(transfers.iter().map(|t| t.run_id.clone()));
+    let receipts: Vec<(_, Value)> = scoped_jsons(
+        &registry.join("chat-launches"),
+        project,
+        "launch receipts",
+        &known,
+        &mut diagnostics,
+    );
+    for (_, r) in &receipts {
+        let r = r.get("receipt").unwrap_or(r);
+        if let Some(id) = r["launch"]["run_id"].as_str() {
+            known.insert(id.into());
         }
+    }
+    let mut runs = vec![];
+    let mut ids = std::collections::BTreeSet::new();
+    match std::fs::read_dir(registry) {
+        Ok(entries) => for entry in entries {
+            match entry {
+                Ok(entry) => {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if let Some(id) = name.strip_suffix(".run.json").or_else(|| name.strip_suffix(".events.jsonl")) { ids.insert(id.to_string()); }
+                },
+                Err(_) => diagnostics.push(Diagnostic { blocking: true, source: "run registry".into(), message: "Run registry directory could not be read completely.".into() }),
+            }
+        },
         Err(e) => diagnostics.push(Diagnostic {
-            source: registry.display().to_string(),
-            message: format!("Run registry unreadable: {e}"),
+            blocking: e.kind() != std::io::ErrorKind::NotFound,
+            source: "run registry".into(),
+            message: if e.kind() == std::io::ErrorKind::NotFound { "Run registry has not been created. Historical ticket and launch evidence is still checked.".into() } else { "Run registry unavailable; cannot recover this project's assignments.".into() },
         }),
     }
-    let transfer_dir = registry.join("repository-transfers");
-    let transfers: Vec<Transfer> = read_jsons(&transfer_dir, true, &mut diagnostics)
-        .into_iter()
-        .map(|(_, r)| r)
-        .collect();
+    for id in ids {
+        match run_control::load_manifest_in(registry, &id) {
+            Ok(run) if run.project == project => runs.push(run),
+            Ok(_) => {}
+            Err(e) => match failed_run_scope(registry, &id, project) {
+                Some(true) => diagnostics.push(Diagnostic {
+                    blocking: true,
+                    source: registry
+                        .join(format!("{id}.run.json"))
+                        .display()
+                        .to_string(),
+                    message: format!("Unreadable project run history: {e}"),
+                }),
+                _ if known.contains(&id) => diagnostics.push(Diagnostic {
+                    blocking: true,
+                    source: registry
+                        .join(format!("{id}.run.json"))
+                        .display()
+                        .to_string(),
+                    message: "Project references an unreadable or conflicting run record.".into(),
+                }),
+                Some(false) => {}
+                None => unscoped_diagnostic("run registry", &mut diagnostics),
+            },
+        }
+    }
     let mut result = reconcile(project, &tickets, &runs, &transfers, at_ms);
     result.diagnostics.extend(diagnostics);
-    let receipts: Vec<(_, Value)> = read_jsons(
-        &registry.join("chat-launches"),
-        true,
-        &mut result.diagnostics,
-    );
     for (path, receipt) in receipts {
         add_launch_receipt(&mut result, &receipt, &path.display().to_string());
     }
@@ -1185,5 +1343,94 @@ mod tests {
         assert!(!s.assignments[0].evidence[0]
             .detail
             .contains("fixture-private-value"));
+    }
+    #[test]
+    fn unrelated_corruption_neither_blocks_nor_exposes_shared_records() {
+        let scratch = Scratch::new();
+        let registry = scratch.0.join("registry");
+        std::fs::create_dir_all(scratch.0.join("projects/XNAUT/tickets")).unwrap();
+        std::fs::create_dir_all(registry.join("repository-transfers")).unwrap();
+        std::fs::create_dir_all(registry.join("chat-launches")).unwrap();
+        let other = run();
+        std::fs::write(
+            registry.join(format!("{}.run.json", other.run_id)),
+            br#"{"project":"OTHER","private":"private-other-content","invalid":"schema"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            registry.join("repository-transfers/private-other-name.json"),
+            br#"{"project":"OTHER","private":"private-other-content"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            registry.join("chat-launches/private-other-name.json"),
+            br#"{"ticket":"OTHER-1","private":"private-other-content"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            registry.join("private-unknown-name.run.json"),
+            b"{private-other-content",
+        )
+        .unwrap();
+        std::fs::write(
+            registry.join("repository-transfers/private-unknown-name.json"),
+            b"{private-other-content",
+        )
+        .unwrap();
+        let s = snapshot_in(&scratch.0, &registry, "XNAUT", 2_000).unwrap();
+        assert!(s.assignments.is_empty());
+        assert!(!s.diagnostics.is_empty());
+        assert!(s.diagnostics.iter().all(|d| !d.blocking));
+        let output = serde_json::to_string(&s).unwrap();
+        assert!(!output.contains("private-other"));
+        assert!(!output.contains("private-unknown"));
+        assert!(!output.contains("OTHER"));
+    }
+    #[test]
+    fn current_project_corruption_and_explicitly_linked_runs_still_block() {
+        let scratch = Scratch::new();
+        let registry = scratch.0.join("registry");
+        let ticket_dir = scratch.0.join("projects/XNAUT/tickets");
+        std::fs::create_dir_all(&ticket_dir).unwrap();
+        std::fs::create_dir_all(registry.join("repository-transfers")).unwrap();
+        let r = run();
+        let mut t = ticket();
+        t.handback = Some(crate::handback::Handback {
+            run_id: Some(r.run_id.clone()),
+            ..Default::default()
+        });
+        std::fs::write(
+            ticket_dir.join("XNAUT-900.json"),
+            serde_json::to_vec(&t).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(registry.join(format!("{}.run.json", r.run_id)), b"{").unwrap();
+        std::fs::write(
+            registry.join("repository-transfers/own.json"),
+            br#"{"project":"XNAUT","invalid":"schema"}"#,
+        )
+        .unwrap();
+        let s = snapshot_in(&scratch.0, &registry, "XNAUT", 2_000).unwrap();
+        assert_eq!(s.diagnostics.iter().filter(|d| d.blocking).count(), 2);
+        assert!(s.assignments.iter().any(|a| a.run_id == r.run_id));
+    }
+    #[test]
+    fn unused_registry_is_nonblocking_but_unavailable_registry_is_blocking() {
+        let scratch = Scratch::new();
+        let registry = scratch.0.join("registry");
+        std::fs::create_dir_all(scratch.0.join("projects/XNAUT/tickets")).unwrap();
+        let empty = snapshot_in(&scratch.0, &registry, "XNAUT", 2_000).unwrap();
+        assert!(empty.diagnostics.iter().all(|d| !d.blocking));
+        assert_eq!(empty.diagnostics.len(), 1);
+        assert!(!registry.exists());
+        std::fs::write(&registry, b"not a directory").unwrap();
+        let unavailable = snapshot_in(&scratch.0, &registry, "XNAUT", 2_000).unwrap();
+        assert!(unavailable.diagnostics.iter().any(|d| d.blocking));
+    }
+    #[test]
+    fn older_diagnostics_default_to_blocking() {
+        let d: Diagnostic =
+            serde_json::from_value(json!({"source":"old reader","message":"unavailable"})).unwrap();
+        assert!(d.blocking);
     }
 }
