@@ -341,7 +341,20 @@ pub async fn pm_ticket_dispatch(
             durable: Some(true),
         },
     )
-    .await?;
+    .await;
+    let launched = match launched {
+        Ok(launched) => launched,
+        Err(error) => {
+            if let Some(reserved) = &continuation {
+                match crate::agent_work::release_refused_continuation(&registry, &receipt_path, reserved) {
+                    Ok(true) => return Err(format!("{error}. Native admission was refused before execution; the continuation reservation was released for a verified retry.")),
+                    Ok(false) => {},
+                    Err(recovery_error) => return Err(format!("{error}. Reservation retained at {}: {recovery_error}", receipt_path.display())),
+                }
+            }
+            return Err(format!("{error}. Launch reservation retained at {}; reconcile the run before retrying.", receipt_path.display()));
+        }
+    };
 
     let receipt = serde_json::json!({"ok":true,"execution_started":true,"ticket":ticket.id,
         "project":project,"repository_root":root,"handle":handle,"branch":branch,

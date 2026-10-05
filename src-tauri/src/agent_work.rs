@@ -254,6 +254,50 @@ impl Drop for LaunchReservation {
     }
 }
 
+/// Called only by the owner of a just-attempted reservation, after launch
+/// returned an error. A newer persisted admission refusal proves no worker
+/// entered execution; an unchanged or post-admission failure proves nothing.
+pub(crate) fn release_refused_continuation(
+    registry: &Path,
+    receipt_path: &Path,
+    reserved: &crate::run_control::RunManifest,
+) -> Result<bool, String> {
+    let Some(ticket) = reserved.ticket.as_deref() else {
+        return Ok(false);
+    };
+    let Some(mut latest) = crate::run_control::continuation_in(registry, ticket)? else {
+        return Ok(false);
+    };
+    if latest.state != crate::run_control::RunState::Failed
+        || !latest.admission_refused
+        || latest.branch != reserved.branch
+        || latest.worktree_path != reserved.worktree_path
+    {
+        return Ok(false);
+    }
+    if latest.run_id == reserved.run_id && latest.revision <= reserved.revision {
+        return Ok(false);
+    }
+    let mut seen = std::collections::HashSet::new();
+    while latest.run_id != reserved.run_id {
+        if !seen.insert(latest.run_id.clone()) {
+            return Ok(false);
+        }
+        let Some(previous) = latest.previous_run_id.as_deref() else {
+            return Ok(false);
+        };
+        latest = crate::run_control::load_manifest_in(registry, previous)?;
+    }
+    let pending: Value =
+        serde_json::from_slice(&std::fs::read(receipt_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    if pending["pending"] != true || pending["continuation_run_id"] != reserved.run_id {
+        return Ok(false);
+    }
+    std::fs::remove_file(receipt_path).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 pub(crate) fn save_launch_receipt(path: &Path, receipt: &Value) -> Result<(), String> {
     let temp = path.with_extension("tmp");
     let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
@@ -751,6 +795,67 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn refused_successor_releases_its_pending_slot_but_uncertain_failure_does_not() {
+        let temp = Temp::new();
+        let registry = temp.path();
+        let mut successor = crate::run_control::tests::run();
+        successor.run_id = "successor".into();
+        successor.previous_run_id = Some("predecessor".into());
+        successor.state = crate::run_control::RunState::Requested;
+        successor.revision = 3;
+        let receipt = launch_receipt_path(
+            registry,
+            Path::new("/repo"),
+            "XNAUT-900",
+            Some(&successor.run_id),
+        )
+        .unwrap();
+        let pending =
+            json!({"pending":true,"ticket":"XNAUT-900","continuation_run_id":successor.run_id});
+        reserve(&receipt, &pending).unwrap();
+        let persist = |run: &crate::run_control::RunManifest| {
+            std::fs::write(
+                registry.join(format!("{}.run.json", run.run_id)),
+                serde_json::to_vec(run).unwrap(),
+            )
+            .unwrap();
+        };
+        persist(&successor);
+        assert!(!release_refused_continuation(registry, &receipt, &successor).unwrap());
+        let mut refused = successor.clone();
+        refused.state = crate::run_control::RunState::Failed;
+        refused.admission_refused = true;
+        refused.revision += 1;
+        persist(&refused);
+        assert!(release_refused_continuation(registry, &receipt, &successor).unwrap());
+        assert!(!receipt.exists());
+        // Native continuation remains available and the same ticket can reserve
+        // again; its old failed manifest has not been deleted or rewritten.
+        assert_eq!(
+            crate::run_control::continuation_in(registry, "XNAUT-900")
+                .unwrap()
+                .unwrap(),
+            refused
+        );
+        assert!(reserve(&receipt, &pending).unwrap().is_none());
+        assert!(!release_refused_continuation(registry, &receipt, &refused).unwrap());
+        let reserved_retry = refused.clone();
+        let mut retry = refused.clone();
+        retry.run_id = "retry-successor".into();
+        retry.previous_run_id = Some(refused.run_id.clone());
+        retry.revision = 1;
+        refused.next_run_id = Some(retry.run_id.clone());
+        persist(&refused);
+        persist(&retry);
+        assert!(release_refused_continuation(registry, &receipt, &reserved_retry).unwrap());
+        reserve(&receipt, &pending).unwrap();
+        retry.admission_refused = false;
+        persist(&retry);
+        assert!(release_refused_continuation(registry, &receipt, &reserved_retry).is_err());
+        assert!(receipt.exists());
     }
 
     #[test]
