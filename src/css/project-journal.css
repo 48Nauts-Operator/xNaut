@@ -5,3 +5,6 @@
 .pj-evidence{padding:0 16px 18px}.pj-evidence h1{font-size:19px}.pj-evidence h2{font-size:16px}.pj-evidence h3{font-size:14px}
 
 .pj-document p{margin:0 0 14px}.pj-document li{margin:4px 0}.pj-notes form{padding:4px 16px 16px}.pj-notes>summary{font-weight:650;padding:12px 16px}.pj-entry h3{margin-bottom:14px}
+
+/* Current coordination records remain distinct from the immutable saved context. */
+.pj-work{border-left:2px solid #84b49d;padding:2px 0 2px 14px;margin:18px 0}.pj-work h3{font-size:14px;margin:4px 0}.pj-work-state{color:var(--pj-muted);font-size:11px}.pj-work>p{margin:6px 0}.pj-continuity-warning{border-left:2px solid #e9b77e;padding:8px 12px;color:#e9b77e}.pj-provenance{padding-left:18px;font-size:12px}.pj-provenance p{white-space:pre-wrap;margin:4px 0}.pj-provenance small{overflow-wrap:anywhere}.pj-assignment{border-top:1px solid var(--pj-border);padding-top:14px;margin-top:14px}.pj-assignment dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:11px}.pj-assignment dt{color:var(--pj-muted)}.pj-assignment dd{margin:0;white-space:pre-wrap}.pj-assignment>button{font-size:11px}

@@ -331,8 +331,17 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
         .into_iter()
         .filter(|r| !r.state.terminal())
         .collect();
+    // Reconcile on every read, including reopen and historical date selection.
+    // This is a read-only projection, never a replacement for the saved opening.
+    let (continuity, continuity_error) = match crate::project_continuity::snapshot(&p.key) {
+        Ok(snapshot) => (
+            serde_json::to_value(snapshot).map_err(|e| e.to_string())?,
+            None,
+        ),
+        Err(error) => (Value::Null, Some(error)),
+    };
     Ok(
-        json!({"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
+        json!({"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"continuity":continuity,"continuity_error":continuity_error,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
     )
 }
 #[tauri::command]

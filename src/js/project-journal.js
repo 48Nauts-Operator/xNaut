@@ -39,10 +39,40 @@
       pre.append(button);
     });
   }
+  // XNAUT-461: the current summary is a projection of native coordination records.
+  // Evidence text is escaped and labelled; a worker handback is never verification.
+  const continuityLabels = {active:'Active · recorded signal',stalled:'Stalled',blocked:'Blocked',review:'Review needed',verified:'Verification recorded',unknown:'Needs inspection'};
+  const evidenceLabels = {ticket:'Ticket record',run:'Run record',handback:'Agent claim',transfer:'Assignment transfer',pull_request:'Pull request record',review:'Review record',verification:'Verification evidence',launch_receipt:'Launch receipt'};
+  function evidenceMarkup(records) {
+    if (!records?.length) return '<p class="pj-muted">No evidence recorded.</p>';
+    return `<ul class="pj-provenance">${records.map(e=>`<li><strong>${esc(evidenceLabels[e.kind] || 'Recorded evidence')}</strong><p>${esc(e.detail)}</p><small>Source: ${esc(e.source)}</small></li>`).join('')}</ul>`;
+  }
+  function assignmentMarkup(a) {
+    return `<div class="pj-assignment"><strong>${esc(a.owner || 'Unassigned')} · ${esc(continuityLabels[a.state] || a.state)}</strong><p>${esc(a.next_action)}</p><dl><dt>Run</dt><dd>${esc(a.run_id)}</dd>${[['Recorded state',a.run_state],['Branch',a.branch],['Worktree',a.worktree],['Commit',a.last_commit],['Pull request',a.pr_url],['Review',a.review_state],['Previous run',a.previous_run_id],['Next run',a.next_run_id]].filter(([,v])=>v).map(([k,v])=>`<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl><button data-continuity-run="${esc(a.run_id)}">Execution record ↗</button>${evidenceMarkup(a.evidence)}</div>`;
+  }
+  function continuityMarkup(snapshot, filter) {
+    const assignments = snapshot.assignments || [];
+    const tickets = (snapshot.tickets || []).filter(t=>!filter || t.id===filter);
+    const current = t => ['active','stalled','blocked','review'].includes(t.state) || ['in_progress','in_review','review','blocked'].includes(t.status);
+    const card = t => {
+      const linked=assignments.filter(a=>(t.assignment_ids || []).includes(a.run_id));
+      return `<section class="pj-work" data-continuity-ticket="${esc(t.id)}"><h3>${esc(t.id)} · ${esc(t.title)}</h3><p class="pj-work-state">${esc(continuityLabels[t.state] || t.state)} · Ticket: ${esc((t.status || '').replace(/_/g,' '))} · Owner: ${esc(t.owner || 'Unassigned')}</p><p><strong>Next:</strong> ${esc(t.next_action)}</p><details data-continuity-detail="ticket:${esc(t.id)}"><summary>Assignments and evidence${linked.length?' · '+linked.length+' run'+(linked.length===1?'':'s'):''}</summary><div class="pj-evidence">${evidenceMarkup(t.evidence)}${linked.map(assignmentMarkup).join('')}</div></details></section>`;
+    };
+    const active=tickets.filter(current), other=tickets.filter(t=>!current(t));
+    // Orphaned ticket references still need to be inspectable; never silently lose a run.
+    const orphaned=assignments.filter(a=>(!filter || a.ticket===filter) && !(snapshot.tickets || []).some(t=>(t.assignment_ids || []).includes(a.run_id)));
+    const diagnostics=snapshot.diagnostics || [];
+    return `${diagnostics.length?`<div class="pj-continuity-warning" role="status"><strong>Current state is incomplete.</strong><ul>${diagnostics.map(d=>`<li>${esc(d.message)} <small>Source: ${esc(d.source)}</small></li>`).join('')}</ul></div>`:''}
+      <p class="pj-muted">${diagnostics.length?'Available records show ':''}${active.length} current work item${active.length===1?'':'s'}${filter?' in '+esc(filter):''}. Status comes from saved records; a recorded signal does not confirm a worker is still running.</p>
+      ${active.map(card).join('')}
+      ${!tickets.length&&!orphaned.length?'<p class="pj-muted">'+(diagnostics.length?'Work could not be established from the available records.':'No work is recorded for this selection.')+'</p>':''}
+      ${other.length?`<details data-continuity-detail="other"><summary>Other recorded work · ${other.length} · outcomes and unstarted work</summary><div class="pj-evidence">${other.map(card).join('')}</div></details>`:''}
+      ${orphaned.length?`<details data-continuity-detail="unlinked"><summary>Other run records · ${orphaned.length}</summary><div class="pj-evidence">${orphaned.map(assignmentMarkup).join('')}</div></details>`:''}`;
+  }
   function mount(host, root, openWiki) {
     instances.get(host)?.dispose();
-    let stopped=false, busy=false, data=null, selected=null, filter='', fingerprint='', timer;
-    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header><div class="pj-scroll"><article class="pj-document"><section class="pj-opening"><div class="pj-eyebrow">START HERE</div><h2>Where we stand</h2><p class="pj-muted">Saved context from earlier work. Evidence retains its original date.</p><div data-opening></div></section><section data-current></section><details class="pj-notes"><summary>Add your note or question</summary><form data-form><input data-ticket aria-label="Existing project ticket" placeholder="Ticket, e.g. XNAUT-455" required><select data-kind aria-label="Note type"><option value="note">Note</option><option value="question">Question</option><option value="decision">Decision</option></select><textarea data-note aria-label="Journal note" placeholder="Add context for the next person, a decision, or a question…" required></textarea><button type="submit">Save to Journal</button><small>Your name and time are recorded. Questions are saved here; use chat to ask an agent to answer.</small></form></details><section><div class="pj-eyebrow">AS THE WORK DEVELOPS</div><h2>Working notes</h2><p data-empty class="pj-muted"></p><div data-entries></div></section></article></div></section>`;
+    let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, timer;
+    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header><div class="pj-scroll"><article class="pj-document"><section class="pj-opening"><div class="pj-eyebrow">START HERE</div><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-continuity></div><h3>Saved context</h3><p class="pj-muted" data-history-date>Earlier reports retain their original dates and are not fresh verification.</p><div data-opening></div></section><section data-current></section><details class="pj-notes"><summary>Add your note or question</summary><form data-form><input data-ticket aria-label="Existing project ticket" placeholder="Ticket, e.g. XNAUT-455" required><select data-kind aria-label="Note type"><option value="note">Note</option><option value="question">Question</option><option value="decision">Decision</option></select><textarea data-note aria-label="Journal note" placeholder="Add context for the next person, a decision, or a question…" required></textarea><button type="submit">Save to Journal</button><small>Your name and time are recorded. Questions are saved here; use chat to ask an agent to answer.</small></form></details><section><div class="pj-eyebrow">AS THE WORK DEVELOPS</div><h2>Working notes</h2><p data-empty class="pj-muted"></p><div data-entries></div></section></article></div></section>`;
     const $ = q => host.querySelector(q);
     const status = s => { $('[data-status]').textContent=s; };
     const remember = () => drafts.set(root,{text:$('[data-note]').value,ticket:$('[data-ticket]').value,kind:$('[data-kind]').value});
@@ -66,12 +96,20 @@
       $('[data-purpose]').textContent = data.project.purpose || 'The working document, from first question to handoff.';
       const dates=$('[data-date]');const previous=dates.value;
       dates.innerHTML='<option value="">Today</option>'+data.documents.map(d=>`<option value="${esc(d.path)}">${esc(d.path.split('/').pop().replace('.md',''))}</option>`).join('');dates.value=selected || previous;
-      const tickets=[...new Set([...data.entries.map(e=>e.ticket),...data.runs.map(r=>r.ticket)].filter(Boolean))];
+      const snapshot=data.continuity?.project===data.project.key ? data.continuity : null;
+      const tickets=[...new Set([...data.entries.map(e=>e.ticket),...data.runs.map(r=>r.ticket),...(snapshot?.tickets || []).map(t=>t.id),...(snapshot?.assignments || []).map(a=>a.ticket)].filter(Boolean))];
       $('[data-filter]').innerHTML='<option value="">All workstreams</option>'+tickets.map(t=>`<option>${esc(t)}</option>`).join('');$('[data-filter]').value=filter;
-      const next=JSON.stringify([data.path,data.opening,data.entries,data.runs,filter]);
+      $('[data-continuity-time]').textContent=snapshot ? 'Current project records · checked '+date(snapshot.observed_at)+(selected?' · independent of the selected Journal date':'') : 'Current project state is unavailable.';
+      $('[data-history-date]').textContent='Journal date: '+data.path.split('/').pop().replace('.md','')+'. Earlier reports retain their original dates and are not fresh verification.';
+      // Read timestamps change each poll; only changed records should replace the DOM.
+      const next=JSON.stringify([data.path,data.opening,data.entries,data.runs,snapshot&&{...snapshot,observed_at:0},data.continuity_error,filter]);
       if(next===fingerprint)return;fingerprint=next;
-      markdown($('[data-opening]'),data.opening,openWiki);
-      $('[data-current]').innerHTML = data.runs.length ? `<h2>Currently in progress</h2>${data.runs.filter(r=>!filter||r.ticket===filter).map(r=>`<div class="pj-run"><strong>${esc(r.ticket || r.run_id)} · @${esc(r.agent_handle)}</strong><span>${esc(r.state)} · observed ${esc(date(new Date(r.last_seen_at).toISOString()))}</span><p>${esc(r.last_signal)}</p></div>`).join('')}` : '';
+      const expanded=new Set([...$('[data-continuity]').querySelectorAll('details[open]')].map(d=>d.dataset.continuityDetail));
+      $('[data-continuity]').innerHTML=snapshot ? continuityMarkup(snapshot,filter) : `<p class="pj-continuity-warning">${esc(data.continuity_error || 'Could not reconcile current project records. Refresh to retry.')} Saved context remains available below.</p>`;
+      $('[data-continuity]').querySelectorAll('[data-continuity-detail]').forEach(d=>{d.open=expanded.has(d.dataset.continuityDetail);});
+      $('[data-continuity]').querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});
+      if(openingFingerprint!==data.opening){markdown($('[data-opening]'),data.opening,openWiki);openingFingerprint=data.opening;}
+      $('[data-current]').innerHTML = !snapshot && data.runs.length ? `<h2>Saved run records</h2>${data.runs.filter(r=>!filter||r.ticket===filter).map(r=>`<div class="pj-run"><strong>${esc(r.ticket || r.run_id)} · @${esc(r.agent_handle)}</strong><span>${esc(r.state)} · observed ${esc(date(r.last_seen_at))}</span><p>${esc(r.last_signal)}</p></div>`).join('')}` : '';
       const shown=data.entries.filter(e=>!filter||e.ticket===filter);
       $('[data-empty]').textContent=shown.length ? '' : 'No entries recorded for this selection yet. Project-bound chat turns, worker receipts and agent-authored findings appear here as they are saved.';
       const container=$('[data-entries]');const existing=new Map([...container.children].map(n=>[n.dataset.id,n]));
@@ -97,13 +135,14 @@
       for(const node of existing.values())node.remove();
     }
     async function refresh() {
-      if(busy||stopped)return;busy=true;
+      if(stopped)return;if(busy){queued=true;return;}busy=true;
+      const requested=selected;
       try {
-        const next=await invoke('project_journal_read',{project:root,path:selected});
-        if(stopped)return;data=next;paint();$('[data-sync]').textContent='Saved in the Vault · checked '+date(data.observed_at);
+        const next=await invoke('project_journal_read',{project:root,path:requested});
+        if(stopped || requested!==selected)return;data=next;paint();$('[data-sync]').textContent='Journal saved in the Vault · checked '+date(data.observed_at);
         status(data.warning ? 'Capture needs attention: '+data.warning : '');
-      }catch(e){if(!stopped){status(String(e));$('[data-purpose]').textContent='Select a registered project to read its Journal.';}}
-      finally{busy=false;}
+      }catch(e){if(!stopped){status('Refresh failed: '+String(e));$('[data-continuity-time]').textContent='Current state could not be refreshed. Displayed records are from the last successful read.';if(!data)$('[data-purpose]').textContent='Select a registered project to read its Journal.';}}
+      finally{busy=false;if(queued&&!stopped){queued=false;void refresh();}}
     }
     $('[data-date]').onchange=e=>{selected=e.target.value||null;fingerprint='';void refresh();};
     $('[data-filter]').onchange=e=>{filter=e.target.value;paint();};
