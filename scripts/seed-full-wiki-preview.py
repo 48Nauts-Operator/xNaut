@@ -11,11 +11,16 @@ if sys.platform != "darwin":
     raise SystemExit("This local preview profile helper currently supports macOS.")
 source = Path.home() / "Library/Application Support/xnaut"
 target = source / (
-    "journal-preview-3" if "--journal" in sys.argv else "full-wiki-preview"
+    "continuity-preview"
+    if "--continuity" in sys.argv
+    else "journal-preview-3"
+    if "--journal" in sys.argv
+    else "full-wiki-preview"
 )
 # Preserve the owner's latest Preview 2 conversations without sharing its DB.
 if (
     "--journal" in sys.argv
+    and "--continuity" not in sys.argv
     and (source / "journal-preview/conversations.sqlite").exists()
 ):
     source = source / "journal-preview"

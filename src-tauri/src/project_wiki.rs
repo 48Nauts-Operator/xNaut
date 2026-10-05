@@ -440,7 +440,7 @@ fn runs(key: &str) -> Vec<crate::run_control::RunManifest> {
         .filter(|r| r.project == key)
         .collect()
 }
-fn redact(text: &str) -> String {
+pub(crate) fn redact(text: &str) -> String {
     static RULES: std::sync::OnceLock<Vec<regex::Regex>> = std::sync::OnceLock::new();
     let rules = RULES.get_or_init(|| {
         [
