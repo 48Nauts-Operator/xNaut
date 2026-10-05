@@ -310,12 +310,14 @@ pub fn reconcile(
             || revoked
         {
             a.state = ContinuityState::Blocked;
-        } else if a.pr_url.is_some() || t.quality.is_some() {
-            if a.state != ContinuityState::Active && a.state != ContinuityState::Blocked {
-                a.state = ContinuityState::Review;
-            }
+        } else if (a.pr_url.is_some() || t.quality.is_some())
+            && a.state != ContinuityState::Active
+            && a.state != ContinuityState::Blocked
+        {
+            a.state = ContinuityState::Review;
         }
     }
+    let pr_pattern = regex::Regex::new(r#"https?://[^\s<>"')]+/(?:pulls|pull)/[0-9]+"#);
     for ticket in tickets.iter().filter(|t| t.project == project) {
         if let Some(h) = &ticket.handback {
             // Unbound legacy handbacks stay ticket evidence; never attach them
@@ -341,7 +343,7 @@ pub fn reconcile(
         let mut ev = vec![evidence("ticket", format!("ticket:{}", ticket.id), format!("Recorded status {}, owner {:?}, revision {}, updated {}. Ticket status is not verification.", ticket.status, ticket.owner, ticket.revision, ticket.updated_at))];
         // Older tasks may have only a PR link in their durable PM body.
         // A link locates existing work; it never proves the PR was merged.
-        if let Ok(pattern) = regex::Regex::new(r#"https?://[^\s<>"')]+/(?:pulls|pull)/[0-9]+"#) {
+        if let Ok(pattern) = &pr_pattern {
             for link in pattern.find_iter(&ticket.body) {
                 ev.push(evidence("pull_request", link.as_str(), "PR referenced in ticket body; recover and inspect the existing implementation."));
             }

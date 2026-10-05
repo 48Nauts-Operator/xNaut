@@ -513,7 +513,8 @@ async fn execute_inner(
             "A stable task_key (up to 200 bytes) and task (up to 32000 bytes) are required.".into(),
         );
     }
-    let ticket = Some(required_ticket(args["ticket"].as_str())?);
+    let ticket_id = required_ticket(args["ticket"].as_str())?;
+    let ticket = Some(ticket_id);
     let scope = ticket_context(ticket, &root)?;
     let environment = task_environment(
         args.get("environment"),
@@ -529,7 +530,7 @@ async fn execute_inner(
         .ok_or("Launch ticket disappeared")?
         .project;
     let registry = crate::agents::registry_dir()?;
-    let receipt_path = launch_receipt_path(&registry, &root, ticket.unwrap(), None)?;
+    let receipt_path = launch_receipt_path(&registry, &root, ticket_id, None)?;
     // Return an existing durable result before checking mutable runtime state.
     // A new task key/agent/thread cannot turn this receipt into a fresh launch.
     if name == "start_repository_task" {
@@ -541,7 +542,7 @@ async fn execute_inner(
         }
     }
     let recovered = json!(crate::project_continuity::snapshot(&project)?);
-    recovery_guard(&recovered, ticket.unwrap(), None)?;
+    recovery_guard(&recovered, ticket_id, None)?;
     let slug = workspace_key(&profile.handle, key);
     let parent = root.join(".worktrees");
     if parent
@@ -566,7 +567,7 @@ async fn execute_inner(
             );
         }
     }
-    let prompt_recovery = crate::agent_history::compact_project(&recovered, ticket.unwrap());
+    let prompt_recovery = crate::agent_history::compact_project(&recovered, ticket_id);
     let mut launch_attempted = false;
     let mut result=async {
         let worktree=crate::agent_profiles::agent_build_workspace(profile.handle.clone(),root.to_string_lossy().into_owned(),slug).await?;
@@ -611,7 +612,7 @@ async fn execute_inner(
             // A launched worker remains a launch even if the subsequent board
             // write fails. Return the receipt and a precise tracking warning;
             // never invite a second worker as recovery from a PM write error.
-            if let Err(error) = track_launch(ticket.unwrap(), &profile.handle, receipt) {
+            if let Err(error) = track_launch(ticket_id, &profile.handle, receipt) {
                 receipt["tracking_error"] = json!(error);
                 receipt["tracking_next"] = json!("Worker already launched. Repair this ticket's tracking using the run receipt; do not launch again.");
             }
