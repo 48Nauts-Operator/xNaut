@@ -821,6 +821,80 @@ mod tests {
         }
     }
 
+    // XNAUT-462: reproduce the reported shape of the incident from disk, not
+    // an in-memory status string: three tasks, five workers, only one PR.
+    #[test]
+    fn restart_recovers_all_three_tasks_and_five_workers_before_any_relaunch() {
+        let scratch = Scratch::new();
+        let registry = scratch.0.join("registry");
+        let ticket_dir = scratch.0.join("projects/XNAUT/tickets");
+        std::fs::create_dir_all(&ticket_dir).unwrap();
+        std::fs::create_dir_all(registry.join("repository-transfers")).unwrap();
+        for number in 900..903 {
+            let mut t = ticket();
+            t.id = format!("XNAUT-{number}");
+            std::fs::write(
+                ticket_dir.join(format!("{}.json", t.id)),
+                serde_json::to_vec(&t).unwrap(),
+            )
+            .unwrap();
+        }
+        let mut ids = Vec::new();
+        for index in 0..5 {
+            let mut r = run();
+            r.ticket = Some(format!("XNAUT-{}", 900 + index % 3));
+            r.state = if index == 0 {
+                RunState::Done
+            } else {
+                RunState::Failed
+            };
+            r.branch = format!("agent/preserved-{index}");
+            r.worktree_path = format!("/preserved/worktree-{index}");
+            r.last_commit = "d".repeat(40);
+            ids.push(r.run_id.clone());
+            std::fs::write(
+                registry.join(format!("{}.run.json", r.run_id)),
+                serde_json::to_vec(&r).unwrap(),
+            )
+            .unwrap();
+            if index == 0 {
+                let tr = transfer(&r);
+                std::fs::write(
+                    registry.join("repository-transfers/only-pr.json"),
+                    serde_json::to_vec(&tr).unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        let first = snapshot_in(&scratch.0, &registry, "XNAUT", 50_000).unwrap();
+        assert_eq!(first.tickets.len(), 3);
+        assert_eq!(first.assignments.len(), 5);
+        assert_eq!(
+            first
+                .assignments
+                .iter()
+                .filter(|a| a.pr_url.is_some())
+                .count(),
+            1
+        );
+        assert!(first.diagnostics.is_empty());
+        let restored: ProjectSnapshot =
+            serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
+        assert_eq!(
+            restored,
+            snapshot_in(&scratch.0, &registry, "XNAUT", 50_000).unwrap()
+        );
+        for t in &restored.tickets {
+            assert_ne!(t.state, ContinuityState::Verified);
+            let refusal =
+                crate::agent_work::recovery_guard(&json!(restored), &t.id, None).unwrap_err();
+            assert!(refusal.contains("no replacement"));
+        }
+        assert!(ids
+            .iter()
+            .all(|id| restored.assignments.iter().any(|a| &a.run_id == id)));
+    }
+
     #[test]
     fn fresh_running_then_stale_after_restart_is_not_verified() {
         let r = run();
