@@ -960,6 +960,19 @@ fn recover_member(
         .filter(|a| a.ticket.as_deref() == Some(ticket.as_str()))
         .collect();
     if !assignments.is_empty() {
+        if group.members[i].started.is_none() {
+            if let Ok(Some(next)) = crate::run_control::continuation_in(registry, ticket) {
+                if crate::run_control::prelaunch_refused(&next)
+                    && assignments.len() < 3
+                    && crate::agent_work::recovery_guard(&serde_json::json!(snapshot), ticket, Some(&next)).is_ok()
+                {
+                    transition(group, i, MemberState::Queued,
+                        "native prelaunch refusal proved no worker started; retry preserved workspace".into(),
+                        Some(next.run_id), now);
+                    return false;
+                }
+            }
+        }
         if group.members[i].started.is_none()
             && assignments
                 .iter()
@@ -1039,6 +1052,9 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
         .into_iter()
         .filter(|g| g.approved_at.is_some() && g.stopped_at.is_none())
     {
+        for member in &group.members {
+            crate::agent_work::reconcile_prelaunch(&group.plan.project, &member.ticket)?;
+        }
         let snapshot = crate::project_continuity::snapshot(&group.plan.project)?;
         for i in 0..group.members.len() {
             let run = group.plan.runs[i].clone();
@@ -1691,6 +1707,39 @@ mod tests {
             .body
             .push_str("\nNew owner instructions: change another project");
         assert!(!authorized(run, &changed));
+    }
+
+    #[test]
+    fn group_requeues_only_proven_prelaunch_lineage_and_bounds_repeated_failures() {
+        use crate::run_control::{self, RunManifest, PrelaunchPhase};
+        let dir = scratch();
+        let task = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
+        let plan = plan_from("prelaunch", "XNAUT", &[], &board(&[task.clone()], &models(), &HashSet::new()), 2, 0).unwrap();
+        remember_in(&dir, plan).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        approve(&mut group, 1);
+        let mut runs = Vec::new();
+        for attempt in 0..3 {
+            let mut run = RunManifest::requested("claude", "fixture", "/preserved", Some(task.id.clone()), None, &[], 10 + attempt);
+            run.branch = "agent/preserved".into();
+            run_control::bind_pending_in(&dir, &mut run).unwrap();
+            run_control::refuse_prelaunch_in(&dir, run, PrelaunchPhase::RepositoryStaging, "fixture staging failure").unwrap();
+            runs = run_control::list_ids_in(&dir).unwrap().iter().map(|id| run_control::load_manifest_in(&dir, id).unwrap()).collect();
+            let snapshot = crate::project_continuity::reconcile("XNAUT", &[task.clone()], &runs, &[], 100);
+            group.members[0].state = MemberState::Blocked;
+            if attempt < 2 {
+                assert!(!recover_member(&dir, &mut group, 0, &snapshot, 100));
+                assert_eq!(group.members[0].state, MemberState::Queued);
+                save_in(&dir, &group).unwrap();
+                group = groups_in(&dir, None).unwrap().remove(0);
+            } else {
+                assert!(recover_member(&dir, &mut group, 0, &snapshot, 100));
+                assert_eq!(group.members[0].state, MemberState::Blocked);
+            }
+        }
+        assert_eq!(runs.len(), 3);
+        assert!(runs.iter().all(|r| r.branch == "agent/preserved" && r.worktree_path == "/preserved"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

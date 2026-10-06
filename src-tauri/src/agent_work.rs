@@ -347,6 +347,98 @@ pub(crate) fn bind_initial_refusal(
     Ok(true)
 }
 
+/// Reconcile only native pre-execution evidence. Unknown/crashed launches remain
+/// pending. This updates bookkeeping, never grants dispatch permission.
+pub(crate) fn reconcile_prelaunch(project: &str, ticket: &str) -> Result<bool, String> {
+    let registry = crate::agents::registry_dir()?;
+    let control = crate::project_management::repo_now()?;
+    let projects = crate::project_management::list_projects(&control)?;
+    let Some(project_record) = projects.iter().find(|p| p.key == project) else { return Ok(false); };
+    let root = Path::new(&crate::project_management::local_source_path(project_record)).canonicalize().map_err(|e| e.to_string())?;
+    let store = registry.join("repository-transfers");
+    let mut transfers = Vec::new();
+    if store.exists() {
+        for entry in std::fs::read_dir(store).map_err(|e| e.to_string())? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") { continue; }
+            let value: Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            if value["project"] != project || value["ticket"] != ticket { continue; }
+            let transfer: crate::repository_transfer::Transfer = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            if path.file_stem().and_then(|s| s.to_str()) != Some(transfer.run_id.as_str()) { return Err("Transfer identity mismatch".into()); }
+            transfers.push(transfer);
+        }
+    }
+    reconcile_initial_prelaunch_in(&registry, &root, project, ticket, &transfers)
+}
+
+fn native_request_time(id: &str) -> Option<i64> {
+    const ALPHABET: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    if id.len() != 26 || !id.bytes().all(|b| ALPHABET.as_bytes().contains(&b)) { return None; }
+    let mut at = 0u64;
+    for b in id.bytes().take(10) { at = at * 32 + ALPHABET.bytes().position(|v| v == b)? as u64; }
+    (at < (1u64 << 48)).then_some(at as i64)
+}
+
+fn reconcile_initial_prelaunch_in(registry: &Path, root: &Path, project: &str, ticket: &str, transfers: &[crate::repository_transfer::Transfer]) -> Result<bool, String> {
+    use crate::run_control::{self, PrelaunchPhase, RunManifest};
+    let path = launch_receipt_path(registry, root, ticket, None)?;
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut pending: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if pending["pending"] != true || pending["ticket"] != ticket || pending["project"] != project
+        || pending["repository_root"].as_str() != root.to_str() || !pending["continuation_run_id"].is_null() { return Ok(false); }
+    let Some(requested_at) = pending["requested_at"].as_i64() else { return Ok(false); };
+    let Some(worktree) = pending["worktree_path"].as_str() else { return Ok(false); };
+    let Some(branch) = pending["branch"].as_str().filter(|s| !s.is_empty()) else { return Ok(false); };
+    let Some(handle) = pending["handle"].as_str().filter(|s| !s.is_empty()) else { return Ok(false); };
+    let runs = run_control::list_ids_in(registry)?.iter().map(|id| run_control::load_manifest_in(registry, id)).collect::<Result<Vec<_>,_>>()?;
+    let existing: Vec<_> = runs.iter().filter(|r| r.ticket.as_deref() == Some(ticket)).collect();
+    if runs.iter().any(|r| r.worktree_path == worktree && r.ticket.as_deref() != Some(ticket)) { return Ok(false); }
+    let relevant: Vec<_> = transfers.iter().filter(|t| t.ticket.as_deref() == Some(ticket)).collect();
+    let run = if existing.len() == 1 && run_control::prelaunch_refused(existing[0]) {
+        let run = existing[0];
+        if relevant.iter().any(|t| t.run_id != run.run_id || t.state != "preparation_failed") { return Ok(false); }
+        run.clone()
+    } else if existing.is_empty() && relevant.len() == 1 {
+        let t = relevant[0];
+        // preparation_failed was written only on the caught staging Err branch,
+        // before the PTY/worker call. prepared/running/launch_failed do not qualify.
+        let Some(started_at) = native_request_time(&t.run_id).filter(|at| *at >= requested_at) else { return Ok(false); };
+        if t.state != "preparation_failed" || t.project != project || t.handle != handle
+            || t.local_path != worktree || t.local_branch != branch || t.pr_url.is_some()
+            || t.review_parent.is_some() || t.repair_parent.is_some() || t.filed
+            || t.branch != format!("xnaut/runs/{}", t.run_id)
+            || t.workdir != format!("agents/runs/{}", t.run_id)
+            || t.artifacts != format!(".xnaut/runs/{}", t.run_id)
+            || !matches!(t.worker, crate::worker_bootstrap::Target::ExeDev)
+            || pending["environment"] != "exe-dev" { return Ok(false); }
+        verify_workspace(root, Path::new(worktree), branch)?;
+        if crate::repository_transfer::git(Path::new(worktree), &["rev-parse", "HEAD"])? != t.source_sha { return Ok(false); }
+        // Historical profile/model are unknown in legacy transfer receipts. Do
+        // not invent them: fresh admission revalidates the approved current pins.
+        let mut run = RunManifest::requested(handle, "unknown", worktree, Some(ticket.into()), None, &[], started_at);
+        run.run_id = t.run_id.clone();
+        run.remote_env = Some("exe-dev".into());
+        run_control::refuse_prelaunch_in(registry, run, PrelaunchPhase::LegacyRepositoryStaging,
+            "Native repository staging failed before the worker launch boundary")?
+    } else { return Ok(false); };
+    if run.project != project || run.worktree_path != worktree || run.branch != branch || run.agent_handle != handle
+        || run.previous_run_id.is_some() || run.started_at < requested_at { return Ok(false); }
+    // Preserve the original reservation and link its exact native refusal.
+    pending["pending"] = json!(false);
+    pending["ok"] = json!(false);
+    pending["execution_started"] = json!(false);
+    pending["admission_refused"] = json!(true);
+    pending["launch"] = json!({"run_id": run.run_id});
+    pending["prelaunch_failure"] = json!(run.prelaunch_failure);
+    pending["note"] = json!("Native prelaunch failure reconciled; continue the preserved local branch/worktree through fresh admission.");
+    save_launch_receipt(&path, &pending)?;
+    Ok(true)
+}
+
 fn workspace_target(
     root: &Path,
     handle: &str,
@@ -597,6 +689,7 @@ async fn execute_inner(
         .ok_or("Launch ticket disappeared")?
         .project;
     let registry = crate::agents::registry_dir()?;
+    reconcile_prelaunch(&project, ticket_id)?;
     let continuation = crate::run_control::continuation_in(&registry, ticket_id)?;
     let receipt_path = launch_receipt_path(
         &registry,
@@ -725,6 +818,97 @@ fn track_launch(ticket: &str, handle: &str, receipt: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn prelaunch_fixture() -> (Temp, PathBuf, PathBuf, Value, crate::repository_transfer::Transfer) {
+        let temp = Temp::new();
+        let root = temp.path().join("repo");
+        let registry = temp.path().join("registry");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&registry).unwrap();
+        git(&root, &["init", "-q"]).unwrap();
+        git(&root, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "baseline"]).unwrap();
+        let worktree = temp.path().join("preserved-task");
+        git(&root, &["worktree", "add", "-q", "-b", "agent/fixture", worktree.to_str().unwrap()]).unwrap();
+        let run = crate::run_control::RunManifest::requested("fixture", "fixture-runtime", worktree.to_str().unwrap(), Some("TEST-1".into()), None, &[], 2_000);
+        let pending = json!({"pending":true,"ticket":"TEST-1","project":"TEST","repository_root":root,
+            "handle":"fixture","branch":"agent/fixture","worktree_path":worktree,"environment":"exe-dev",
+            "requested_at":1_000,"continuation_run_id":null});
+        let transfer = serde_json::from_value(json!({"run_id":run.run_id,"project":"TEST","ticket":"TEST-1","handle":"fixture",
+            "local_path":worktree,"local_branch":"agent/fixture","remote":"https://fixture.invalid/team/repo.git",
+            "source_sha":git(&root,&["rev-parse","HEAD"]).unwrap(),"base":"main","branch":format!("xnaut/runs/{}",run.run_id),
+            "workdir":format!("agents/runs/{}",run.run_id),"artifacts":format!(".xnaut/runs/{}",run.run_id),
+            "state":"preparation_failed","error":"Git LFS staging unavailable"})).unwrap();
+        let receipt = launch_receipt_path(&registry, &root, "TEST-1", None).unwrap();
+        reserve(&receipt, &pending).unwrap();
+        (temp, root, registry, pending, transfer)
+    }
+
+    #[test]
+    fn native_prelaunch_receipt_reconciles_restart_and_retries_exact_workspace() {
+        use crate::run_control;
+        let (_temp, root, registry, pending, transfer) = prelaunch_fixture();
+        let store = registry.join("repository-transfers");
+        crate::repository_transfer::save_at(&store, &transfer).unwrap();
+        // Consume an actual persisted native transfer, not an error-message guess.
+        let persisted = serde_json::from_slice(&std::fs::read(store.join(format!("{}.json", transfer.run_id))).unwrap()).unwrap();
+        assert!(reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[persisted]).unwrap());
+        let refused = run_control::continuation_in(&registry, "TEST-1").unwrap().unwrap();
+        assert!(run_control::prelaunch_refused(&refused));
+        assert_eq!(refused.run_id, transfer.run_id);
+        assert_eq!(refused.branch, transfer.local_branch);
+        assert_ne!(refused.branch, transfer.branch);
+        assert_eq!(refused.worktree_path, transfer.local_path);
+        let receipt_path = launch_receipt_path(&registry, &root, "TEST-1", None).unwrap();
+        let receipt = read_launch_receipt(&receipt_path).unwrap().unwrap();
+        assert_eq!(receipt["execution_started"], false);
+        assert_eq!(receipt["requested_at"], pending["requested_at"]);
+        assert!(!reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[transfer.clone()]).unwrap());
+        assert_eq!(run_control::list_ids_in(&registry).unwrap().len(), 1);
+        let mut retry = run_control::RunManifest::requested("fixture", "fixture-runtime", &refused.worktree_path, Some("TEST-1".into()), None, &[], 3_000);
+        run_control::bind_pending_in(&registry, &mut retry).unwrap();
+        let admitted = run_control::request_in(&registry, retry, || Ok(())).unwrap();
+        assert_eq!(admitted.previous_run_id.as_deref(), Some(refused.run_id.as_str()));
+        assert_eq!(admitted.worktree_path, refused.worktree_path);
+        assert_eq!(admitted.branch, refused.branch);
+        assert!(admitted.prelaunch_failure.is_none());
+        assert!(!admitted.admission_refused);
+        assert_eq!(run_control::load_manifest_in(&registry, &refused.run_id).unwrap().next_run_id.as_deref(), Some(admitted.run_id.as_str()));
+    }
+
+    #[test]
+    fn prelaunch_reconciliation_refuses_unknown_foreign_stale_or_published_receipts() {
+        let (_temp, root, registry, pending, transfer) = prelaunch_fixture();
+        let path = launch_receipt_path(&registry, &root, "TEST-1", None).unwrap();
+        assert!(!reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[]).unwrap());
+        for state in ["prepared", "running", "launch_failed", "review"] {
+            let mut changed = transfer.clone(); changed.state = state.into();
+            assert!(!reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[changed]).unwrap());
+        }
+        for field in ["project", "handle", "local_path", "local_branch", "source_sha", "branch", "workdir", "artifacts"] {
+            let mut changed = serde_json::to_value(&transfer).unwrap(); changed[field] = json!("foreign");
+            assert!(!reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[serde_json::from_value(changed).unwrap()]).unwrap());
+        }
+        let mut published = transfer.clone(); published.pr_url = Some("https://fixture.invalid/pulls/1".into());
+        assert!(!reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[published]).unwrap());
+        assert!(!reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[transfer.clone(), transfer.clone()]).unwrap());
+        let mut stale = pending.clone(); stale["requested_at"] = json!(3_000);
+        save_launch_receipt(&path, &stale).unwrap();
+        assert!(!reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[transfer]).unwrap());
+        assert!(crate::run_control::list_ids_in(&registry).unwrap().is_empty());
+        assert!(read_launch_receipt(&path).is_err(), "pending uncertainty survives restart");
+    }
+
+    #[test]
+    fn typed_prelaunch_failure_survives_interrupted_receipt_binding_without_transfer() {
+        use crate::run_control;
+        let (_temp, root, registry, pending, _) = prelaunch_fixture();
+        let run = run_control::RunManifest::requested("fixture", "fixture", pending["worktree_path"].as_str().unwrap(), Some("TEST-1".into()), None, &[], 2_000);
+        let failed = run_control::refuse_prelaunch_in(&registry, run, run_control::PrelaunchPhase::RepositoryPreparation, "fixture config unavailable").unwrap();
+        assert!(reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[]).unwrap());
+        let reopened = run_control::load_manifest_in(&registry, &failed.run_id).unwrap();
+        assert_eq!(failed.prelaunch_failure, reopened.prelaunch_failure);
+        assert!(run_control::prelaunch_refused(&reopened));
+    }
+
     fn recovered_fixture() -> Value {
         json!({"project":"TEST","tickets":[{"id":"TEST-1","status":"ready","evidence":[]}],
             "assignments":[],"diagnostics":[]})

@@ -47,6 +47,16 @@ pub enum RunKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrelaunchPhase { RepositoryPreparation, RepositoryStaging, LegacyRepositoryStaging }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PrelaunchFailure {
+    pub phase: PrelaunchPhase,
+    pub recorded_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RunManifest {
     pub schema_version: u32,
     pub run_id: String,
@@ -116,6 +126,8 @@ pub struct RunManifest {
     pub undead_notified: bool,
     #[serde(default)]
     pub admission_refused: bool,
+    #[serde(default)]
+    pub prelaunch_failure: Option<PrelaunchFailure>,
     pub started_at: i64,
     pub last_seen_at: i64,
     pub last_progress_at: i64,
@@ -244,6 +256,7 @@ impl RunManifest {
             retirement: None,
             undead_notified: false,
             admission_refused: false,
+            prelaunch_failure: None,
             started_at: at,
             last_seen_at: at,
             last_progress_at: at,
@@ -596,6 +609,23 @@ pub fn request_in(
     persist_locked(dir, &mut run)?;
     Ok(run)
 }
+/// Only the native producer calls this after a synchronous pre-worker operation
+/// returned Err. Missing manifests or process probes alone never establish this proof.
+pub(crate) fn refuse_prelaunch_in(dir: &Path, mut run: RunManifest, phase: PrelaunchPhase, reason: &str) -> Result<RunManifest, String> {
+    run.prelaunch_failure = Some(PrelaunchFailure { phase, recorded_at: now_ms() });
+    let id = run.run_id.clone();
+    let error = request_in(dir, run, || Err(reason.to_owned())).err().ok_or("Prelaunch refusal unexpectedly admitted a worker")?;
+    let saved = load_manifest_in(dir, &id).map_err(|_| error.clone())?;
+    if !prelaunch_refused(&saved) { return Err(error); }
+    Ok(saved)
+}
+
+pub(crate) fn prelaunch_refused(run: &RunManifest) -> bool {
+    run.kind == RunKind::Agent && run.prelaunch_failure.is_some() && run.state == RunState::Failed && run.admission_refused
+        && run.pid.is_none() && run.process_birth.is_none() && run.pty_session.is_none()
+        && run.zellij_session.is_none() && run.last_hook_at.is_none() && run.capture_bytes == 0
+}
+
 pub fn update_in(
     dir: &Path,
     id: &str,
@@ -1342,6 +1372,7 @@ pub(crate) mod tests {
             retirement: None,
             undead_notified: false,
             admission_refused: false,
+            prelaunch_failure: None,
             started_at: 1_000,
             last_seen_at: 1_000,
             last_progress_at: 1_000,
@@ -1870,6 +1901,23 @@ pub(crate) mod tests {
         assert!(consumes_worker_capacity(&legacy));
         legacy.state = RunState::Done;
         assert!(!consumes_worker_capacity(&legacy));
+    }
+
+    #[test]
+    fn prelaunch_proof_cannot_reclassify_a_registered_worker_or_plain_failure() {
+        let dir = directory("prelaunch-proof");
+        let mut requested = run();
+        requested.pid = None;
+        requested.pty_session = None;
+        let admitted = request_in(&dir, requested, || Ok(())).unwrap();
+        assert!(refuse_prelaunch_in(&dir, admitted.clone(), PrelaunchPhase::RepositoryStaging, "late error").is_err());
+        assert_eq!(load_manifest_in(&dir, &admitted.run_id).unwrap(), admitted);
+        update_in(&dir, &admitted.run_id, |r| r.state = RunState::Failed).unwrap();
+        let failed = load_manifest_in(&dir, &admitted.run_id).unwrap();
+        assert!(!prelaunch_refused(&failed));
+        assert!(refuse_prelaunch_in(&dir, failed.clone(), PrelaunchPhase::RepositoryStaging, "unknown error").is_err());
+        assert_eq!(load_manifest_in(&dir, &failed.run_id).unwrap(), failed);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

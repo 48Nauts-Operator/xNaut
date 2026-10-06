@@ -361,6 +361,7 @@ pub(crate) async fn dispatch_scoped(
             profile.model, ticket.model_requirement
         ));
     }
+    crate::agent_work::reconcile_prelaunch(&project, &ticket.id)?;
     let continuation =
         crate::run_control::continuation_in(&crate::agents::registry_dir()?, &ticket.id)?;
     if let Some(live) =

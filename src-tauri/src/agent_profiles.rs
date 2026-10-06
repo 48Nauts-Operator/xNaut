@@ -2344,15 +2344,23 @@ async fn launch_on_exe_dev(
         &crate::run_control::ProjectSite::board(), crate::run_control::now_ms(),
     );
     run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::ExeDev.key().into());
-    crate::run_control::bind_pending_in(&crate::agents::registry_dir()?, &mut run)?;
+    let registry = crate::agents::registry_dir()?;
+    crate::run_control::bind_pending_in(&registry, &mut run)?;
     let run_id = run.run_id.clone();
     let path = std::path::PathBuf::from(&req.worktree_path);
     let root = project.to_path_buf();
     let ticket = req.ticket.clone();
     let handle = profile.handle.clone();
     let id = run_id.clone();
-    let mut transfer = tokio::task::spawn_blocking(move || crate::repository_transfer::prepare(&path, &root, ticket, &handle, &id))
-        .await.map_err(|e| e.to_string())??;
+    let prepared = tokio::task::spawn_blocking(move || crate::repository_transfer::prepare(&path, &root, ticket, &handle, &id))
+        .await.map_err(|e| e.to_string())?;
+    let mut transfer = match prepared {
+        Ok(transfer) => transfer,
+        Err(error) => {
+            crate::run_control::refuse_prelaunch_in(&registry, run, crate::run_control::PrelaunchPhase::RepositoryPreparation, &error)?;
+            return Err(error);
+        }
+    };
     let prompt = Some(format!("{}{}", prompt.unwrap_or_default(), crate::repository_transfer::instructions(&transfer)));
     let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
     let workdir = transfer.workdir.clone();
@@ -2381,12 +2389,12 @@ async fn launch_on_exe_dev(
         Ok((path, remote)) => { transfer.worker_remote = Some(remote); path },
         Err(error) => {
             transfer.state = "preparation_failed".into(); transfer.error = Some(error.clone());
-            let _ = crate::repository_transfer::save(&transfer);
+            crate::repository_transfer::save(&transfer)?;
+            crate::run_control::refuse_prelaunch_in(&registry, run, crate::run_control::PrelaunchPhase::RepositoryStaging, &error)?;
             return Err(error);
         }
     };
-    let registry = crate::agents::registry_dir()?;
-    run.branch = transfer.branch.clone();
+    // Native continuation owns the local branch; transfer.branch is the published remote ref.
     let capacity_run = run.clone();
     let admitted = crate::run_control::request_in(&registry, run, || crate::swarm_plan::worker_admission_in(&registry, &capacity_run, None))?;
     if admitted.run_id != run_id { return Err("Repository/registry run identity mismatch; launch refused".into()); }
