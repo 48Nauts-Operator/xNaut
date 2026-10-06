@@ -4252,12 +4252,8 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
       $('.pmw-sync').disabled = true;
       $('.pmw-content').innerHTML = `<div class="pmw-empty"><strong>Project Management is not set up yet.</strong><br>${esc(why)}<br><button class="pmw-btn" data-pm-setup style="margin-top:12px">Open Settings</button></div>`;
       $('.pmw-content').querySelector('[data-pm-setup]').onclick = () => {
-        // toggleSettingsPanel() hardcodes the 'ai' section, so open the panel
-        // directly and jump to the module card instead of dropping him on a
-        // page that has nothing to do with the button he pressed.
-        const panel = document.getElementById('settings-panel');
-        if (panel) panel.style.display = 'flex';
-        if (typeof window.loadSettingsSection === 'function') window.loadSettingsSection('tasksmode');
+        // Use the shared lifecycle while opening the relevant module card.
+        window.xnautOpenSettingsSection('tasksmode');
       };
     }
 

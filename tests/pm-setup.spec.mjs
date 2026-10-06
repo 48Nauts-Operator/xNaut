@@ -77,3 +77,23 @@ test('the setup button opens Settings on the module card', async ({ page }) => {
   expect(await page.evaluate(() =>
     getComputedStyle(document.getElementById('settings-panel')).display)).toBe('flex');
 });
+
+test('first hidden Settings opening from PM setup settles the real module panel', async ({ page }) => {
+  const pane = await mountWith(page, { ...OK, enabled: false });
+  await expect(pane.locator('[data-pm-setup]')).toBeVisible();
+  const state = await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    window.requestAnimationFrame = () => 0;
+    const focus = document.activeElement;
+    document.querySelector('#pm-test-host [data-pm-setup]').click();
+    const panel = document.getElementById('settings-panel');
+    const s = getComputedStyle(panel);
+    return { opacity: s.opacity, animation: s.animationName, display: s.display,
+      section: document.querySelector('.settings-nav-item.active')?.dataset.section,
+      focusUnchanged: focus === document.activeElement };
+  });
+  expect(state).toEqual({ opacity: '1', animation: 'none', display: 'flex', section: 'tasksmode', focusUnchanged: true });
+  await expect(page.locator('#tm-llm-endpoint')).toBeVisible();
+  await page.locator('#btn-close-settings-panel').click();
+  await expect(page.locator('#settings-panel')).toBeHidden();
+});

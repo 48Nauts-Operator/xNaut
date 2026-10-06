@@ -2051,25 +2051,27 @@ function syncSettingsMotion() {
 }
 document.addEventListener('visibilitychange', syncSettingsMotion);
 
-window.toggleSettingsPanel = function() {
+window.xnautOpenSettingsSection = function (section, { focusSearch = false } = {}) {
   const panel = document.getElementById('settings-panel');
   if (!panel) return;
   syncSettingsMotion();
+  panel.style.display = 'flex';
+  loadSettingsSection(section);
+  if (focusSearch && !document.hidden) document.getElementById('settings-search-input')?.focus();
+};
+
+window.toggleSettingsPanel = function() {
+  const panel = document.getElementById('settings-panel');
+  if (!panel) return;
   if (panel.style.display === 'none' || !panel.style.display) {
-    panel.style.display = 'flex';
-    loadSettingsSection('ai');
-    if (!document.hidden) document.getElementById('settings-search-input')?.focus();
+    window.xnautOpenSettingsSection('ai', { focusSearch: true });
   } else {
     panel.style.display = 'none';
   }
 }
 
 window.xnautOpenVoiceSettings = function () {
-  const panel = document.getElementById('settings-panel');
-  if (!panel) return;
-  syncSettingsMotion();
-  panel.style.display = 'flex';
-  loadSettingsSection('voice');
+  window.xnautOpenSettingsSection('voice');
 };
 
 function loadSettingsSection(section) {
