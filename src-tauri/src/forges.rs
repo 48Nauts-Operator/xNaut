@@ -571,11 +571,8 @@ pub async fn repository_merge(
     number: u64,
     head: &str,
 ) -> Result<RepositoryMergeOutcome, String> {
-    repository_merge_guarded(host, owner, repo, number, head, || {
-        crate::switches::load()
-            .automatic_merge_hold()
-            .map(str::to_owned)
-    })
+    repository_merge_guarded(host, owner, repo, number, head,
+        crate::switches::automatic_merge_hold_strict)
     .await
 }
 
@@ -1652,6 +1649,26 @@ mod tests {
                 assert!(matches!(result, RepositoryMergeOutcome::Held(reason) if !reason.is_empty()));
                 assert!(f.bodies.lock().unwrap().is_empty(), "switch changed during review must prevent the merge request");
             }
+            // A malformed or unreadable switch file at the final boundary is
+            // unknown authority, not default permission. Test real file reads
+            // against both forge servers and prove no merge request was sent.
+            let switch_dir = std::env::temp_dir().join(format!("xnaut-merge-switches-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&switch_dir).unwrap();
+            let switch_path = switch_dir.join("kill-switches.json");
+            for invalid in ["{", r#"{"read_only":"invalid"}"#] {
+                std::fs::write(&switch_path, invalid).unwrap();
+                let held = repository_merge_guarded(&config,"team","app",7,"head",
+                    || crate::switches::automatic_merge_hold_at(&switch_path)).await.unwrap();
+                assert!(matches!(held, RepositoryMergeOutcome::Held(_)));
+                assert!(f.bodies.lock().unwrap().is_empty());
+            }
+            std::fs::remove_file(&switch_path).unwrap();
+            std::fs::create_dir(&switch_path).unwrap();
+            let held = repository_merge_guarded(&config,"team","app",7,"head",
+                || crate::switches::automatic_merge_hold_at(&switch_path)).await.unwrap();
+            assert!(matches!(held, RepositoryMergeOutcome::Held(_)));
+            assert!(f.bodies.lock().unwrap().is_empty());
+            std::fs::remove_dir_all(switch_dir).unwrap();
             // Lifting the hold uses the same exact-head request, with no lost
             // review evidence or extra merge created by the paused attempts.
             let result=repository_merge_guarded(&config,"team","app",7,"head", || None).await.unwrap();

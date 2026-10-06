@@ -5,7 +5,7 @@
 // moment of the action, so a flip needs no restart and no running frontend.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KillSwitches {
@@ -85,14 +85,62 @@ pub fn load() -> KillSwitches {
         .unwrap_or_default()
 }
 
+/// Only automatic merge uses the strict reader. A genuinely absent file keeps
+/// the established defaults; existing but unavailable/corrupt authority is a hold.
+fn load_strict_at(path: &Path) -> Result<KillSwitches, String> {
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return match path.symlink_metadata() {
+                Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => Ok(KillSwitches::default()),
+                _ => Err("Automatic merge paused: kill-switch file exists but cannot be read".into()),
+            };
+        }
+        Err(error) => return Err(format!("Automatic merge paused: cannot read kill-switch file: {error}")),
+    };
+    serde_json::from_str(&body)
+        .map_err(|error| format!("Automatic merge paused: invalid kill-switch file: {error}"))
+}
+
+pub(crate) fn automatic_merge_hold_strict() -> Option<String> {
+    automatic_merge_hold_at(&store_path())
+}
+pub(crate) fn automatic_merge_hold_at(path: &Path) -> Option<String> {
+    match load_strict_at(path) {
+        Ok(switches) => switches.automatic_merge_hold().map(str::to_owned),
+        Err(reason) => Some(reason),
+    }
+}
+
 /// Persists the switches and appends one audit line naming what changed.
 /// The audit is not optional: a kill-switch nobody can trace is how "why
 /// were merges off all week" happens.
 pub fn store(next: &KillSwitches) -> Result<(), String> {
-    let previous = load();
-    std::fs::create_dir_all(config_dir()).map_err(|e| format!("create config dir: {e}"))?;
-    let body = serde_json::to_string_pretty(next).map_err(|e| e.to_string())?;
-    std::fs::write(store_path(), body).map_err(|e| format!("write switches: {e}"))?;
+    store_at(&store_path(), &audit_path(), next)
+}
+
+fn store_at(path: &Path, audit: &Path, next: &KillSwitches) -> Result<(), String> {
+    use std::io::Write;
+    let previous = std::fs::read_to_string(path).ok()
+        .and_then(|s| serde_json::from_str::<KillSwitches>(&s).ok()).unwrap_or_default();
+    let dir = path.parent().ok_or("Kill-switch path has no directory")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("create config dir: {e}"))?;
+    let body = serde_json::to_vec_pretty(next).map_err(|e| e.to_string())?;
+    // One complete version replaces the old one. Unique sibling files prevent
+    // concurrent app instances from sharing a partial staging file.
+    let temp = dir.join(format!(".kill-switches-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&temp).map_err(|e| format!("stage switches: {e}"))?;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            file.set_permissions(metadata.permissions()).map_err(|e| format!("switch permissions: {e}"))?;
+        }
+        file.write_all(&body).and_then(|_| file.sync_all())
+            .map_err(|e| format!("write switches: {e}"))?;
+        std::fs::rename(&temp, path).map_err(|e| format!("publish switches: {e}"))
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temp); }
+    result?;
     if previous != *next {
         let line = serde_json::json!({
             "at": chrono::Utc::now().to_rfc3339(),
@@ -100,11 +148,8 @@ pub fn store(next: &KillSwitches) -> Result<(), String> {
             "to": next,
         });
         let mut log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(audit_path())
+            .create(true).append(true).open(audit)
             .map_err(|e| format!("open audit log: {e}"))?;
-        use std::io::Write;
         writeln!(log, "{line}").map_err(|e| format!("append audit: {e}"))?;
     }
     Ok(())
@@ -124,6 +169,58 @@ pub fn kill_switches_set(switches: KillSwitches) -> Result<KillSwitches, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_merge_switch_reader_distinguishes_absence_from_invalid_authority() {
+        let dir = std::env::temp_dir().join(format!("xnaut-strict-switches-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("kill-switches.json");
+        assert!(automatic_merge_hold_at(&path).is_none());
+        assert!(!dir.exists(), "read must not create owner state");
+        std::fs::create_dir_all(&dir).unwrap();
+        for invalid in ["{", "", r#"{"freeze_merges":"yes"}"#] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(automatic_merge_hold_at(&path).unwrap().contains("invalid kill-switch"));
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(automatic_merge_hold_at(&path).unwrap().contains("cannot read"));
+        std::fs::remove_dir(&path).unwrap();
+        #[cfg(unix)] {
+            std::os::unix::fs::symlink(dir.join("missing-target"), &path).unwrap();
+            assert!(automatic_merge_hold_at(&path).is_some(), "dangling file is not absent authority");
+            std::fs::remove_file(&path).unwrap();
+        }
+        std::fs::write(&path, "{}").unwrap();
+        assert!(automatic_merge_hold_at(&path).is_none(), "valid legacy defaults remain supported");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn switch_update_atomically_replaces_complete_version_and_preserves_audit() {
+        use std::io::Read;
+        let dir = std::env::temp_dir().join(format!("xnaut-atomic-switches-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("kill-switches.json");
+        let audit = dir.join("kill-switches.log");
+        let before = KillSwitches { read_only: true, ..Default::default() };
+        let after = KillSwitches { freeze_merges: true, quarantined: vec!["fixture".into()], ..Default::default() };
+        store_at(&path, &audit, &before).unwrap();
+        let mut old_reader = std::fs::File::open(&path).unwrap();
+        store_at(&path, &audit, &after).unwrap();
+        // Existing readers retain the complete old inode; a truncating write
+        // would instead expose the new body (or a partial one) through this FD.
+        let mut old_body = String::new();
+        old_reader.read_to_string(&mut old_body).unwrap();
+        assert_eq!(serde_json::from_str::<KillSwitches>(&old_body).unwrap(), before);
+        assert_eq!(load_strict_at(&path).unwrap(), after);
+        assert!(automatic_merge_hold_at(&path).unwrap().contains("freeze_merges"));
+        let entries: Vec<serde_json::Value> = std::fs::read_to_string(&audit).unwrap().lines()
+            .map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["from"], serde_json::to_value(&before).unwrap());
+        assert_eq!(entries[1]["to"], serde_json::to_value(&after).unwrap());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no staging files remain");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn defaults_leave_every_layer_up() {
