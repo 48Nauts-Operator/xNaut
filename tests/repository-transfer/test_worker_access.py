@@ -287,6 +287,11 @@ class WorkerTests(unittest.TestCase):
         git("-C", str(seed), "commit", "-m", "Initial")
         git("-C", str(seed), "push", str(remote), "main")
         git("--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main")
+        # The live repair starts from an existing native task branch ahead of
+        # main. Rewinding it with main is not a valid write-permission probe.
+        (seed / "source.txt").write_text("author task implementation")
+        git("-C", str(seed), "commit", "-am", "Author task")
+        git("-C", str(seed), "push", str(remote), "HEAD:refs/heads/xnaut/runs/existing")
         before = git("--git-dir", str(remote), "show-ref")
         batches = []
         code = [200]
@@ -336,8 +341,11 @@ else: sys.exit(1)
                 access.verify(
                     url, "xnaut/runs/second", [str(ssh)], access.endpoint(url)
                 )
+                access.verify(
+                    url, "xnaut/runs/existing", [str(ssh)], access.endpoint(url)
+                )
                 self.assertEqual(git("--git-dir", str(remote), "show-ref"), before)
-                self.assertEqual(len(batches), 2)
+                self.assertEqual(len(batches), 3)
                 self.assertEqual(
                     batches[0],
                     (
@@ -352,13 +360,41 @@ else: sys.exit(1)
                     access.verify(
                         url, "xnaut/runs/third", [str(ssh)], access.endpoint(url)
                     )
+                code[0] = 200
+                commands = []
+                real_run = access.run
+
+                def record_run(args, **kwargs):
+                    commands.append(args)
+                    return real_run(args, **kwargs)
+
+                with patch.object(access, "run", side_effect=record_run):
+                    access.verify(url, "xnaut/runs/existing", [str(ssh)], access.endpoint(url))
+                probes = [args for args in commands if "push" in args]
+                self.assertEqual(len(probes), 1)
+                self.assertIn("--dry-run", probes[0])
+                self.assertFalse(any(arg.startswith("--force") or arg.startswith("+") for arg in probes[0]))
+                self.assertEqual(probes[0][-1], "FETCH_HEAD:refs/heads/xnaut/runs/existing")
+                fetches = [args for args in commands if "fetch" in args]
+                self.assertEqual(fetches[0][-1], "refs/heads/xnaut/runs/existing")
+                # A concurrent branch move is not misreported as missing write
+                # permission. Simulate the movement only in the disposable repo.
+                def move_after_listing(args, **kwargs):
+                    result = real_run(args, **kwargs)
+                    if "ls-remote" in args:
+                        (seed / "source.txt").write_text("concurrent task revision")
+                        git("-C", str(seed), "commit", "-am", "Concurrent revision")
+                        git("-C", str(seed), "push", str(remote), "HEAD:refs/heads/xnaut/runs/existing")
+                    return result
+
+                with patch.object(access, "run", side_effect=move_after_listing):
+                    with self.assertRaisesRegex(access.SetupError, "^repository_branch_changed$"):
+                        access.verify(url, "xnaut/runs/existing", [str(ssh)], access.endpoint(url))
+                before = git("--git-dir", str(remote), "show-ref")
                 denied.touch()
-                with self.assertRaisesRegex(
-                    access.SetupError, "repository_write_denied"
-                ):
-                    access.verify(
-                        url, "xnaut/runs/fourth", [str(ssh)], access.endpoint(url)
-                    )
+                for branch in ("xnaut/runs/fourth", "xnaut/runs/existing"):
+                    with self.assertRaisesRegex(access.SetupError, "^repository_write_denied$"):
+                        access.verify(url, branch, [str(ssh)], access.endpoint(url))
                 self.assertEqual(git("--git-dir", str(remote), "show-ref"), before)
         finally:
             server.shutdown()

@@ -90,6 +90,8 @@ fn failure(code: &str) -> String {
         "network_route_unavailable" => "The worker is enrolled, but the repository is unreachable. Check the fleet's network rules and repository address.",
         "repository_read_denied" => "The worker's repository read check failed after provisioning its deploy key. Check the repository's SSH endpoint and access policy.",
         "repository_write_denied" => "The worker can read the repository but its task-branch write check failed. Check repository write permissions.",
+        "repository_branch_changed" => "The repository branch changed during the worker's write-access probe. Existing branch content is preserved; retry after checking the current task revision.",
+        "repository_probe_source_missing" => "The worker could not identify a valid published revision for the task-branch access probe. Check the task branch and the repository's default branch.",
         "lfs_authorization_failed" | "lfs_upload_unavailable" => "Git access is ready, but the worker's LFS upload check failed. Check the repository's LFS service and its network address.",
         "repository_key_failed" => "The worker could not prepare its repository identity. Check its home-directory permissions.",
         "XNAUT_BOOTSTRAP_INSTALL_PERMISSION" => "Automatic worker setup needs root or passwordless sudo to install missing tools. Configure this once in the provider image.",
@@ -179,6 +181,8 @@ mod tests {
     fn failures_identify_the_failed_requirement_without_raw_output() {
         assert!(failure("network_setup_required").contains("once"));
         assert!(failure("repository_write_denied").contains("can read"));
+        assert!(failure("repository_branch_changed").contains("branch changed"));
+        assert!(failure("repository_probe_source_missing").contains("published revision"));
         assert!(failure("lfs_upload_unavailable").contains("LFS"));
         assert!(!failure("some secret from stderr").contains("secret"));
     }

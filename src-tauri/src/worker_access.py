@@ -305,18 +305,38 @@ def identity(remote):
 
 def verify(remote, branch, ssh, parsed):
     env = {"GIT_SSH_COMMAND": shlex.join(ssh), "GIT_LFS_SKIP_SMUDGE": "1"}
-    if run(["git", "ls-remote", remote, "HEAD"], env=env).returncode:
+    task_ref = "refs/heads/" + branch
+    if run(["git", "check-ref-format", task_ref]).returncode:
+        raise SetupError("repository_probe_source_missing")
+    listing = run(["git", "ls-remote", remote, "HEAD", task_ref], env=env)
+    if listing.returncode:
         raise SetupError("repository_read_denied")
+    refs = {}
+    for line in listing.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] in ("HEAD", task_ref):
+            if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", fields[0]):
+                raise SetupError("repository_probe_source_missing")
+            refs[fields[1]] = fields[0]
+    # Repairs publish to an existing task branch ahead of the default branch.
+    # Probing with default HEAD would be a rejected rewind, not a permissions
+    # failure. Use the exact advertised task tip; only fresh branches use HEAD.
+    source = task_ref if task_ref in refs else "HEAD"
+    if source not in refs:
+        raise SetupError("repository_probe_source_missing")
     # Fetch into a throwaway bare repository. A write check must happen before
     # input publication, and must never create a task/default branch itself.
     with tempfile.TemporaryDirectory(prefix="xnaut-access-") as temp:
         if run(["git", "init", "--bare", temp]).returncode:
             raise SetupError("repository_check_failed")
         if run(
-            ["git", "-C", temp, "fetch", "--depth=1", remote, "HEAD"], env=env
+            ["git", "-C", temp, "fetch", "--depth=1", remote, source], env=env
         ).returncode:
             raise SetupError("repository_read_denied")
-        if run(
+        fetched = run(["git", "-C", temp, "rev-parse", "--verify", "FETCH_HEAD"])
+        if fetched.returncode or fetched.stdout.strip() != refs[source]:
+            raise SetupError("repository_branch_changed")
+        pushed = run(
             [
                 "git",
                 "-C",
@@ -324,10 +344,14 @@ def verify(remote, branch, ssh, parsed):
                 "push",
                 "--dry-run",
                 remote,
-                "FETCH_HEAD:refs/heads/" + branch,
+                "FETCH_HEAD:" + task_ref,
             ],
             env=env,
-        ).returncode:
+        )
+        if pushed.returncode:
+            detail = (pushed.stdout + pushed.stderr).lower()
+            if any(reason in detail for reason in ("(non-fast-forward)", "(fetch first)", "(stale info)")):
+                raise SetupError("repository_branch_changed")
             raise SetupError("repository_write_denied")
     # LFS uses separate authorization; a successful Git probe is insufficient.
     target = parsed.username + "@" + parsed.hostname
