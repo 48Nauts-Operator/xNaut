@@ -389,21 +389,39 @@ pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
 /// worker admission still counts detached workers and Requested reservations.
 pub(crate) fn live_viewport_count_in(
     dir: &Path,
-    sessions: &[(String, String)],
+    sessions: &[(String, String, Option<String>)],
 ) -> Result<usize, String> {
     let runs = list_ids_in(dir)?.iter()
         .map(|id| load_manifest_in(dir, id)).collect::<Result<Vec<_>, _>>()?;
-    Ok(live_viewport_count(&runs, sessions))
+    // Only native IDs select receipts. Missing/corrupt evidence cannot retire
+    // a viewport; neither a handle nor a guessed tmux name is proof alone.
+    let transfers = runs.iter().filter_map(|run| {
+        let body = std::fs::read(dir.join("repository-transfers").join(format!("{}.json", run.run_id))).ok()?;
+        serde_json::from_slice(&body).ok()
+    }).collect::<Vec<crate::repository_transfer::Transfer>>();
+    Ok(live_viewport_count(&runs, sessions, &transfers))
 }
-fn live_viewport_count(runs: &[RunManifest], sessions: &[(String, String)]) -> usize {
-    sessions.iter().filter(|(session, handle)| {
+fn live_viewport_count(
+    runs: &[RunManifest],
+    sessions: &[(String, String, Option<String>)],
+    transfers: &[crate::repository_transfer::Transfer],
+) -> usize {
+    sessions.iter().filter(|(session, handle, environment)| {
         let mut matching = runs.iter().filter(|run| {
             run.pty_session.as_deref() == Some(session.as_str())
                 || run.zellij_session.as_deref() == Some(session.as_str())
+                || (environment.as_deref() == Some("exe-dev") && run.remote_env == *environment
+                    && *session == crate::sandbox::launch_env::repository_session_name(&run.agent_handle, &run.run_id)
+                    && transfers.iter().filter(|t| t.run_id == run.run_id).count() == 1
+                    && transfers.iter().any(|t| t.run_id == run.run_id && t.handle == run.agent_handle
+                        && t.project == run.project && t.ticket == run.ticket && t.local_path == run.worktree_path
+                        && t.workdir == format!("agents/runs/{}", run.run_id)
+                        && matches!(t.worker, crate::worker_bootstrap::Target::ExeDev)
+                        && ["review", "pushed"].contains(&t.state.as_str())))
         });
         let Some(run) = matching.next() else { return true; };
         matching.next().is_some()
-            || run.agent_handle != *handle
+            || run.agent_handle != *handle || run.remote_env != *environment
             || !matches!(run.state, RunState::Done | RunState::Retired)
     }).count()
 }
@@ -1370,19 +1388,44 @@ pub(crate) mod tests {
         let mut author = run();
         author.pty_session = Some("author-viewport".into());
         author.state = RunState::Done;
-        let sessions = vec![("author-viewport".into(), "codex".into()), ("unregistered-live".into(), "other".into())];
-        assert_eq!(live_viewport_count(std::slice::from_ref(&author), &sessions), 1);
+        let sessions = vec![("author-viewport".into(), "codex".into(), None), ("unregistered-live".into(), "other".into(), None)];
+        assert_eq!(live_viewport_count(std::slice::from_ref(&author), &sessions, &[]), 1);
         for state in [RunState::Running, RunState::Starting, RunState::Blocked, RunState::Failed, RunState::Undead] {
             author.state = state;
-            assert_eq!(live_viewport_count(std::slice::from_ref(&author), &sessions), 2, "{state:?}");
+            assert_eq!(live_viewport_count(std::slice::from_ref(&author), &sessions, &[]), 2, "{state:?}");
         }
         author.state = RunState::Done;
         let mut another = author.clone();
         another.run_id = "conflicting-identity".into();
-        assert_eq!(live_viewport_count(&[author.clone(), another], &sessions), 2);
+        assert_eq!(live_viewport_count(&[author.clone(), another], &sessions, &[]), 2);
         author.agent_handle = "different-owner".into();
-        assert_eq!(live_viewport_count(&[author], &sessions), 2);
-        assert_eq!(live_viewport_count(&[], &sessions), 2);
+        assert_eq!(live_viewport_count(&[author], &sessions, &[]), 2);
+        assert_eq!(live_viewport_count(&[], &sessions, &[]), 2);
+    }
+
+    #[test]
+    fn adopted_remote_viewport_requires_completed_native_and_exact_transfer_binding() {
+        let mut author = run(); author.state = RunState::Done;
+        author.remote_env = Some("exe-dev".into());
+        let session = crate::sandbox::launch_env::repository_session_name(&author.agent_handle, &author.run_id);
+        let sessions = vec![(session, author.agent_handle.clone(), Some("exe-dev".into()))];
+        let transfer: crate::repository_transfer::Transfer = serde_json::from_value(serde_json::json!({
+            "run_id":author.run_id,"project":author.project,"ticket":author.ticket,"handle":author.agent_handle,
+            "local_path":author.worktree_path,"remote":"ssh://fixture/repo.git","source_sha":"head","base":"main","branch":"task",
+            "workdir":format!("agents/runs/{}",author.run_id),"artifacts":"artifacts","state":"review","pr_url":null,"error":null
+        })).unwrap();
+        let rows = std::slice::from_ref(&author);
+        assert_eq!(live_viewport_count(rows, &sessions, std::slice::from_ref(&transfer)), 0);
+        assert_eq!(live_viewport_count(rows, &sessions, &[]), 1);
+        for field in ["run_id", "project", "ticket", "handle", "local_path", "workdir", "state"] {
+            let mut bad = serde_json::to_value(&transfer).unwrap(); bad[field] = serde_json::json!("unbound");
+            assert_eq!(live_viewport_count(rows, &sessions, &[serde_json::from_value(bad).unwrap()]), 1, "{field}");
+        }
+        assert_eq!(live_viewport_count(rows, &sessions, &[transfer.clone(), transfer.clone()]), 1);
+        let mut wrong_env = sessions.clone(); wrong_env[0].2 = Some("gitvm".into());
+        assert_eq!(live_viewport_count(rows, &wrong_env, std::slice::from_ref(&transfer)), 1);
+        author.state = RunState::Running;
+        assert_eq!(live_viewport_count(&[author], &sessions, &[transfer]), 1);
     }
 
     pub(crate) fn run() -> RunManifest {

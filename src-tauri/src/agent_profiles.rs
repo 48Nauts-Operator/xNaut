@@ -2043,7 +2043,7 @@ pub async fn agent_profile_launch(
         let live_sessions = {
             let sessions = state.agent_sessions.lock().await;
             sessions.values().filter(|meta| crate::status::counts_as_live(meta.status))
-                .map(|meta| (meta.session_id.clone(), meta.agent_id.clone())).collect::<Vec<_>>()
+                .map(|meta| (meta.session_id.clone(), meta.agent_id.clone(), meta.remote_env.clone())).collect::<Vec<_>>()
         };
         let live = crate::run_control::live_viewport_count_in(&crate::agents::registry_dir()?, &live_sessions)?;
         crate::spend::admit_launch(live)?;

@@ -1985,7 +1985,7 @@ pub(crate) async fn launch_agent_with_env(
     run.user_conversation = req.conversation_mode || req.resume;
     let live_sessions = state.agent_sessions.lock().await.values()
         .filter(|m| status::counts_as_live(m.status))
-        .map(|m| (m.session_id.clone(), m.agent_id.clone())).collect::<Vec<_>>();
+        .map(|m| (m.session_id.clone(), m.agent_id.clone(), m.remote_env.clone())).collect::<Vec<_>>();
     let live = run_control::live_viewport_count_in(&dir, &live_sessions)?;
     let capacity_run = run.clone();
     let run = run_control::request_in(&dir,run,|| {
