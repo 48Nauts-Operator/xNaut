@@ -908,51 +908,118 @@ pub(crate) fn independent_completion_refusal_in(
         ));
     }
     let t = roots[0];
-    let Some(q) = &t.quality else {
-        return Ok(Some("Independent repository review is missing".into()));
-    };
-    let accepted = ["ready", "merged"].contains(&q.state.as_str())
-        && q.head == head
-        && sha(head)
-        && q.reviewer != t.handle
-        && !q.required_checks.is_empty()
-        && q.comment_url
-            .as_ref()
-            .is_some_and(|url| !url.trim().is_empty())
-        && q.child.as_ref().is_some_and(|id| {
-            rows.iter().any(|c| {
-                &c.run_id == id
-                    && c.review_parent.as_deref() == Some(&t.run_id)
-                    && c.source_sha == head
-                    && c.handle == q.reviewer
-                    && c.state == "review"
-                    && c.remote == t.remote
-                    && c.project == t.project
-                    && c.repair_parent.is_none()
-            })
+    Ok(accepted_review_evidence(t, rows, head).err())
+}
+
+/// Shared, read-only acceptance of the exact saved review version. Both the
+/// completion gate and Journal projection use this guard; neither a status
+/// string nor a reviewer child ID without its matching receipt is evidence.
+pub(crate) fn accepted_review_evidence(
+    t: &Transfer,
+    rows: &[Transfer],
+    head: &str,
+) -> Result<(), String> {
+    let q = t
+        .quality
+        .as_ref()
+        .ok_or("Independent repository review is missing")?;
+    if !["ready", "merged"].contains(&q.state.as_str())
+        || q.head != head
+        || !sha(head)
+        || !sha(&q.base)
+    {
+        return Err("Independent review is missing, stale, blocked or awaiting repair for this exact revision".into());
+    }
+    if q.reviewer.trim().is_empty()
+        || q.reviewer
+            .trim()
+            .trim_start_matches('@')
+            .eq_ignore_ascii_case(t.handle.trim().trim_start_matches('@'))
+    {
+        return Err("Independent review must identify a reviewer distinct from the author".into());
+    }
+    if q.required_checks.is_empty()
+        || q.required_checks
+            .iter()
+            .any(|check| check.command.trim().is_empty())
+    {
+        return Err("Configured independent verification evidence is missing".into());
+    }
+    if !q
+        .comment_url
+        .as_ref()
+        .is_some_and(|url| !url.trim().is_empty())
+    {
+        return Err("Independent review publication is missing".into());
+    }
+    let id = q
+        .child
+        .as_deref()
+        .filter(|id| {
+            !id.is_empty()
+                && *id != t.run_id
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         })
-        && q.report.as_ref().is_some_and(|r| {
-            validate_report(
-                r,
-                q,
-                &format!(".xnaut/runs/{}", q.child.as_deref().unwrap_or("")),
-            )
-            .is_ok_and(|verdict| verdict == "pass")
-                && r["published_head"].as_str().is_some_and(sha)
-                && r["evidence_excerpts"].as_array().is_some_and(|excerpts| {
-                    r["tests"].as_array().is_some_and(|tests| {
-                        tests.iter().all(|test| {
-                            excerpts.iter().any(|e| {
-                                e["path"] == test["evidence"]
-                                    && e["output"]
-                                        .as_str()
-                                        .is_some_and(|text| !text.trim().is_empty())
-                            })
-                        })
-                    })
-                })
-        });
-    Ok((!accepted).then(|| "Independent review is missing, stale, blocked or awaiting repair for this exact revision".into()))
+        .ok_or("Independent reviewer child identity is missing or invalid")?;
+    let mut matching = rows.iter().filter(|child| child.run_id == id);
+    let child = matching
+        .next()
+        .ok_or("Independent reviewer child receipt is missing")?;
+    if matching.next().is_some() {
+        return Err("Conflicting reviewer child receipts require reconciliation".into());
+    }
+    let artifacts = format!(".xnaut/runs/{id}");
+    if child.review_parent.as_deref() != Some(t.run_id.as_str())
+        || child.repair_parent.is_some()
+        || child.source_sha != head
+        || child.handle != q.reviewer
+        || child.state != "review"
+        || child.remote != t.remote
+        || child.project != t.project
+        || child
+            .ticket
+            .as_ref()
+            .is_some_and(|ticket| Some(ticket) != t.ticket.as_ref())
+        || child.artifacts != artifacts
+        || q.worktree.trim().is_empty()
+        || child.local_path != q.worktree
+        || child.local_path == t.local_path
+    {
+        return Err("Independent reviewer receipt does not match this task, reviewer, workspace and exact revision".into());
+    }
+    let report = q
+        .report
+        .as_ref()
+        .ok_or("Independent review report is missing")?;
+    if validate_report(report, q, &artifacts)? != "pass"
+        || !report["published_head"].as_str().is_some_and(sha)
+    {
+        return Err("Independent review has no accepted published passing report".into());
+    }
+    let excerpts = report["evidence_excerpts"]
+        .as_array()
+        .ok_or("Committed review evidence excerpts are missing")?;
+    for test in report["tests"]
+        .as_array()
+        .ok_or("Review tests are missing")?
+    {
+        let path = test["evidence"]
+            .as_str()
+            .ok_or("Test evidence path is missing")?;
+        if evidence_path(path, &artifacts)? != path
+            || !excerpts.iter().any(|e| {
+                e["path"] == path
+                    && e["output"]
+                        .as_str()
+                        .is_some_and(|text| !text.trim().is_empty())
+            })
+        {
+            return Err("Independent review lacks committed evidence for a configured test".into());
+        }
+    }
+    Ok(())
 }
 
 /// Cross-process lease protects the complete durable transition, including
@@ -1957,6 +2024,7 @@ mod repair_loop_tests {
             let cache = self.root.join(format!("{id}.git"));
             git(&self.root, &["init", "--bare", cache.to_str().unwrap()]).unwrap();
             self.q.child = Some(id.into());
+            self.q.worktree = path.to_string_lossy().into();
             self.q.report = Some(read_report_in(&cache, &self.parent, &child, &self.q).unwrap());
             self.q.state = if exit == 0 {
                 "ready"

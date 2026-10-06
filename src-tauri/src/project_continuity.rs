@@ -137,63 +137,18 @@ fn state_for_run(run: &RunManifest, at: i64) -> ContinuityState {
         _ => ContinuityState::Unknown,
     }
 }
-fn sha(s: &str) -> bool {
-    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-fn review_verified(t: &Transfer, run: Option<&RunManifest>, revoked: bool) -> bool {
+fn review_verified(
+    t: &Transfer,
+    transfers: &[Transfer],
+    run: Option<&RunManifest>,
+    revoked: bool,
+) -> bool {
     let Some(q) = &t.quality else {
         return false;
     };
-    let Some(r) = &q.report else {
-        return false;
-    };
     !revoked
-        && ["ready", "merged"].contains(&q.state.as_str())
-        && q.reviewer != t.handle
-        && !q.reviewer.is_empty()
-        && q.child
-            .as_ref()
-            .is_some_and(|id| !id.is_empty() && id != &t.run_id)
-        && q.comment_url.as_ref().is_some_and(|s| !s.is_empty())
-        && sha(&q.head)
-        && sha(&q.base)
         && run.is_none_or(|run| run.state.terminal() && run.last_commit == q.head)
-        && r["head"].as_str() == Some(q.head.as_str())
-        && r["base"].as_str() == Some(q.base.as_str())
-        && r["verdict"] == "pass"
-        && r["published_head"].as_str().is_some_and(sha)
-        && r["coverage_gaps"].as_array().is_some_and(Vec::is_empty)
-        && r["findings"]
-            .as_array()
-            .is_some_and(|fs| fs.iter().all(|f| f["severity"] == "info"))
-        && q.required_checks.iter().all(|required| {
-            r["tests"].as_array().is_some_and(|tests| {
-                tests.iter().any(|test| {
-                    test["command"].as_str() == Some(required.command.as_str())
-                        && test["exit_code"] == 0
-                })
-            })
-        })
-        && r["tests"].as_array().is_some_and(|tests| {
-            !tests.is_empty()
-                && tests.iter().all(|test| {
-                    test["exit_code"] == 0
-                        && test["command"]
-                            .as_str()
-                            .is_some_and(|s| !s.trim().is_empty())
-                        && test["evidence"].as_str().is_some_and(|path| {
-                            !path.is_empty()
-                                && r["evidence_excerpts"].as_array().is_some_and(|es| {
-                                    es.iter().any(|e| {
-                                        e["path"] == path
-                                            && e["output"]
-                                                .as_str()
-                                                .is_some_and(|s| !s.trim().is_empty())
-                                    })
-                                })
-                        })
-                })
-        })
+        && crate::repository_review::accepted_review_evidence(t, transfers, &q.head).is_ok()
 }
 
 /// Deterministic projection. Inputs are historical records, not live probes.
@@ -310,7 +265,12 @@ pub fn reconcile(
                         .iter()
                         .any(|j| ["revoked", "revoke_requested"].contains(&j.state.as_str()))
             });
-        if review_verified(t, selected.get(t.run_id.as_str()).copied(), revoked) {
+        if review_verified(
+            t,
+            transfers,
+            selected.get(t.run_id.as_str()).copied(),
+            revoked,
+        ) {
             a.state = ContinuityState::Verified;
             a.evidence.push(evidence("verification", format!("transfer:{}#quality/report", t.run_id), format!("Independent evidenced tests passed at {}; recorded review accepted. Current remote refs and merge permission were not checked.", t.quality.as_ref().unwrap().head)));
         } else if t
@@ -405,7 +365,7 @@ pub fn reconcile(
         a.review_state = Some(q.state.clone());
         a.evidence.push(evidence("review", format!("transfer:{}#quality", original.run_id),
             format!("Original delivery retains review {} for successor {} at {}; original workers remain in history.", q.state, author_id, q.head)));
-        if review_verified(original, author_run, revoked) {
+        if review_verified(original, transfers, author_run, revoked) {
             a.state = ContinuityState::Verified;
             a.evidence.push(evidence("verification", format!("transfer:{}#quality/report", original.run_id),
                 format!("Independent evidenced tests passed at the repaired revision {}; reciprocal native continuation and same delivery branch/PR recorded. Current remote refs and merge permission were not checked.", q.head)));
@@ -1099,21 +1059,45 @@ mod tests {
     fn transfer(r: &RunManifest) -> Transfer {
         serde_json::from_value(json!({"run_id":r.run_id,"project":r.project,"ticket":r.ticket,"handle":r.agent_handle,"local_path":r.worktree_path,"remote":"git@example.invalid:team/project.git","source_sha":"a".repeat(40),"base":"dev","branch":r.branch,"workdir":"/worker","artifacts":".xnaut/runs/test","state":"failed","pr_url":"https://forge.invalid/pulls/17","error":"Worker exited after publication"})).unwrap()
     }
-    fn accepted_review(t: &mut Transfer, r: &RunManifest) {
+    fn accepted_review(t: &mut Transfer, r: &RunManifest) -> Transfer {
         let head = r.last_commit.clone();
         let base = "b".repeat(40);
+        let child_id = "review-child";
+        let artifacts = format!(".xnaut/runs/{child_id}");
+        let log = format!("{artifacts}/test.log");
+        let workspace = format!("{}.review", t.local_path);
         t.quality = Some(crate::repository_review::Review {
             state: "ready".into(),
             reviewer: "reviewer".into(),
             head: head.clone(),
             base: base.clone(),
-            child: Some("review-child".into()),
+            child: Some(child_id.into()),
+            worktree: workspace.clone(),
+            required_checks: vec![crate::repository_review::RequiredCheck {
+                name: "test".into(),
+                command: "cargo test".into(),
+            }],
             comment_url: Some("https://forge.invalid/pulls/17#review".into()),
             report: Some(
-                json!({"head":head,"base":base,"verdict":"pass","published_head":"c".repeat(40),"coverage_gaps":[],"findings":[],"tests":[{"command":"cargo test","exit_code":0,"evidence":"test.log"}],"evidence_excerpts":[{"path":"test.log","output":"Tests passed"}]}),
+                json!({"head":head,"base":base,"verdict":"pass","summary":"Independent configured checks passed","published_head":"c".repeat(40),"coverage_gaps":[],"findings":[],"tests":[{"command":"cargo test","exit_code":0,"evidence":log}],"evidence_excerpts":[{"path":log,"output":"Tests passed"}]}),
             ),
             ..Default::default()
         });
+        Transfer {
+            run_id: child_id.into(),
+            ticket: None,
+            handle: "reviewer".into(),
+            local_path: workspace,
+            source_sha: head,
+            branch: "review-evidence".into(),
+            artifacts,
+            state: "review".into(),
+            review_parent: Some(t.run_id.clone()),
+            repair_parent: None,
+            quality: None,
+            pr_url: None,
+            ..t.clone()
+        }
     }
     #[test]
     fn repaired_review_applies_only_to_reciprocal_same_delivery_successor() {
@@ -1126,7 +1110,7 @@ mod tests {
         parent.next_run_id = Some(child.run_id.clone());
         child.last_commit = "d".repeat(40);
         let mut original = transfer(&parent);
-        accepted_review(&mut original, &child);
+        let review = accepted_review(&mut original, &child);
         original.quality.as_mut().unwrap().author_run = Some(child.run_id.clone());
         let mut delivered = transfer(&child);
         delivered.repair_parent = Some(parent.run_id.clone());
@@ -1135,7 +1119,7 @@ mod tests {
             "XNAUT",
             &board,
             &[parent.clone(), child.clone()],
-            &[original.clone(), delivered.clone()],
+            &[original.clone(), delivered.clone(), review.clone()],
             child.last_seen_at,
         );
         assert_eq!(
@@ -1164,7 +1148,7 @@ mod tests {
             "XNAUT",
             &board,
             &[parent.clone(), child.clone()],
-            &[original.clone(), delivered],
+            &[original.clone(), delivered, review.clone()],
             child.last_seen_at,
         );
         assert_ne!(different.tickets[0].state, ContinuityState::Verified);
@@ -1176,7 +1160,7 @@ mod tests {
             "XNAUT",
             &board,
             &[parent, child.clone()],
-            &[original, delivered],
+            &[original, delivered, review],
             child.last_seen_at,
         );
         assert_ne!(unlinked.tickets[0].state, ContinuityState::Verified);
@@ -1366,9 +1350,16 @@ mod tests {
         r.state = RunState::Done;
         r.last_commit = "d".repeat(40);
         let mut tr = transfer(&r);
-        accepted_review(&mut tr, &r);
+        let review = accepted_review(&mut tr, &r);
         assert_eq!(
-            reconcile("XNAUT", &[ticket()], &[r.clone()], &[tr.clone()], 2_000).assignments[0]
+            reconcile(
+                "XNAUT",
+                &[ticket()],
+                &[r.clone()],
+                &[tr.clone(), review.clone()],
+                2_000
+            )
+            .tickets[0]
                 .state,
             ContinuityState::Verified
         );
@@ -1383,7 +1374,14 @@ mod tests {
                 _ => q.report.as_mut().unwrap()["evidence_excerpts"] = json!([]),
             }
             assert_ne!(
-                reconcile("XNAUT", &[ticket()], &[r.clone()], &[broken], 2_000).assignments[0]
+                reconcile(
+                    "XNAUT",
+                    &[ticket()],
+                    &[r.clone()],
+                    &[broken, review.clone()],
+                    2_000
+                )
+                .tickets[0]
                     .state,
                 ContinuityState::Verified,
                 "{mutation}"
@@ -1391,9 +1389,95 @@ mod tests {
         }
         r.last_commit = "e".repeat(40);
         assert_ne!(
-            reconcile("XNAUT", &[ticket()], &[r], &[tr], 2_000).assignments[0].state,
+            reconcile("XNAUT", &[ticket()], &[r], &[tr, review], 2_000).tickets[0].state,
             ContinuityState::Verified
         );
+    }
+    #[test]
+    fn projection_and_completion_share_required_checks_and_reviewer_receipt_guards() {
+        let mut r = run();
+        r.state = RunState::Done;
+        r.last_commit = "d".repeat(40);
+        let mut parent = transfer(&r);
+        let reviewer = accepted_review(&mut parent, &r);
+        let project_ticket = ticket();
+        let accepted = |rows: &[Transfer]| {
+            let projection = reconcile(
+                "XNAUT",
+                &[project_ticket.clone()],
+                &[r.clone()],
+                rows,
+                2_000,
+            );
+            let projected = projection
+                .assignments
+                .iter()
+                .find(|a| a.run_id == r.run_id)
+                .unwrap()
+                .state
+                == ContinuityState::Verified;
+            let permitted = crate::repository_review::independent_completion_refusal_in(
+                rows,
+                &project_ticket.id,
+                &r.last_commit,
+            )
+            .unwrap()
+            .is_none();
+            assert_eq!(projected, permitted, "projection and completion disagree");
+            projected
+        };
+        assert!(accepted(&[parent.clone(), reviewer.clone()]));
+        for mutation in [
+            "empty_checks",
+            "blank_check",
+            "forged_child",
+            "missing_child",
+            "duplicate_child",
+            "wrong_parent",
+            "foreign_project",
+            "foreign_ticket",
+            "wrong_reviewer",
+            "wrong_head",
+            "wrong_remote",
+            "wrong_artifacts",
+            "wrong_workspace",
+            "running_child",
+            "self_review",
+        ] {
+            let mut task = parent.clone();
+            let mut child = reviewer.clone();
+            match mutation {
+                "empty_checks" => task.quality.as_mut().unwrap().required_checks.clear(),
+                "blank_check" => {
+                    task.quality.as_mut().unwrap().required_checks[0].command = " ".into()
+                }
+                "forged_child" => {
+                    task.quality.as_mut().unwrap().child = Some("invented-child".into())
+                }
+                "wrong_parent" => child.review_parent = Some("unrelated-parent".into()),
+                "foreign_project" => child.project = "OTHER".into(),
+                "foreign_ticket" => child.ticket = Some("OTHER-1".into()),
+                "wrong_reviewer" => child.handle = "another-reviewer".into(),
+                "wrong_head" => child.source_sha = "e".repeat(40),
+                "wrong_remote" => child.remote = "git@foreign.invalid:other/repo.git".into(),
+                "wrong_artifacts" => child.artifacts = ".xnaut/runs/unrelated".into(),
+                "wrong_workspace" => child.local_path = "/somewhere-else".into(),
+                "running_child" => child.state = "running".into(),
+                "self_review" => {
+                    task.quality.as_mut().unwrap().reviewer = task.handle.clone();
+                    child.handle = task.handle.clone();
+                }
+                _ => (),
+            }
+            let mut rows = vec![task];
+            if mutation != "missing_child" {
+                rows.push(child.clone());
+            }
+            if mutation == "duplicate_child" {
+                rows.push(child);
+            }
+            assert!(!accepted(&rows), "{mutation}");
+        }
     }
     #[test]
     fn revoked_approval_cannot_be_verified_and_review_does_not_hide_other_runs() {
@@ -1401,14 +1485,27 @@ mod tests {
         r.state = RunState::Done;
         r.last_commit = "d".repeat(40);
         let mut tr = transfer(&r);
-        accepted_review(&mut tr, &r);
+        let review = accepted_review(&mut tr, &r);
         let mut t = ticket();
         t.approval.signoff = Some(serde_json::from_value(json!({"jury_id":"old","reviewers":[],"scores":[],"merge_sha":"a".repeat(40),"integration_verify_run":null,"revoked":true,"revert_sha":null})).unwrap());
-        let s = reconcile("XNAUT", &[t], &[r.clone()], &[tr.clone()], 2_000);
-        assert_eq!(s.assignments[0].state, ContinuityState::Blocked);
+        let s = reconcile(
+            "XNAUT",
+            &[t],
+            &[r.clone()],
+            &[tr.clone(), review.clone()],
+            2_000,
+        );
+        assert_eq!(
+            s.assignments
+                .iter()
+                .find(|a| a.run_id == r.run_id)
+                .unwrap()
+                .state,
+            ContinuityState::Blocked
+        );
         let mut unresolved = run();
         unresolved.state = RunState::Failed;
-        let s = reconcile("XNAUT", &[ticket()], &[r, unresolved], &[tr], 2_000);
+        let s = reconcile("XNAUT", &[ticket()], &[r, unresolved], &[tr, review], 2_000);
         assert_ne!(s.tickets[0].state, ContinuityState::Verified);
     }
     #[test]
@@ -1523,15 +1620,15 @@ mod tests {
         predecessor.next_run_id = Some(successor.run_id.clone());
         successor.previous_run_id = Some(predecessor.run_id.clone());
         let mut tr = transfer(&successor);
-        accepted_review(&mut tr, &successor);
+        let review = accepted_review(&mut tr, &successor);
         let s = reconcile(
             "XNAUT",
             &[ticket()],
             &[predecessor, successor],
-            &[tr],
+            &[tr, review],
             2_000,
         );
-        assert_eq!(s.assignments.len(), 2);
+        assert_eq!(s.assignments.len(), 3);
         assert_eq!(s.tickets[0].assignment_ids.len(), 2);
         assert_eq!(s.tickets[0].state, ContinuityState::Verified);
     }
