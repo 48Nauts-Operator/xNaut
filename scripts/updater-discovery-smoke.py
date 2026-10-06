@@ -174,6 +174,9 @@ def main():
         "expected_version": NEW,
         "harness_sha256": smoke.digest(Path(__file__)),
         "harness_source_commit": smoke.command("git", "rev-parse", "HEAD"),
+        "scope": "Native version discovery and expected platform entry validation. "
+        "The plugin exposes the complete feed, not its selected download URL. "
+        "No update payload is downloaded or installed by this check.",
         "status": "failed",
     }
     process, config, token, msi = None, None, "", None
@@ -289,16 +292,16 @@ def main():
                     time.sleep(0.5)
             result = bridge.evaluate(discovery_expression(), timeout=60)
             report["discovery"] = result
-            report["selected_platform"] = validate_discovery(
+            report["expected_platform_entry"] = validate_discovery(
                 result, manifest, repo, args.target
             )
             signature_name = (
-                report["selected_platform"]["url"].rsplit("/", 1)[1] + ".sig"
+                report["expected_platform_entry"]["url"].rsplit("/", 1)[1] + ".sig"
             )
             signature = asset(latest, signature_name, distribution, repo)
             require(
                 signature.read_text().strip()
-                == report["selected_platform"]["signature"].strip(),
+                == report["expected_platform_entry"]["signature"].strip(),
                 "Native updater signature differs from the exact published signature asset",
             )
             report["signature_asset_sha256"] = smoke.digest(signature)
