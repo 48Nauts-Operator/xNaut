@@ -802,7 +802,7 @@ fn accept_reviewer_handback_in(
         || child.project != parent.project || child.remote != parent.remote || child.source_sha != q.head
         || child.handle != q.reviewer || child.handle == parent.handle
         || child.local_path != q.worktree || child.local_path == parent.local_path
-        || child.workdir != format!("agents/runs/{}", child.run_id)
+        || child.workdir != child.worker.run_directory(&child.run_id)
         || child.artifacts != format!(".xnaut/runs/{}", child.run_id)
         || child.branch != format!("xnaut/runs/{}", child.run_id)
         || result.run_id != child.run_id || result.source_sha != child.source_sha

@@ -48,6 +48,21 @@ impl Target {
             exe::shell_single_quote(&format!("{workdir}/{relative}"))
         ))
     }
+    pub(crate) fn run_directory(&self, run_id: &str) -> String {
+        match self { Self::ExeDev => format!("agents/runs/{run_id}"), Self::GitVm { .. } => format!("/workspace/.xnaut-runs/{run_id}") }
+    }
+    /// Native accepted-task handoff. This signals only an identity-bound CLI;
+    /// the unchanged supervisor must still publish and prove all writers gone.
+    pub(crate) fn completed_task_handoff(&self, expected: &Value) -> Result<Value, String> {
+        let command = format!("python3 -c {}", exe::shell_single_quote(include_str!("repository_handoff.py")));
+        let input = serde_json::to_vec(expected).map_err(|e| e.to_string())?;
+        let out = self.exchange(&command, &input, 45)?;
+        let receipt: Value = serde_json::from_slice(&out.stdout).map_err(|_| "Invalid completed-task handoff response")?;
+        if !out.status.success() {
+            return Err(receipt["reason"].as_str().unwrap_or("Completed-task handoff refused").into());
+        }
+        Ok(receipt)
+    }
     pub fn probe(&self, workdir: &str) -> Result<Value, String> {
         let out = self.exchange(&exe::repository_probe_command(workdir), &[], 30)?;
         if !out.status.success() {

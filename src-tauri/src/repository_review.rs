@@ -644,6 +644,78 @@ fn reconcile_author_outcome(t: &Transfer, q: &mut Review, rows: &[Transfer]) -> 
     result
 }
 
+fn completed_author_handoff_binding(
+    author: &Transfer, run: &crate::run_control::RunManifest,
+    handback: &crate::handback::Handback, head: &str,
+) -> Result<Value, String> {
+    if !matches!(run.state, crate::run_control::RunState::Done | crate::run_control::RunState::Retired) || run.ticket != author.ticket
+        || run.project != author.project || run.agent_handle != author.handle || run.worktree_path != author.local_path
+        || run.run_id != author.run_id || run.last_commit != head || author.review_parent.is_some()
+        || author.state != "review" || author.workdir != author.worker.run_directory(&author.run_id)
+        || handback.run_id.as_deref() != Some(run.run_id.as_str()) || !crate::run_control::handback_matches(run, handback)
+        || !crate::handback::review(handback).is_reviewable()
+    { return Err("Completed author handoff lacks its accepted native assignment and typed handback".into()); }
+    let environment = match author.worker { crate::worker_bootstrap::Target::ExeDev => "exe-dev", _ => "gitvm" };
+    if run.remote_env.as_deref() != Some(environment) { return Err("Completed author environment changed".into()); }
+    Ok(json!({"run_id":author.run_id,"project":author.project,"ticket":author.ticket,"handle":author.handle,
+        "workdir":author.workdir,"artifacts":author.artifacts,"branch":author.branch,"source_sha":author.source_sha,
+        "remote":author.remote,"head":head,"agent_pid":run.pid,"environment":environment}))
+}
+
+/// Request a graceful exact-task handoff, then wait for real supervisor and OS
+/// evidence. Waiting is durable queue state, never an exhausted repair attempt.
+async fn prepare_author_handoff(t: &mut Transfer, q: &mut Review, rows: &[Transfer]) -> Result<bool, String> {
+    repair_authorized(t, q)?;
+    let author = author_for(t, q, rows)?.clone();
+    let registry = crate::agents::registry_dir()?;
+    let run = crate::run_control::load_manifest_in(&registry, &author.run_id)?;
+    // Native reservation may have committed before the parent quality row.
+    // Recover that exact Requested child; never try to stop a successor.
+    let mut reserved_replay = false;
+    if run.state == crate::run_control::RunState::Retired
+        && run.retirement.as_ref().is_some_and(|r| r.stopped_at.is_some())
+        && q.extra.get("author_handoff").is_some_and(|proof| proof["state"] == "finished"
+            && proof["run_id"] == run.run_id && proof["head"] == q.head) {
+        if let Some(id) = &run.next_run_id {
+            let next = crate::run_control::load_manifest_in(&registry,id)?;
+            if next.state == crate::run_control::RunState::Requested
+                && next.previous_run_id.as_deref() == Some(run.run_id.as_str())
+                && next.ticket == run.ticket && next.worktree_path == run.worktree_path && next.branch == run.branch {
+                reserved_replay = true;
+            }
+        }
+    }
+    if run.state == crate::run_control::RunState::Retired && !reserved_replay {
+        return Err("Retired author lacks the exact completed handoff and Requested successor".into());
+    }
+    let ticket = current_ticket(t)?;
+    let handback = ticket.handback.as_ref().ok_or("Accepted author handback is missing")?;
+    let binding = completed_author_handoff_binding(&author, &run, handback, &q.head)?;
+    if !q.extra.contains_key("author_handoff") {
+        q.extra.insert("author_handoff".into(), json!({"run_id":author.run_id,"head":q.head,"state":"requested","requested_at":crate::run_control::now_ms()}));
+        persist(t,q,"Completed author writer handoff requested; awaiting actual process and publisher exit",None)?;
+    }
+    let worker = author.worker.clone();
+    let receipt = tokio::task::spawn_blocking(move || worker.completed_task_handoff(&binding))
+        .await.map_err(|e| e.to_string())??;
+    let finished = apply_handoff_status(q, &author.run_id, &receipt, crate::run_control::now_ms())?;
+    if reserved_replay && !finished { return Err("Writer appeared after completed handoff; reserved successor retained for inspection".into()); }
+    persist(t,q,if finished { "Completed author writer and publisher exited; existing repair proof still required" }
+        else { "Completed author handoff pending; repair remains queued without consuming an attempt" },Some(receipt))?;
+    Ok(finished)
+}
+
+fn apply_handoff_status(q: &mut Review, author: &str, receipt: &Value, at: i64) -> Result<bool,String> {
+    if receipt["run_id"] != author || receipt["head"] != q.head
+        || !matches!(receipt["state"].as_str(),Some("pending" | "finished")) {
+        return Err("Completed author handoff response changed identity".into());
+    }
+    let finished = receipt["state"] == "finished";
+    q.extra.insert("author_handoff".into(),receipt.clone());
+    q.next_attempt_at = if finished { 0 } else { at + REPAIR_BACKOFF_MS };
+    Ok(finished)
+}
+
 fn stopped_author_proof(
     t: &Transfer,
     q: &Review,
@@ -792,6 +864,7 @@ fn accept_repair_publication(
         return Err("Author repair did not change the reviewed implementation; repeated verification stopped".into());
     }
     q.author_run = Some(child.run_id.clone());
+    q.extra.remove("author_handoff");
     q.author_outcome = None;
     q.state = "pending".into();
     q.attempts = 0;
@@ -817,6 +890,7 @@ async fn advance_repair(
         if now < q.next_attempt_at {
             return Ok(());
         }
+        if !prepare_author_handoff(t, q, rows).await? { return Ok(()); }
         if let Err(error) = reserve_repair(t, q, rows) {
             if error.starts_with("worker capacity:") {
                 q.next_attempt_at = now + REPAIR_BACKOFF_MS;
@@ -3141,6 +3215,51 @@ mod repair_loop_tests {
             }
             assert!(independent_completion_refusal_with_runs(&bad_rows, &bad_runs, "TEST-1", &f.q.head).unwrap().is_some(), "{case}");
         }
+    }
+
+    #[test]
+    fn completed_author_handoff_requires_bound_acceptance_and_waits_without_attempts() {
+        let mut f = Fixture::new();
+        f.parent.workdir = format!("agents/runs/{}",f.parent.run_id);
+        let mut run = run_control::load_manifest_in(&f.registry,&f.parent.run_id).unwrap();
+        run.last_commit = f.q.head.clone(); run.remote_env = Some("exe-dev".into()); run.pid = Some(123);
+        let h = crate::handback::Handback { run_id:Some(run.run_id.clone()),ticket:"TEST-1".into(),from:"author".into(),
+            summary:"Published implementation for independent review".into(),files_changed:vec!["app.sh".into()],
+            commits:vec![f.q.head.clone()],how_verified:"sh test.sh: failing boundary retained".into(),
+            not_finished:Some("Independent author repair remains".into()),confidence:crate::handback::Confidence::High,
+            ..Default::default() };
+        // The fixture command must be recognized by the same handback gate.
+        let mut h = h; h.how_verified = "./test.sh: failing boundary retained".into();
+        assert!(completed_author_handoff_binding(&f.parent,&run,&h,&f.q.head).is_ok());
+        let mut gitvm = f.parent.clone(); gitvm.worker = crate::worker_bootstrap::Target::GitVm { local_path:PathBuf::from(&gitvm.local_path) };
+        gitvm.workdir = gitvm.worker.run_directory(&gitvm.run_id);
+        let mut gitvm_run = run.clone(); gitvm_run.remote_env = Some("gitvm".into());
+        assert!(completed_author_handoff_binding(&gitvm,&gitvm_run,&h,&f.q.head).is_ok());
+        gitvm.workdir = f.parent.workdir.clone();
+        assert!(completed_author_handoff_binding(&gitvm,&gitvm_run,&h,&f.q.head).is_err());
+        for field in ["state","project","ticket","agent_handle","worktree_path","last_commit","remote_env"] {
+            let mut wrong = serde_json::to_value(&run).unwrap();
+            wrong[field] = json!(if field == "state" { "running" } else { "wrong" });
+            let wrong = serde_json::from_value(wrong).unwrap();
+            assert!(completed_author_handoff_binding(&f.parent,&wrong,&h,&f.q.head).is_err(),"{field}");
+        }
+        let mut wrong = h.clone(); wrong.run_id = Some("another-run".into());
+        assert!(completed_author_handoff_binding(&f.parent,&run,&wrong,&f.q.head).is_err());
+        wrong = h; wrong.summary.clear();
+        assert!(completed_author_handoff_binding(&f.parent,&run,&wrong,&f.q.head).is_err());
+        f.q.state = "changes_requested".into(); f.q.repair_attempts = 1;
+        let pending = json!({"run_id":run.run_id,"head":f.q.head,"state":"pending"});
+        assert!(!apply_handoff_status(&mut f.q,&run.run_id,&pending,100).unwrap());
+        f.save(); f.reload();
+        assert_eq!(f.q.state,"changes_requested"); assert_eq!(f.q.repair_attempts,1);
+        assert_eq!(f.q.next_attempt_at,100 + REPAIR_BACKOFF_MS);
+        assert!(!apply_handoff_status(&mut f.q,&run.run_id,&pending,200).unwrap());
+        assert_eq!(f.q.repair_attempts,1);
+        let mut wrong = pending.clone(); wrong["run_id"] = json!("different-author");
+        assert!(apply_handoff_status(&mut f.q,&run.run_id,&wrong,300).is_err());
+        let mut finished = pending; finished["state"] = json!("finished");
+        assert!(apply_handoff_status(&mut f.q,&run.run_id,&finished,400).unwrap());
+        assert_eq!(f.q.repair_attempts,1); assert_eq!(f.q.next_attempt_at,0);
     }
 
     #[test]
