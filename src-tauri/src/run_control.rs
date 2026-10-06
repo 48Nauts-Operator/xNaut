@@ -1296,6 +1296,33 @@ pub fn record_handback_in<T>(
     Ok(stored)
 }
 
+/// A ticketless independent reviewer hands evidence to its parent delivery,
+/// not to PM. Complete that task under the same contract as author handbacks;
+/// an attached interactive process is not claimed to have exited, and the
+/// parent's independent verdict is neither accepted nor changed here.
+pub(crate) fn record_review_handback_in(
+    dir: &Path, transfer: &crate::repository_transfer::Transfer,
+    handback: &crate::handback::Handback, published_head: &str,
+) -> Result<bool, String> {
+    let _lock = StoreLock::acquire(dir)?;
+    let mut run = load_manifest_in(dir, &transfer.run_id)?;
+    let environment = match transfer.worker { crate::worker_bootstrap::Target::ExeDev => "exe-dev", _ => "gitvm" };
+    if !matches!(run.kind, RunKind::Agent | RunKind::Review) || run.user_conversation
+        || run.ticket.is_some() || transfer.ticket.is_some() || transfer.review_parent.is_none()
+        || run.project != transfer.project || run.agent_handle != transfer.handle
+        || run.worktree_path != transfer.local_path || run.remote_env.as_deref() != Some(environment)
+        || handback.run_id.as_deref() != Some(run.run_id.as_str()) || handback.from != run.agent_handle
+        || !crate::handback::review(handback).is_reviewable()
+        || published_head.len() != 40 || !published_head.bytes().all(|b| b.is_ascii_hexdigit())
+    { return Err("Reviewer handback does not match its native assignment and publication".into()); }
+    if !mark_completed(&mut run, "review task published; typed handback accepted (parent verdict remains separate)") {
+        return Ok(false);
+    }
+    run.last_commit = published_head.into();
+    persist_locked(dir, &mut run)?;
+    Ok(true)
+}
+
 /// Recover the PM-committed half of a filing interrupted before the registry
 /// journal was written. Runs without their own accepted handback stay unchanged.
 pub fn recover_handbacks_in(

@@ -789,7 +789,57 @@ fn record_publication_in(
     Ok(())
 }
 
+/// Publication alone does not complete a reviewer. Bind its typed handback
+/// through the saved parent reservation before completing only the child task.
+fn accept_reviewer_handback_in(
+    registry: &Path, child: &Transfer, parent: &Transfer, result: &ResultRecord,
+    handback: Option<&crate::handback::Handback>,
+) -> Result<bool, String> {
+    let q = parent.quality.as_ref().ok_or("Reviewer parent reservation is missing")?;
+    let ticket = parent.ticket.as_deref().ok_or("Reviewer parent ticket is missing")?;
+    if child.review_parent.as_deref() != Some(parent.run_id.as_str()) || child.repair_parent.is_some()
+        || child.ticket.is_some() || q.child.as_deref() != Some(child.run_id.as_str())
+        || child.project != parent.project || child.remote != parent.remote || child.source_sha != q.head
+        || child.handle != q.reviewer || child.handle == parent.handle
+        || child.local_path != q.worktree || child.local_path == parent.local_path
+        || child.workdir != format!("agents/runs/{}", child.run_id)
+        || child.artifacts != format!(".xnaut/runs/{}", child.run_id)
+        || child.branch != format!("xnaut/runs/{}", child.run_id)
+        || result.run_id != child.run_id || result.source_sha != child.source_sha
+        || result.exit_code != 0 || result.uncommitted_source
+    { return Err("Reviewer publication does not match its parent reservation".into()); }
+    let mut handback = handback.cloned().ok_or("Reviewer typed handback is missing")?;
+    if handback.run_id.as_ref().is_some_and(|id| id != &child.run_id)
+        || (!handback.ticket.is_empty() && handback.ticket != ticket)
+        || (!handback.from.is_empty() && handback.from.trim_start_matches('@') != child.handle)
+    { return Err("Reviewer handback names a different assignment".into()); }
+    // Identity is supplied by the trusted saved receipt, as for author filing.
+    // This is never filed as the author's PM handback.
+    handback.run_id = Some(child.run_id.clone()); handback.ticket = ticket.into(); handback.from = child.handle.clone();
+    crate::run_control::record_review_handback_in(registry, child, &handback, &result.published_head)
+}
+
+fn finish_reviewer_task(t: &Transfer, result: &ResultRecord, handback: Option<&crate::handback::Handback>) -> Result<(), String> {
+    let parent_id = t.review_parent.as_deref().ok_or("Reviewer parent receipt is missing")?;
+    if parent_id.is_empty() || !parent_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err("Invalid reviewer parent identity".into());
+    }
+    let parent: Transfer = serde_json::from_slice(&std::fs::read(store_dir()?.join(format!("{parent_id}.json")))
+        .map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if parent.run_id != parent_id { return Err("Reviewer parent receipt identity differs from its file".into()); }
+    accept_reviewer_handback_in(&crate::agents::registry_dir()?, t, &parent, result, handback)?;
+    Ok(())
+}
+
+fn publication_pending(t: &Transfer) -> bool {
+    ["running", "pushed"].contains(&t.state.as_str()) || (t.state == "review" && t.review_parent.is_some())
+}
+
 async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Result<(), String> {
+    if t.state == "review" && t.review_parent.is_some() {
+        let run = crate::run_control::load_manifest_in(&crate::agents::registry_dir()?, &t.run_id)?;
+        if run.state.terminal() { return Ok(()); }
+    }
     if !t.workdir.is_empty() && t.state == "running" {
         let snapshot = t.clone();
         // Liveness evidence comes from the worker, never from opening a viewport.
@@ -823,6 +873,7 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
         return Ok(());
     };
     record_publication_in(&crate::agents::registry_dir()?, t, &result)?;
+    let reviewer_handback = t.review_parent.as_ref().and(handback.clone());
     t.state = "pushed".into();
     let mut pr_error = None;
     if t.pr_url.is_none() && t.review_parent.is_none() {
@@ -900,6 +951,7 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
         return Err(error);
     }
     t.state = "review".into();
+    if t.review_parent.is_some() { finish_reviewer_task(t, &result, reviewer_handback.as_ref())?; }
     Ok(())
 }
 
@@ -931,7 +983,7 @@ pub async fn tick(app: &tauri::AppHandle) {
     if let Ok(rows) = list() {
         for mut t in rows
             .into_iter()
-            .filter(|r| r.state == "running" || r.state == "pushed")
+            .filter(publication_pending)
         {
             // Publication and quality advancement share a cross-process lease;
             // a late publisher must not overwrite a freshly launched review.
@@ -949,7 +1001,7 @@ pub async fn tick(app: &tauri::AppHandle) {
                 continue;
             };
             t = current;
-            if !["running", "pushed"].contains(&t.state.as_str()) {
+            if !publication_pending(&t) {
                 continue;
             }
             t.error = reconcile(&mut t, &hosts).await.err();
@@ -1286,6 +1338,73 @@ mod tests {
             "no process-global environment mutation"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn collected_reviewer_handback_completes_only_its_bound_task_and_replays() {
+        use crate::run_control::{self, RunManifest, RunState};
+        let registry = std::env::temp_dir().join(format!("xnaut-review-terminal-{}",uuid::Uuid::new_v4()));
+        let child: Transfer = serde_json::from_value(serde_json::json!({
+            "run_id":"review-child","project":"TEST","ticket":null,"handle":"reviewer",
+            "local_path":"/fixture/reviewer","local_branch":"","remote":"ssh://fixture/repo.git",
+            "review_parent":"author-parent","source_sha":"a".repeat(40),"base":"main",
+            "branch":"xnaut/runs/review-child","workdir":"agents/runs/review-child",
+            "artifacts":".xnaut/runs/review-child","state":"review","pr_url":null,"error":null
+        })).unwrap();
+        let mut parent = child.clone(); parent.run_id = "author-parent".into(); parent.ticket = Some("TEST-1".into());
+        parent.handle = "author".into(); parent.local_path = "/fixture/author".into(); parent.review_parent = None;
+        parent.quality = Some(serde_json::from_value(serde_json::json!({
+            "state":"blocked","reviewer":"reviewer","head":"a".repeat(40),"base":"b".repeat(40),
+            "child":"review-child","worktree":"/fixture/reviewer","message":"test evidence is missing","attempts":1
+        })).unwrap());
+        let parent_before = serde_json::to_value(&parent).unwrap();
+        let mut native = RunManifest::requested("reviewer","fixture",&child.local_path,None,None,&[],1);
+        native.run_id = child.run_id.clone(); native.project = child.project.clone(); native.remote_env = Some("exe-dev".into());
+        run_control::request_in(&registry, native, || Ok(())).unwrap();
+        run_control::update_in(&registry,&child.run_id,|run| {
+            run.state = RunState::Running; run.pid = Some(123); run.pty_session = Some("interactive-reviewer".into());
+        }).unwrap();
+        let result = ResultRecord { run_id:child.run_id.clone(), source_sha:child.source_sha.clone(),
+            exit_code:0, uncommitted_source:false, published_head:"c".repeat(40) };
+        let handback = crate::handback::Handback {
+            summary:"Independent review requires an author repair".into(), files_changed:vec![format!("{}/review.json",child.artifacts)],
+            commits:vec!["c".repeat(40)], how_verified:"python3 -m unittest -v: one regression failed".into(),
+            not_finished:Some("Author must repair the reported defect".into()), confidence:crate::handback::Confidence::High,
+            ..Default::default()
+        };
+        assert!(publication_pending(&child), "already-collected review children must reconcile on restart");
+        assert!(accept_reviewer_handback_in(&registry,&child,&parent,&result,None).is_err());
+        for field in ["run_id","ticket","from","summary"] {
+            let mut wrong = serde_json::to_value(&handback).unwrap(); wrong[field] = serde_json::json!(if field == "summary" { "" } else { "wrong" });
+            let wrong = serde_json::from_value(wrong).unwrap();
+            assert!(accept_reviewer_handback_in(&registry,&child,&parent,&result,Some(&wrong)).is_err(),"{field}");
+        }
+        for field in ["review_parent","project","remote","source_sha","handle","local_path","workdir","artifacts","branch"] {
+            let mut wrong = serde_json::to_value(&child).unwrap(); wrong[field] = serde_json::json!("wrong");
+            let wrong = serde_json::from_value(wrong).unwrap();
+            assert!(accept_reviewer_handback_in(&registry,&wrong,&parent,&result,Some(&handback)).is_err(),"{field}");
+        }
+        let mut unreserved = parent.clone(); unreserved.quality = None;
+        assert!(accept_reviewer_handback_in(&registry,&child,&unreserved,&result,Some(&handback)).is_err());
+        unreserved = parent.clone(); unreserved.quality.as_mut().unwrap().child = Some("another-reviewer".into());
+        assert!(accept_reviewer_handback_in(&registry,&child,&unreserved,&result,Some(&handback)).is_err());
+        run_control::update_in(&registry,&child.run_id,|run| run.project = "ANOTHER".into()).unwrap();
+        assert!(accept_reviewer_handback_in(&registry,&child,&parent,&result,Some(&handback)).is_err());
+        run_control::update_in(&registry,&child.run_id,|run| run.project = child.project.clone()).unwrap();
+        assert_eq!(run_control::worker_count_in(&registry).unwrap(),1);
+        // Fetching a result alone must never release capacity.
+        record_publication_in(&registry,&child,&result).unwrap();
+        assert_eq!(run_control::load_manifest_in(&registry,&child.run_id).unwrap().state,RunState::Running);
+        assert!(accept_reviewer_handback_in(&registry,&child,&parent,&result,Some(&handback)).unwrap());
+        let completed = run_control::load_manifest_in(&registry,&child.run_id).unwrap();
+        assert_eq!(completed.state,RunState::Done); assert_eq!(completed.last_commit,result.published_head);
+        assert_eq!(completed.pid,Some(123), "task completion makes no physical process-exit claim");
+        assert!(completed.last_signal.contains("parent verdict remains separate"));
+        assert_eq!(run_control::worker_count_in(&registry).unwrap(),0);
+        assert_eq!(serde_json::to_value(&parent).unwrap(),parent_before,"blocked parent verdict remains unchanged");
+        assert!(!accept_reviewer_handback_in(&registry,&child,&parent,&result,Some(&handback)).unwrap());
+        assert_eq!(run_control::load_manifest_in(&registry,&child.run_id).unwrap().revision,completed.revision);
+        std::fs::remove_dir_all(registry).unwrap();
     }
 
     #[test]
