@@ -2,7 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.30.0] - 2026-10-06
+## [1.30.1] - 2026-10-07
 
 ### Added
 - Approved work groups retain a durable ticket-bound queue, refill available capacity within configured limits, and reconcile existing runs after restart. Stop further dispatch preserves running work and its evidence.
