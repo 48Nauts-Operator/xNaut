@@ -114,16 +114,59 @@ fn empty_assignment(id: &str) -> AssignmentSnapshot {
         next_action: action(ContinuityState::Unknown),
     }
 }
-fn state_for_run(run: &RunManifest, at: i64) -> ContinuityState {
+fn detached_review_observation(run: &RunManifest, transfer: &Transfer, rows: &[Transfer]) -> bool {
+    let Some(parent_id) = transfer.review_parent.as_deref() else { return false; };
+    let parents: Vec<_> = rows.iter().filter(|t| t.run_id == parent_id).collect();
+    let [parent] = parents.as_slice() else { return false; };
+    let Some(q) = parent.quality.as_ref() else { return false; };
+    run.branch.is_empty() && transfer.local_branch.is_empty() && run.ticket.is_none()
+        && transfer.ticket.is_none() && transfer.repair_parent.is_none()
+        && parent.run_id != run.run_id && parent.project == run.project
+        && parent.remote == transfer.remote && parent.ticket.as_ref().is_some_and(|t| !t.is_empty())
+        && q.state == "running" && q.child.as_deref() == Some(run.run_id.as_str())
+        && q.reviewer == run.agent_handle && q.worktree == run.worktree_path
+        && q.head.len() == 40 && q.head.bytes().all(|b| b.is_ascii_hexdigit())
+        && transfer.source_sha == q.head
+        && transfer.branch == format!("xnaut/runs/{}", run.run_id)
+        && transfer.artifacts == format!(".xnaut/runs/{}", run.run_id)
+}
+/// Repository workers are observed by the durable sweep, not the local
+/// process clock. Extend freshness only when its exact running receipt proves
+/// this observation path; unknown/ambiguous stores retain the native grace.
+fn observation_window_ms(run: &RunManifest, transfers: &[Transfer]) -> i64 {
+    let matches: Vec<_> = transfers.iter().filter(|t| t.run_id == run.run_id).collect();
+    let [transfer] = matches.as_slice() else { return run_control::GRACE_MS; };
+    let known_target = match (&transfer.worker, run.remote_env.as_deref()) {
+        (crate::worker_bootstrap::Target::ExeDev, Some("exe-dev")) => true,
+        (crate::worker_bootstrap::Target::GitVm { local_path }, Some("gitvm")) =>
+            local_path == Path::new(&run.worktree_path),
+        _ => false,
+    };
+    if known_target && matches!(run.state, RunState::Starting | RunState::Running)
+        && matches!(run.kind, run_control::RunKind::Agent | run_control::RunKind::Review)
+        && !run.admission_refused && run.prelaunch_failure.is_none()
+        && transfer.state == "running" && transfer.workdir == transfer.worker.run_directory(&run.run_id)
+        && transfer.project == run.project && transfer.ticket == run.ticket
+        && transfer.handle == run.agent_handle && transfer.local_path == run.worktree_path
+        && ((!transfer.local_branch.is_empty() && transfer.local_branch == run.branch)
+            || detached_review_observation(run, transfer, transfers))
+    {
+        crate::sweep::TICK.as_millis() as i64 + run_control::GRACE_MS
+    } else {
+        run_control::GRACE_MS
+    }
+}
+fn state_for_run(run: &RunManifest, at: i64, observation_window: i64) -> ContinuityState {
     if run.state == RunState::Blocked || run.waiting_on.as_ref().is_some_and(|s| !s.is_empty()) {
         return ContinuityState::Blocked;
     }
     match run.state {
         RunState::Running | RunState::Starting | RunState::Requested => {
-            if run.last_seen_at > at || run.last_progress_at > at {
+            if run.last_seen_at <= 0 || run.last_progress_at <= 0
+                || run.last_seen_at > at || run.last_progress_at > at {
                 return ContinuityState::Unknown;
             }
-            if at.saturating_sub(run.last_seen_at) > run_control::GRACE_MS
+            if at.saturating_sub(run.last_seen_at) > observation_window
                 || at.saturating_sub(run.last_progress_at) > run_control::PROGRESS_WINDOW_MS
             {
                 ContinuityState::Stalled
@@ -193,7 +236,16 @@ pub fn reconcile(
         a.next_run_id = r.next_run_id.clone();
         a.run_state = Some(r.state);
         a.last_commit = r.last_commit.clone();
-        a.state = state_for_run(r, at_ms);
+        let observation_window = observation_window_ms(r, transfers);
+        a.state = state_for_run(r, at_ms, observation_window);
+        if matches!(r.state, RunState::Running | RunState::Starting | RunState::Requested) {
+            let cadence = if observation_window > run_control::GRACE_MS {
+                "repository sweep cadence plus native grace"
+            } else { "native grace; no matching remote repository probe schedule" };
+            a.evidence.push(evidence("observation", format!("run:{}#observation", r.run_id),
+                format!("Last stored observation {} ms; freshness deadline {} ms, window {} ms ({}). Progress window {} ms. An overdue observation needs a new probe; a PR or handback does not resolve that gap.",
+                    r.last_seen_at, r.last_seen_at.saturating_add(observation_window), observation_window, cadence, run_control::PROGRESS_WINDOW_MS)));
+        }
         a.evidence.push(evidence("run", format!("run:{}", r.run_id), format!("Recorded {:?}; last seen {}, last progress {}; last commit {} (may be initial checkout); signal {}; waiting on {}. This is stored observation, not a live process check.", r.state, r.last_seen_at, r.last_progress_at, r.last_commit, r.last_signal, r.waiting_on.as_deref().unwrap_or("none"))));
         rows.insert(r.run_id.clone(), a);
     }
@@ -283,6 +335,7 @@ pub fn reconcile(
         } else if (a.pr_url.is_some() || t.quality.is_some())
             && a.state != ContinuityState::Active
             && a.state != ContinuityState::Blocked
+            && a.state != ContinuityState::Stalled
         {
             a.state = ContinuityState::Review;
         }
@@ -390,7 +443,7 @@ pub fn reconcile(
                     if a.owner.is_empty() {
                         a.owner = h.from.clone();
                     }
-                    if matches!(a.state, ContinuityState::Unknown | ContinuityState::Stalled) {
+                    if a.state == ContinuityState::Unknown {
                         a.state = ContinuityState::Review;
                     }
                 }
@@ -1274,6 +1327,125 @@ mod tests {
         );
         assert_eq!(later.assignments[0].state, ContinuityState::Stalled);
         assert_eq!(later.assignments[0].run_id, current.assignments[0].run_id);
+    }
+    /// XNAUT-466: project observations follow the actual remote sweep clock;
+    /// publication/author claims cannot erase a missed observation afterwards.
+    #[test]
+    fn remote_observation_uses_bound_sweep_cadence_and_preserves_stalled_prs() {
+        let mut r = run(); r.remote_env = Some("exe-dev".into());
+        let mut tr = transfer(&r); tr.state = "running".into(); tr.error = None;
+        tr.local_branch = r.branch.clone(); tr.workdir = tr.worker.run_directory(&r.run_id);
+        let mut task = ticket();
+        task.handback = Some(crate::handback::Handback {
+            run_id: Some(r.run_id.clone()), ticket: task.id.clone(),
+            summary: "Prior implementation claim".into(), ..Default::default()
+        });
+        let window = crate::sweep::TICK.as_millis() as i64 + run_control::GRACE_MS;
+        for (age, expected) in [(run_control::GRACE_MS + 1, ContinuityState::Active),
+            (window, ContinuityState::Active), (window + 1, ContinuityState::Stalled)] {
+            let snapshot = reconcile("XNAUT", std::slice::from_ref(&task), std::slice::from_ref(&r),
+                std::slice::from_ref(&tr), r.last_seen_at + age);
+            let assignment = &snapshot.assignments[0];
+            assert_eq!(assignment.state, expected, "observation age {age}");
+            assert_eq!(assignment.run_state, Some(RunState::Running));
+            assert_eq!(assignment.pr_url, tr.pr_url);
+            assert!(assignment.evidence.iter().any(|e| e.kind == "handback"));
+            assert!(assignment.evidence.iter().any(|e| e.kind == "observation" && e.detail.contains("repository sweep cadence")));
+            assert_ne!(assignment.state, ContinuityState::Verified);
+        }
+        // Time alone within a window must not churn Journal's observation
+        // fingerprint and replace its expanded assignment DOM every poll.
+        let first = reconcile("XNAUT", std::slice::from_ref(&task), std::slice::from_ref(&r),
+            std::slice::from_ref(&tr), r.last_seen_at + run_control::GRACE_MS + 1);
+        let later = reconcile("XNAUT", std::slice::from_ref(&task), std::slice::from_ref(&r),
+            std::slice::from_ref(&tr), r.last_seen_at + window);
+        assert_eq!(serde_json::to_value(&first.assignments).unwrap(), serde_json::to_value(&later.assignments).unwrap());
+        // The remote allowance cannot extend the separate progress deadline.
+        let at = r.last_progress_at + run_control::PROGRESS_WINDOW_MS + 1;
+        r.last_seen_at = at;
+        assert_eq!(reconcile("XNAUT", &[task], &[r.clone()], &[tr.clone()], at).assignments[0].state, ContinuityState::Stalled);
+        r.state = RunState::Degraded;
+        assert_eq!(reconcile("XNAUT", &[], &[r], &[tr], at).assignments[0].state, ContinuityState::Stalled);
+    }
+    #[test]
+    fn detached_reviewer_freshness_requires_its_exact_current_parent_reservation() {
+        let author = run(); let mut parent = transfer(&author); parent.state = "review".into();
+        let mut reviewer = author.clone(); reviewer.run_id = "review-probe".into();
+        reviewer.agent_handle = "ralph".into(); reviewer.ticket = None; reviewer.branch.clear();
+        reviewer.remote_env = Some("exe-dev".into()); reviewer.worktree_path = "/review/workspace".into();
+        let mut child = transfer(&reviewer); child.state = "running".into(); child.local_branch.clear();
+        child.review_parent = Some(parent.run_id.clone()); child.error = None;
+        child.branch = format!("xnaut/runs/{}", reviewer.run_id);
+        child.artifacts = format!(".xnaut/runs/{}", reviewer.run_id);
+        child.workdir = child.worker.run_directory(&reviewer.run_id);
+        parent.quality = Some(crate::repository_review::Review {
+            state: "running".into(), child: Some(reviewer.run_id.clone()),
+            reviewer: reviewer.agent_handle.clone(), worktree: reviewer.worktree_path.clone(),
+            head: child.source_sha.clone(), ..Default::default()
+        });
+        let window = crate::sweep::TICK.as_millis() as i64 + run_control::GRACE_MS;
+        assert_eq!(observation_window_ms(&reviewer, &[parent.clone(), child.clone()]), window);
+        for case in ["missing", "duplicate", "child", "workspace", "head", "reviewer", "state", "artifacts"] {
+            let mut rows = vec![parent.clone(), child.clone()];
+            match case {
+                "missing" => { rows.remove(0); },
+                "duplicate" => rows.push(parent.clone()),
+                "child" => rows[0].quality.as_mut().unwrap().child = Some("other".into()),
+                "workspace" => rows[0].quality.as_mut().unwrap().worktree = "/other".into(),
+                "head" => rows[0].quality.as_mut().unwrap().head = "b".repeat(40),
+                "reviewer" => rows[0].quality.as_mut().unwrap().reviewer = "other".into(),
+                "state" => rows[0].quality.as_mut().unwrap().state = "blocked".into(),
+                "artifacts" => rows[1].artifacts = ".xnaut/runs/other".into(),
+                _ => unreachable!(),
+            }
+            assert_eq!(observation_window_ms(&reviewer, &rows), run_control::GRACE_MS, "{case}");
+        }
+        let id = reviewer.run_id.clone();
+        let snapshot = reconcile("XNAUT", &[], std::slice::from_ref(&reviewer), &[parent.clone(), child.clone()], reviewer.last_seen_at + window);
+        assert_eq!(snapshot.assignments.iter().find(|a| a.run_id == id).unwrap().state, ContinuityState::Active);
+        let snapshot = reconcile("XNAUT", &[], std::slice::from_ref(&reviewer), &[parent, child], reviewer.last_seen_at + window + 1);
+        assert_eq!(snapshot.assignments.iter().find(|a| a.run_id == id).unwrap().state, ContinuityState::Stalled);
+    }
+    #[test]
+    fn local_unknown_and_mismatched_remote_observations_keep_native_grace() {
+        let mut original = run(); original.remote_env = Some("exe-dev".into());
+        let mut receipt = transfer(&original); receipt.state = "running".into();
+        receipt.local_branch = original.branch.clone(); receipt.error = None;
+        receipt.workdir = receipt.worker.run_directory(&original.run_id);
+        for case in ["local", "unknown_remote", "unadmitted", "refused", "missing", "duplicate", "not_running", "project", "ticket", "owner", "worktree", "branch", "target", "missing_worker", "wrong_worker"] {
+            let mut r = original.clone(); let mut rows = vec![receipt.clone()];
+            match case {
+                "local" => r.remote_env = None,
+                "unknown_remote" => r.remote_env = Some("unknown-provider".into()),
+                "unadmitted" => r.state = RunState::Requested,
+                "refused" => r.admission_refused = true,
+                "missing" => rows.clear(),
+                "duplicate" => rows.push(receipt.clone()),
+                "not_running" => rows[0].state = "review".into(),
+                "project" => rows[0].project = "OTHER".into(),
+                "ticket" => rows[0].ticket = Some("XNAUT-OTHER".into()),
+                "owner" => rows[0].handle = "other".into(),
+                "worktree" => rows[0].local_path = "/other".into(),
+                "branch" => rows[0].local_branch = "other".into(),
+                "target" => rows[0].worker = crate::worker_bootstrap::Target::GitVm { local_path: Path::new(&r.worktree_path).into() },
+                "missing_worker" => rows[0].workdir.clear(),
+                "wrong_worker" => rows[0].workdir = "agents/runs/another".into(),
+                _ => unreachable!(),
+            }
+            let now = r.last_seen_at + run_control::GRACE_MS;
+            assert_eq!(reconcile("XNAUT", &[], std::slice::from_ref(&r), &rows, now).assignments[0].state, ContinuityState::Active, "{case}");
+            let snapshot = reconcile("XNAUT", &[], &[r], &rows, now + 1);
+            assert_eq!(snapshot.assignments[0].state, ContinuityState::Stalled, "{case}");
+        }
+        let mut r = original.clone(); r.last_seen_at = 0;
+        assert_eq!(state_for_run(&r, 1000, run_control::GRACE_MS), ContinuityState::Unknown);
+        r.last_seen_at = 1001;
+        assert_eq!(state_for_run(&r, 1000, run_control::GRACE_MS), ContinuityState::Unknown);
+        // GitVM is also a known repository probe target, only for this checkout.
+        let mut tr = receipt; r = original; r.remote_env = Some("gitvm".into());
+        tr.worker = crate::worker_bootstrap::Target::GitVm { local_path: Path::new(&r.worktree_path).into() };
+        tr.workdir = tr.worker.run_directory(&r.run_id);
+        assert_eq!(observation_window_ms(&r, &[tr]), crate::sweep::TICK.as_millis() as i64 + run_control::GRACE_MS);
     }
     #[test]
     fn process_done_and_legacy_ticket_complete_are_not_verification() {

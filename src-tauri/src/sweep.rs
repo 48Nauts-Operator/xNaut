@@ -76,7 +76,7 @@ fn finish_retry(ticket: &str) {
 /// How often the board is read. Long enough that a busy fleet is not
 /// re-examined constantly, short enough that a handback is picked up while the
 /// owner is still awake.
-const TICK: Duration = Duration::from_secs(180);
+pub(crate) const TICK: Duration = Duration::from_secs(180);
 
 /// Conditions the sweep has already reported, so a standing state is said once
 /// rather than every tick. Both reset when the condition clears, so the next
