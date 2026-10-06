@@ -1,0 +1,71 @@
+name: macOS downloaded production smoke
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact staged production tag to verify
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    name: Production ${{ matrix.arch }} native smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: aarch64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: write # Read the not-yet-published draft assets.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Download the exact production assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p distribution evidence
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > distribution/release.json
+          gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha > distribution/source-sha.txt
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir distribution \
+            --pattern "xNAUT-${TAG#v}-macos-$ARCH.dmg" \
+            --pattern "xNAUT-macos-$ARCH.app.tar.gz" \
+            --pattern "xNAUT-macos-$ARCH.app.tar.gz.sig" --pattern latest.json
+      - name: Verify and run downloaded production app
+        env:
+          TAG: ${{ inputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          brew install openssl@3
+          python3 scripts/macos-release-smoke.py --tag "$TAG" --arch "$ARCH" \
+            --distribution distribution --evidence evidence \
+            --openssl "$(brew --prefix openssl@3)/bin/openssl"
+      - name: Preserve production identity and native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-production-smoke-${{ inputs.tag }}-${{ matrix.arch }}
+          path: |
+            evidence/
+            distribution/release.json
+            distribution/source-sha.txt
+          if-no-files-found: error
+          retention-days: 14

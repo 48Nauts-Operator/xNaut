@@ -310,6 +310,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" updater/latest.json --repo "$GITHUB_REPOSITORY" --clobber
 
+  macos-production-smoke:
+    name: Downloaded macOS production smoke
+    needs: assemble-updater
+    if: ${{ !inputs.update_homebrew_only }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/macos-smoke.yml
+    with:
+      tag: ${{ github.ref_name }}
+
   # Keep the Homebrew cask in step with the release. It drifted to 1.9.4 while
   # four versions shipped, so brew users sat on a build without either half of
   # the long-running freeze fix (XNAUT-68). Nobody notices a stale cask, which is
