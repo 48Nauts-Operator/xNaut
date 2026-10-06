@@ -882,6 +882,30 @@ fn accept_repair_publication(
 // Exact historical rejection repaired by applying bound repair inheritance
 // before the fresh-task source-branch gate. Other preparation errors stay held.
 const REPAIR_SOURCE_BRANCH_REFUSAL: &str = "The task's starting commit is not on a published source branch. Push that branch to the project's repository before starting the task; refusing a PR with unrelated source changes.";
+const REPAIR_WRITE_PROBE_REFUSAL: &str = "The worker can read the repository but its task-branch write check failed. Check repository write permissions. No agent was started.";
+fn repair_write_probe_refused(run: &crate::run_control::RunManifest) -> bool {
+    crate::run_control::prelaunch_refused(run)
+        && run.prelaunch_failure.as_ref().is_some_and(|p| p.phase == crate::run_control::PrelaunchPhase::RepositoryStaging)
+        && run.last_signal.strip_prefix("admission failed: ") == Some(REPAIR_WRITE_PROBE_REFUSAL)
+}
+/// This access probe fails before staging, but after its immutable transfer
+/// reservation. No other staging failure or transfer shape permits a retry.
+fn repair_refusal_receipt_matches(t: &Transfer, q: &Review, run: &crate::run_control::RunManifest, rows: &[Transfer]) -> bool {
+    let receipts: Vec<_> = rows.iter().filter(|r| r.run_id == run.run_id).collect();
+    if !repair_write_probe_refused(run) { return receipts.is_empty(); }
+    let [child] = receipts.as_slice() else { return false; };
+    child.state == "preparation_failed" && child.error.as_deref() == Some(REPAIR_WRITE_PROBE_REFUSAL)
+        && child.repair_parent.as_deref() == Some(t.run_id.as_str()) && child.review_parent.is_none()
+        && child.quality.is_none() && !child.filed && child.worker_remote.is_none()
+        && child.project == t.project && child.ticket == t.ticket && child.handle == t.handle
+        && child.local_path == t.local_path && child.local_branch == t.local_branch
+        && child.remote == t.remote && child.desktop_remote == t.desktop_remote
+        && child.base == t.base && child.branch == t.branch && child.pr_url == t.pr_url && t.pr_url.is_some()
+        && child.source_sha == q.head && child.workdir == child.worker.run_directory(&run.run_id)
+        && child.artifacts == format!(".xnaut/runs/{}",run.run_id)
+        && serde_json::to_value(&child.worker).ok() == serde_json::to_value(&t.worker).ok()
+        && run.remote_env.as_deref() == Some(match child.worker { crate::worker_bootstrap::Target::ExeDev => "exe-dev", _ => "gitvm" })
+}
 fn repair_preparation_refused(run: &crate::run_control::RunManifest) -> bool {
     crate::run_control::prelaunch_refused(run)
         && run.prelaunch_failure.as_ref().is_some_and(|p| p.phase == crate::run_control::PrelaunchPhase::RepositoryPreparation)
@@ -890,7 +914,7 @@ fn repair_preparation_refused(run: &crate::run_control::RunManifest) -> bool {
 fn repair_retry_refused(run: &crate::run_control::RunManifest) -> bool {
     (crate::run_control::spend_prelaunch_refused(run)
         && run.last_signal.strip_prefix("admission failed: ").is_some_and(crate::spend::is_concurrent_refusal))
-        || repair_preparation_refused(run)
+        || repair_preparation_refused(run) || repair_write_probe_refused(run)
 }
 /// Only a recorded, supported refusal before execution may reopen a repair.
 /// Missing transfer/process evidence alone is not a retry authorization.
@@ -907,7 +931,7 @@ fn repair_prelaunch_refusal_proven(
     let matching: Vec<_> = runs.iter().filter(|r| r.run_id == id).collect();
     let [run] = matching.as_slice() else { return None; };
     let error = run.last_signal.strip_prefix("admission failed: ")?;
-    if !crate::spend::is_concurrent_refusal(error) && error != REPAIR_SOURCE_BRANCH_REFUSAL { return None; }
+    if !crate::spend::is_concurrent_refusal(error) && error != REPAIR_SOURCE_BRANCH_REFUSAL && error != REPAIR_WRITE_PROBE_REFUSAL { return None; }
     let bound = |e: &LoopEvent| e.head == q.head && e.base == q.base
         && e.author_child.as_deref() == Some(id) && e.review_child == q.child
         && e.predecessor_run_id.as_deref() == Some(q.author_run.as_deref().unwrap_or(&t.run_id));
@@ -950,10 +974,11 @@ fn repair_prelaunch_refusal_proven(
         || proof.project != t.project || proof.ticket != t.ticket || t.ticket.is_none()
         || proof.agent_handle != t.handle || proof.worktree_path != t.local_path
         || proof.branch != t.local_branch || t.local_branch.is_empty() || proof.last_commit != q.head
-        || rows.iter().any(|r| r.run_id == id)
+        || !repair_refusal_receipt_matches(t,q,&proof,rows)
     { return None; }
     let author = q.author_run.as_deref().unwrap_or(&t.run_id);
     let mut preparation_refusals = usize::from(repair_preparation_refused(&proof));
+    let mut write_probe_refusals = usize::from(repair_write_probe_refused(&proof));
     let mut current = *run;
     let mut seen = std::collections::BTreeSet::new();
     loop {
@@ -974,11 +999,12 @@ fn repair_prelaunch_refusal_proven(
         refused_parent.state = RunState::Failed;
         if !repair_retry_refused(&refused_parent)
             || parent.last_commit != q.head || parent.output_path.is_some()
-            || rows.iter().any(|r| r.run_id == parent.run_id)
+            || !repair_refusal_receipt_matches(t,q,&refused_parent,rows)
         { return None; }
         preparation_refusals += usize::from(repair_preparation_refused(&refused_parent));
+        write_probe_refusals += usize::from(repair_write_probe_refused(&refused_parent));
         // A persistent preparation problem is not an endless free retry loop.
-        if preparation_refusals > 1 { return None; }
+        if preparation_refusals > 1 || write_probe_refusals > 1 { return None; }
         current = *parent;
     }
     Some((*run).clone())
@@ -999,6 +1025,16 @@ fn reserve_after_repair_refusal_at(
         || git(tree, &["rev-parse", "HEAD"])? != q.head
         || !git(tree, &["status", "--porcelain"])?.is_empty()
     { return Err("Refused repair worktree changed; preserve it for owner recovery".into()); }
+    if refused.prelaunch_failure.as_ref().is_some_and(|p| p.phase == crate::run_control::PrelaunchPhase::RepositoryStaging) {
+        // A stale/non-fast-forward dry-run is only plausible when this exact
+        // existing PR branch still names the reviewed revision. A missing,
+        // changed, or unreadable ref cannot authorize automatic recovery.
+        let reference = format!("refs/heads/{}",t.branch);
+        let remote = transfer::transfer_desktop_remote(t)?;
+        let refs = git(tree,&["ls-remote","--exit-code","--heads",&remote,&reference])?;
+        let expected = format!("{}\t{}",q.head,reference);
+        if refs != expected { return Err("Repair write-probe recovery requires the unchanged published PR branch at the reviewed head".into()); }
+    }
     let proof = crate::run_control::Proofs {
         pid_absent: true, session_known: true, capture_known: true, capture_quiet: true,
         worktree_exists: true, branch_matches: true, commit: q.head.clone(), ..Default::default()
@@ -1027,6 +1063,8 @@ fn reserve_after_repair_refusal_at(
     let reason = q.message.clone();
     let evidence = if refused.prelaunch_failure.as_ref().is_some_and(|p| p.phase == crate::run_control::PrelaunchPhase::RepositoryPreparation) {
         json!({"pre_execution_preparation_refusal":refused})
+    } else if refused.prelaunch_failure.as_ref().is_some_and(|p| p.phase == crate::run_control::PrelaunchPhase::RepositoryStaging) {
+        json!({"pre_execution_write_probe_refusal":refused,"published_branch":t.branch,"published_head":q.head})
     } else { json!({"pre_execution_capacity_refusal":refused}) };
     event(t, q, &reason, Some(evidence));
     t.quality = Some(q.clone());
@@ -1657,7 +1695,7 @@ async fn advance_inner(
         reconcile_author_outcome(t, q, rows)?;
     }
     if q.state == "blocked" && (crate::spend::is_concurrent_refusal(&q.message)
-        || q.message == REPAIR_SOURCE_BRANCH_REFUSAL || q.message == REVIEW_PAUSED_REASON) {
+        || q.message == REPAIR_SOURCE_BRANCH_REFUSAL || q.message == REPAIR_WRITE_PROBE_REFUSAL || q.message == REVIEW_PAUSED_REASON) {
         let registry = crate::agents::registry_dir()?;
         if repair_prelaunch_refusal_proven(t, q, rows, &repair_registry_rows(&registry)?).is_some() {
             // The existing historical rejection remains in events. The repair
@@ -2862,6 +2900,86 @@ mod repair_loop_tests {
         f.save(); f.reload();
         assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&rows,&repair_registry_rows(&f.registry).unwrap()).is_none(),
             "a repeated preparation problem must remain held instead of minting free retries");
+    }
+
+    #[test]
+    fn repair_write_probe_recovery_requires_exact_failed_receipt_and_live_branch_once() {
+        let mut f = Fixture::new();
+        let red = f.review("review-write-probe",1);
+        let author = f.parent.run_id.clone();
+        run_control::update_in(&f.registry,&author,|r|r.remote_env = Some("exe-dev".into())).unwrap();
+        let proof = f.proof();
+        reserve_repair_at(&f.store,&f.registry,&mut f.parent,&mut f.q,&author,&proof,2000).unwrap();
+        let mut rows = vec![f.parent.clone(),red];
+        for (i,phase,reason) in [
+            (0,run_control::PrelaunchPhase::SpendAdmission,"spend ceiling: 3 agent sessions are already live and the concurrent cap is 2. Wait for one to finish, or raise the cap (spend-ceiling.json)."),
+            (1,run_control::PrelaunchPhase::RepositoryPreparation,REPAIR_SOURCE_BRANCH_REFUSAL),
+        ] {
+            let pending = run_control::load_manifest_in(&f.registry,f.q.repair_child.as_deref().unwrap()).unwrap();
+            run_control::refuse_prelaunch_in(&f.registry,pending,phase,reason).unwrap();
+            f.q.state = "blocked".into(); f.q.message = reason.into(); event(&f.parent,&mut f.q,reason,None);
+            f.save(); f.reload();
+            reserve_after_repair_refusal_at((&f.store,&f.registry),&mut f.parent,&mut f.q,&rows,3000+i*1000,|_|Ok(())).unwrap();
+        }
+        let refused_id = f.q.repair_child.clone().unwrap();
+        let pending = run_control::load_manifest_in(&f.registry,&refused_id).unwrap();
+        run_control::refuse_prelaunch_in(&f.registry,pending,run_control::PrelaunchPhase::RepositoryStaging,REPAIR_WRITE_PROBE_REFUSAL).unwrap();
+        let failed = Transfer { run_id:refused_id.clone(),repair_parent:Some(author.clone()),review_parent:None,
+            source_sha:f.q.head.clone(),quality:None,filed:false,worker_remote:None,
+            workdir:f.parent.worker.run_directory(&refused_id),artifacts:format!(".xnaut/runs/{refused_id}"),
+            state:"preparation_failed".into(),error:Some(REPAIR_WRITE_PROBE_REFUSAL.into()),..f.parent.clone() };
+        transfer::save_at(&f.store,&failed).unwrap();
+        let failed_path = f.store.join(format!("{refused_id}.json"));
+        let original_receipt = std::fs::read(&failed_path).unwrap();
+        rows.push(failed.clone());
+        f.q.state = "blocked".into(); f.q.message = REPAIR_WRITE_PROBE_REFUSAL.into();
+        event(&f.parent,&mut f.q,REPAIR_WRITE_PROBE_REFUSAL,None); f.save(); f.reload();
+        let rejected = f.q.clone();
+        let runs = repair_registry_rows(&f.registry).unwrap();
+        assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&rows,&runs).is_some());
+        assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&rows[..2],&runs).is_none());
+        let mut duplicate = rows.clone(); duplicate.push(failed.clone());
+        assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&duplicate,&runs).is_none());
+        for (field,value) in [("state",json!("running")),("worker_remote",json!("ssh://unexpected/repo")),
+            ("filed",json!(true)),("quality",serde_json::to_value(Review::default()).unwrap()),
+            ("error",json!("provider failed")),("source_sha",json!("f".repeat(40))),
+            ("branch",json!("other")),("pr_url",json!("https://fixture/pulls/99")),("workdir",json!("other")),
+            ("project",json!("OTHER")),("ticket",json!("OTHER-1")),("repair_parent",json!("another-author"))] {
+            let mut receipt = serde_json::to_value(&failed).unwrap(); receipt[field] = value;
+            let mut altered = rows.clone(); altered[2] = serde_json::from_value(receipt).unwrap();
+            assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&altered,&runs).is_none(),"{field}");
+        }
+        for case in ["phase","pid"] {
+            let mut altered = runs.clone(); let run = altered.iter_mut().find(|r|r.run_id == refused_id).unwrap();
+            if case == "phase" { run.prelaunch_failure.as_mut().unwrap().phase = run_control::PrelaunchPhase::RepositoryPreparation; }
+            else { run.pid = Some(42); }
+            assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&rows,&altered).is_none(),"{case}");
+        }
+        // Native proof alone cannot authorize an unrelated/moved remote branch.
+        git(&f.remote,&["update-ref","refs/heads/task",&f.q.base]).unwrap();
+        assert!(reserve_after_repair_refusal_at((&f.store,&f.registry),&mut f.parent,&mut f.q,&rows,6000,|_|Ok(())).is_err());
+        assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(),4);
+        git(&f.remote,&["update-ref","refs/heads/task",&f.q.head]).unwrap();
+        reserve_after_repair_refusal_at((&f.store,&f.registry),&mut f.parent,&mut f.q,&rows,7000,|_|Ok(())).unwrap();
+        let successor = f.q.repair_child.clone().unwrap();
+        assert_ne!(successor,refused_id); assert_eq!(f.q.repair_attempts,0);
+        assert_eq!(f.q.report,rejected.report); assert_eq!(f.q.head,rejected.head);
+        assert_eq!(f.q.events.len(),rejected.events.len()+1);
+        assert_eq!(f.q.events.last().unwrap().evidence.as_ref().unwrap()["published_head"],f.q.head);
+        assert_eq!(std::fs::read(&failed_path).unwrap(),original_receipt);
+        f.q = rejected; f.save(); f.reload();
+        reserve_after_repair_refusal_at((&f.store,&f.registry),&mut f.parent,&mut f.q,&rows,8000,
+            |_|panic!("restart must reuse native reservation")).unwrap();
+        assert_eq!(f.q.repair_child.as_deref(),Some(successor.as_str()));
+        assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(),5);
+        let pending = run_control::load_manifest_in(&f.registry,&successor).unwrap();
+        run_control::refuse_prelaunch_in(&f.registry,pending,run_control::PrelaunchPhase::RepositoryStaging,REPAIR_WRITE_PROBE_REFUSAL).unwrap();
+        rows.push(Transfer {run_id:successor.clone(),workdir:failed.worker.run_directory(&successor),
+            artifacts:format!(".xnaut/runs/{successor}"),..failed});
+        f.q.state = "blocked".into(); f.q.message = REPAIR_WRITE_PROBE_REFUSAL.into();
+        event(&f.parent,&mut f.q,REPAIR_WRITE_PROBE_REFUSAL,None); f.save(); f.reload();
+        assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&rows,&repair_registry_rows(&f.registry).unwrap()).is_none(),
+            "one write-probe recovery does not authorize repeated permission failures");
     }
 
     /// XNAUT-465: replay the actual reservation -> typed spend refusal ->
