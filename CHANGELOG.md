@@ -15,6 +15,7 @@ All notable changes to xNAUT are documented in this file.
 - Recover project and worker context when returning to Agent conversations, keeping historical claims distinct from current verification evidence.
 - Prevent hidden native Browser views from waiting indefinitely for animation frames. Closing or switching tabs during creation cannot leave invalid entries or reactivate an older selection.
 - Keep the native control bridge attached to the trusted main webview after a Browser child is created. Help and all Settings entry points settle their animations correctly in background native views.
+- Preserve tabs opened during startup instead of replacing their selection with delayed Mesh navigation. Snippet Run requires a valid focused terminal before sending a command.
 
 ### Release checks
 - Require complete UI evidence bound to the tested source and executable, with a real launch receipt. Windows checks include an upgrade from the previous stable MSI; fresh macOS runners verify the downloaded DMG and updater app contain the same signed executable before native testing.
