@@ -360,11 +360,20 @@ mod tests {
 
     #[tokio::test]
     async fn git_grep_fallback_matches_triage_title_alternation() {
-        let dir = tempfile::tempdir().unwrap();
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("xnaut-git-grep-{}", uuid::Uuid::new_v4())));
+        let dir = &scratch.0;
+        std::fs::create_dir_all(dir).unwrap();
         let git = |args: &[&str]| {
             let output = std::process::Command::new("git")
                 .args(args)
-                .current_dir(dir.path())
+                .current_dir(dir)
                 .output()
                 .unwrap();
             assert!(
@@ -374,23 +383,19 @@ mod tests {
             );
         };
         git(&["init", "--quiet"]);
+        std::fs::write(dir.join("calc.py"), "def fee(cents):\n    return 0\n").unwrap();
         std::fs::write(
-            dir.path().join("calc.py"),
-            "def fee(cents):\n    return 0\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("README.md"),
+            dir.join("README.md"),
             "# Fee\n\nDocumented rounding contract: integer half up.\n",
         )
         .unwrap();
-        std::fs::write(dir.path().join("unrelated.txt"), "Unrelated content\n").unwrap();
+        std::fs::write(dir.join("unrelated.txt"), "Unrelated content\n").unwrap();
         git(&["add", "calc.py", "README.md", "unrelated.txt"]);
 
         // Exact keyword alternation generated from the live XNAUT-464 finding.
         // Call the fallback directly so an installed rg cannot hide a regression.
         let query = "calc|return|violates|documented|rounding|contract";
-        let result = run_git_grep(dir.path(), query, &SearchOpts::default(), 20)
+        let result = run_git_grep(dir, query, &SearchOpts::default(), 20)
             .await
             .unwrap();
         assert_eq!(result.backend, "git-grep");
