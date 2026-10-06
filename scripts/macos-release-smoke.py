@@ -20,6 +20,7 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -178,6 +179,90 @@ def runtime_errors(config):
             )
 
 
+def local_providers_only(providers):
+    # Production's first-load UI migration adds these local, credential-free
+    # choices even when settings.json began with an empty registry.
+    for provider in providers:
+        endpoint = urllib.parse.urlparse(provider.get("endpoint", ""))
+        require(
+            provider.get("name") in ("lmstudio", "ollama", "nautgate")
+            and not provider.get("has_credential")
+            and endpoint.scheme in ("http", "https")
+            and endpoint.hostname in ("localhost", "127.0.0.1", "::1")
+            and endpoint.username is None
+            and endpoint.password is None
+            and not endpoint.query
+            and not endpoint.fragment,
+            "Fresh smoke profile contains a nonlocal or credentialed provider",
+        )
+
+
+def code_hash(signing):
+    values = re.findall(r"^CDHash=([a-fA-F0-9]+)$", signing, re.MULTILINE)
+    require(len(values) == 1, "Expected one application CodeDirectory hash")
+    return values[0].lower()
+
+
+def dmg_equivalence(dmg, tested_app, version, tested_signing):
+    mount = Path(tempfile.mkdtemp(prefix="xnaut-release-dmg-")).resolve()
+    attached = False
+    try:
+        result = subprocess.run(
+            [
+                "hdiutil",
+                "attach",
+                "-readonly",
+                "-nobrowse",
+                "-noautoopen",
+                "-mountpoint",
+                str(mount),
+                "-plist",
+                str(dmg),
+            ],
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+        attached = True
+        mounts = [
+            item.get("mount-point")
+            for item in plistlib.loads(result.stdout).get("system-entities", [])
+            if item.get("mount-point")
+        ]
+        require(mounts == [str(mount)], "DMG attached outside its owned mount point")
+        apps = list(mount.glob("*.app"))
+        require(
+            len(apps) == 1 and not apps[0].is_symlink(),
+            "Expected exactly one application in the DMG",
+        )
+        app = apps[0]
+        info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+        require(
+            info.get("CFBundleIdentifier") == IDENTIFIER
+            and info.get("CFBundleShortVersionString") == version,
+            "DMG application identity/version differs from tested updater application",
+        )
+        command("codesign", "--verify", "--deep", "--strict", str(app))
+        signing = command("codesign", "-dvv", str(app))
+        binary_hash = digest(app / "Contents/MacOS/xnaut")
+        require(
+            binary_hash == digest(tested_app / "Contents/MacOS/xnaut")
+            and code_hash(signing) == code_hash(tested_signing),
+            "DMG and tested updater application contain different signed executable bits",
+        )
+        return {
+            "binary_sha256": binary_hash,
+            "cdhash": code_hash(signing),
+            "mounted_readonly": True,
+        }
+    finally:
+        # This path was newly created by this call, never a caller/user mount.
+        # Preserve it if detach fails; do not recursively remove a mounted disk.
+        if attached or mount.is_mount():
+            command("hdiutil", "detach", str(mount))
+        mount.rmdir()
+
+
 class Bridge:
     def __init__(self, port, token, log, process):
         self.base = f"http://127.0.0.1:{port}"
@@ -241,7 +326,8 @@ def native_checks(bridge, version, project_root, record):
       const switches=await window.__TAURI__.core.invoke('kill_switches_get');
       return {version,health,project_root:settings.project_root,role:settings.instance.role,
         pm_enabled:settings.project_management.enabled,forges:settings.forges.length,
-        providers:settings.llm_providers.length,read_only:switches.read_only};
+        providers:settings.llm_providers.map(p=>({name:p.name,endpoint:p.endpoint,has_credential:!!p.api_key})),
+        default_has_credential:!!settings.llm.api_key,read_only:switches.read_only};
     })()""")
     require(
         value["version"] == version
@@ -250,9 +336,10 @@ def native_checks(bridge, version, project_root, record):
         and value["read_only"]
         and not value["pm_enabled"]
         and value["forges"] == 0
-        and value["providers"] == 0,
+        and not value["default_has_credential"],
         "Native version/settings do not match the production smoke fixture",
     )
+    local_providers_only(value["providers"])
     record("native_ipc", value)
     value = bridge.evaluate("""(async()=>{
       const panel=document.getElementById('settings-panel');
@@ -411,6 +498,7 @@ def main():
                 "application_gatekeeper": command(
                     "spctl", "-a", "-vvv", "-t", "execute", str(app)
                 ),
+                "dmg_equivalence": dmg_equivalence(dmg, app, args.tag[1:], signing),
             },
         )
         config.mkdir(mode=0o700)

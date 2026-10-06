@@ -3,6 +3,8 @@
 import importlib.util
 import json
 import os
+import plistlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -110,7 +112,8 @@ class ProductionSmokeTests(unittest.TestCase):
                         "read_only": True,
                         "pm_enabled": False,
                         "forges": 0,
-                        "providers": 0,
+                        "providers": [],
+                        "default_has_credential": False,
                     }
                 return {"ok": True}
 
@@ -163,6 +166,101 @@ class ProductionSmokeTests(unittest.TestCase):
             (root / "rust-panics.log").write_text("PANIC in background coordinator\n")
             with self.assertRaisesRegex(RuntimeError, "background panic"):
                 SMOKE.runtime_errors(root)
+
+    def test_first_load_local_provider_defaults_are_allowed_without_credentials(self):
+        defaults = [
+            {"name": name, "endpoint": endpoint, "has_credential": False}
+            for name, endpoint in [
+                ("lmstudio", "http://localhost:1234/v1"),
+                ("ollama", "http://localhost:11434/v1"),
+                ("nautgate", "http://localhost:8090/v1"),
+            ]
+        ]
+        SMOKE.local_providers_only(defaults)
+        for changed in [
+            {"name": "openai"},
+            {"endpoint": "https://remote.example/v1"},
+            {"endpoint": "http://token@localhost:1234/v1"},
+            {"endpoint": "http://localhost:1234/v1?api_key=secret"},
+            {"endpoint": "http://localhost:1234/v1#secret"},
+            {"has_credential": True},
+        ]:
+            with self.assertRaisesRegex(RuntimeError, "nonlocal or credentialed"):
+                SMOKE.local_providers_only([{**defaults[0], **changed}])
+
+    def test_readonly_dmg_equivalence_detaches_on_success_and_mismatch(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            tested = root / "tested.app"
+            (tested / "Contents/MacOS").mkdir(parents=True)
+            (tested / "Contents/MacOS/xnaut").write_bytes(b"same executable")
+            for fault in (None, "version", "binary", "cdhash", "signature"):
+                with self.subTest(fault=fault):
+                    mounts, calls = [], []
+
+                    def attach(args, fault=fault, mounts=mounts, **_):
+                        self.assertIn("-readonly", args)
+                        self.assertIn("-nobrowse", args)
+                        self.assertIn("-noautoopen", args)
+                        mount = Path(args[args.index("-mountpoint") + 1])
+                        mounts.append(mount)
+                        app = mount / "xNAUT.app"
+                        (app / "Contents/MacOS").mkdir(parents=True)
+                        (app / "Contents/MacOS/xnaut").write_bytes(
+                            b"different" if fault == "binary" else b"same executable"
+                        )
+                        (app / "Contents/Info.plist").write_bytes(
+                            plistlib.dumps(
+                                {
+                                    "CFBundleIdentifier": SMOKE.IDENTIFIER,
+                                    "CFBundleShortVersionString": "1.29.3"
+                                    if fault == "version"
+                                    else "1.30.0",
+                                }
+                            )
+                        )
+                        return subprocess.CompletedProcess(
+                            args,
+                            0,
+                            stdout=plistlib.dumps(
+                                {"system-entities": [{"mount-point": str(mount)}]}
+                            ),
+                        )
+
+                    def command(*args, fault=fault, mounts=mounts, calls=calls):
+                        calls.append(args)
+                        if args[0] == "hdiutil":
+                            self.assertEqual(
+                                args, ("hdiutil", "detach", str(mounts[0]))
+                            )
+                            shutil.rmtree(mounts[0] / "xNAUT.app")
+                        elif "--verify" in args and fault == "signature":
+                            raise RuntimeError("bad signature")
+                        return "CDHash=abcdef" if fault != "cdhash" else "CDHash=123456"
+
+                    with (
+                        patch.object(SMOKE.subprocess, "run", side_effect=attach),
+                        patch.object(SMOKE, "command", side_effect=command),
+                    ):
+                        if fault:
+                            with self.assertRaises(RuntimeError):
+                                SMOKE.dmg_equivalence(
+                                    root / "asset.dmg",
+                                    tested,
+                                    "1.30.0",
+                                    "CDHash=abcdef",
+                                )
+                        else:
+                            self.assertTrue(
+                                SMOKE.dmg_equivalence(
+                                    root / "asset.dmg",
+                                    tested,
+                                    "1.30.0",
+                                    "CDHash=abcdef",
+                                )["mounted_readonly"]
+                            )
+                    self.assertEqual(calls[-1], ("hdiutil", "detach", str(mounts[0])))
+                    self.assertFalse(mounts[0].exists())
 
 
 if __name__ == "__main__":
