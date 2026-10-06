@@ -2,6 +2,26 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.0] - 2026-10-06
+
+### Added
+- Approved work groups retain a durable ticket-bound queue, refill available capacity within configured limits, and reconcile existing runs after restart. Stop further dispatch preserves running work and its evidence.
+- Evidence-backed findings triage records repository references, related issue candidates and a proposed disposition. Approval is bound to the current finding scope and evidence before automatic or agent-requested dispatch.
+- Independent review can send a failed implementation through bounded repair on the same branch and pull request, followed by fresh verification of the new commit. Missing checks, unfinished work and exhausted retries remain visibly blocked.
+- Project continuity combines saved conversations, tickets, worker receipts and repository evidence. The Journal records coordinator, triage, review and repair outcomes with attribution and links, and reconstructs current work after restart.
+
+### Fixed
+- Enforce cross-process launch, group and review locks on Windows as well as macOS. Preserve typed launch refusals and retry history without treating refused launches as running workers or completed repair attempts.
+- Recover project and worker context when returning to Agent conversations, keeping historical claims distinct from current verification evidence.
+- Prevent hidden native Browser views from waiting indefinitely for animation frames. Closing or switching tabs during creation cannot leave invalid entries or reactivate an older selection.
+- Keep the native control bridge attached to the trusted main webview after a Browser child is created. Help and all Settings entry points settle their animations correctly in background native views.
+
+### Release checks
+- Require complete UI evidence bound to the tested source and executable, with a real launch receipt. Windows checks include an upgrade from the previous stable MSI; fresh macOS runners verify the downloaded DMG and updater app contain the same signed executable before native testing.
+
+### Configuration
+- Existing project permissions, spend and concurrency limits still apply. Triage needs a configured model; automatic polling and merging are not enabled by this update. Verification depends on each project's checks and available services. Related issue candidates assist review and do not establish a shared root cause.
+
 ## [1.29.3] - 2026-10-03
 
 ### Added

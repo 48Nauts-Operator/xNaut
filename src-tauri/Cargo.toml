@@ -1,6 +1,6 @@
 [package]
 name = "xnaut"
-version = "1.29.3"
+version = "1.30.0"
 description = "xNAUT - AI-Powered Native Terminal"
 authors = ["NautCode Team"]
 license = "MIT"
