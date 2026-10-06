@@ -1,11 +1,12 @@
-name: Windows install smoke
+name: Windows install and upgrade smoke
 
 # Turns "the Windows leg compiled" into "the Windows build installs and opens".
 # v1.13.4 shipped with no .exe and v1.16.0 died at link time; both were green
 # enough to ship and only visible by reading CI. The "Rename artifacts" step in
 # release.yml copies the bundle with `|| true`, so a missing installer still
-# leaves the pipeline green. This downloads what was actually PUBLISHED,
-# installs it, launches it, and photographs the result.
+# leaves the pipeline green. This installs the previous published stable MSI,
+# upgrades to the requested candidate (which may be a draft), launches it, and
+# photographs the result. MSI upgrade is not updater-plugin discovery proof.
 #
 # Every step fails loudly. A quiet leg here is the bug, not the fix.
 #
@@ -19,29 +20,29 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: Published tag to smoke-test, e.g. v1.26.0
+        description: Candidate tag to upgrade to, including a staged draft, e.g. v1.30.0
         required: true
         type: string
   workflow_dispatch:
     inputs:
       tag:
-        description: Published tag to smoke-test, e.g. v1.26.0
+        description: Candidate tag to upgrade to, including a staged draft, e.g. v1.30.0
         required: true
         type: string
 
 jobs:
   smoke:
-    name: Install, launch, screenshot
+    name: Upgrade, verify, launch, screenshot
     runs-on: windows-latest
     # Windows runners default to PowerShell. Every step here is PowerShell on
     # purpose: bash syntax in a Windows step is what broke the v1.13.1 build leg
     # before it compiled anything.
     permissions:
       contents: write # Allows downloading the staged draft before publication.
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
-      - name: Download the published Windows installer
+      - name: Download the candidate Windows installer
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
@@ -53,19 +54,109 @@ jobs:
             Write-Host "::error::No xNAUT-*-windows-x64.msi on $env:TAG. The Windows build produced no installer, which is the silent failure this gate exists to catch."
             exit 1
           }
-          $msi = Get-ChildItem dl -Filter *.msi | Select-Object -First 1
-          if (-not $msi) {
-            Write-Host "::error::gh reported success but no .msi landed in dl/."
+          $installers = @(Get-ChildItem dl -Filter *.msi)
+          if ($installers.Count -ne 1) {
+            Write-Host "::error::Expected exactly one candidate MSI in dl/."
             exit 1
           }
+          $msi = $installers[0]
           Write-Host "Installer: $($msi.Name) ($([math]::Round($msi.Length / 1MB, 1)) MB)"
           "MSI=$($msi.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Install silently
+      - name: Install the previous published stable baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Stable-Version([string]$tag) {
+            if ($tag -cmatch '^v?(\d+\.\d+\.\d+)$') { return [version]$Matches[1] }
+            return $null
+          }
+          function Select-Baseline($releases, [version]$candidateVersion, [string]$candidateTag) {
+            $older = @(foreach ($release in $releases) {
+              if ($release.draft -or $release.prerelease -or -not $release.published_at -or $release.tag_name -eq $candidateTag) { continue }
+              $version = Stable-Version $release.tag_name
+              if ($null -ne $version -and $version -lt $candidateVersion) {
+                [pscustomobject]@{ Tag = $release.tag_name; Version = $version }
+              }
+            })
+            $baseline = $older | Sort-Object Version -Descending | Select-Object -First 1
+            if (-not $baseline) { throw "No published stable version older than $candidateTag; upgrade smoke cannot be skipped." }
+            return $baseline
+          }
+          # Exercise the actual selector against future releases and old reruns.
+          $fixture = @(foreach ($tag in @('v1.9.0', 'v1.29.3', 'v1.30.0', 'v1.31.0', 'v1.29.4', 'v1.29.5', 'v1.29.6', 'v1.29.7-rc.1')) {
+            [pscustomobject]@{ tag_name = $tag; draft = $tag -eq 'v1.29.4'; prerelease = $tag -eq 'v1.29.5'; published_at = $(if ($tag -ne 'v1.29.6') { '2026-10-01' }) }
+          })
+          if ((Select-Baseline $fixture ([version]'1.30.0') 'v1.30.0').Tag -ne 'v1.29.3') { throw 'Stable baseline selection regression.' }
+          if ((Select-Baseline $fixture ([version]'1.29.3') 'v1.29.3').Tag -ne 'v1.9.0') { throw 'Old rerun would downgrade a newer baseline.' }
+          $missingRefused = $false
+          try { Select-Baseline $fixture ([version]'1.0.0') 'v1.0.0' | Out-Null }
+          catch { if ($_.Exception.Message -notlike 'No published stable version*') { throw }; $missingRefused = $true }
+          if (-not $missingRefused) { throw 'Missing baseline was silently accepted.' }
+          $candidateVersion = Stable-Version $env:TAG
+          if ($null -eq $candidateVersion) { throw "Candidate tag must name a stable numeric version: $env:TAG" }
+          $pages = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate published releases to select an upgrade baseline.' }
+          $releases = @(foreach ($page in ($pages | ConvertFrom-Json)) { foreach ($release in $page) { $release } })
+          $baseline = Select-Baseline $releases $candidateVersion $env:TAG
+          New-Item -ItemType Directory -Force -Path baseline | Out-Null
+          gh release download $baseline.Tag --repo $env:GITHUB_REPOSITORY --pattern 'xNAUT-*-windows-x64.msi' --dir baseline
+          if ($LASTEXITCODE -ne 0) { throw "Stable baseline $($baseline.Tag) has no downloadable Windows MSI." }
+          $files = @(Get-ChildItem baseline -Filter *.msi)
+          if ($files.Count -ne 1) { throw 'Expected exactly one baseline MSI.' }
+          $baselineMsi = $files[0].FullName
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          function Msi-Properties([string]$path) {
+            $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($path, 0))
+            $values = @{}
+            try {
+              foreach ($name in @('ProductVersion', 'ProductCode', 'UpgradeCode')) {
+                $query = 'SELECT `Value` FROM `Property` WHERE `Property` = ''' + $name + ''''
+                $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($query))
+                try {
+                  $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+                  $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+                  if (-not $record) { throw "Missing MSI property $name in $path" }
+                  try { $values[$name] = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, @(1)) }
+                  finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) }
+                } finally {
+                  $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) | Out-Null
+                  [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+                }
+              }
+            } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) }
+            return $values
+          }
+          $old = Msi-Properties $baselineMsi
+          $new = Msi-Properties $env:MSI
+          if ([version]$old.ProductVersion -ne $baseline.Version -or [version]$new.ProductVersion -ne $candidateVersion) {
+            throw 'MSI ProductVersion does not match its release tag.'
+          }
+          if ($old.UpgradeCode -ne $new.UpgradeCode -or $old.ProductCode -eq $new.ProductCode) {
+            throw 'Baseline and candidate do not form a distinct-product MSI upgrade with the same UpgradeCode.'
+          }
+          "BASELINE_MSI=$baselineMsi" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "BASELINE_PRODUCT=$($old.ProductCode)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CANDIDATE_PRODUCT=$($new.ProductCode)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CANDIDATE_VERSION=$($new.ProductVersion)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "UPGRADE_CODE=$($new.UpgradeCode)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          @{ baseline_tag = $baseline.Tag; candidate_tag = $env:TAG; baseline = $old; candidate = $new } |
+            ConvertTo-Json -Depth 4 | Set-Content upgrade-selection.json
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList `
+            '/i', "`"$baselineMsi`"", '/qn', '/norestart', '/l*v', "`"$PWD\baseline-install.log`""
+          if ($p.ExitCode -notin @(0, 3010)) { throw "Baseline install failed: $($p.ExitCode). See baseline-install.log." }
+          $state = $installer.GetType().InvokeMember('ProductState', 'GetProperty', $null, $installer, @($old.ProductCode))
+          $installedVersion = $installer.GetType().InvokeMember('ProductInfo', 'GetProperty', $null, $installer, @($old.ProductCode, 'VersionString'))
+          if ($state -ne 5 -or [version]$installedVersion -ne $baseline.Version) { throw 'Baseline is not installed at its expected version.' }
+          Write-Host "Installed baseline $($baseline.Tag); candidate $env:TAG must upgrade it in place."
+
+      - name: Upgrade to the candidate silently
         run: |
           $ErrorActionPreference = 'Stop'
           $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList `
-            '/i', "`"$env:MSI`"", '/qn', '/norestart', '/l*v', "$PWD\install.log"
+            '/i', "`"$env:MSI`"", '/qn', '/norestart', '/l*v', "`"$PWD\install.log`""
           # 3010 is "installed, reboot required" and is a success for our purposes.
           if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
             Write-Host "::error::msiexec /i failed with exit code $($p.ExitCode). See the install.log artifact."
@@ -73,21 +164,41 @@ jobs:
           }
           Write-Host "Installed (msiexec exit $($p.ExitCode))."
 
+      - name: Verify upgrade registration and removal of the previous product
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $state = $installer.GetType().InvokeMember('ProductState', 'GetProperty', $null, $installer, @($env:CANDIDATE_PRODUCT))
+          $oldState = $installer.GetType().InvokeMember('ProductState', 'GetProperty', $null, $installer, @($env:BASELINE_PRODUCT))
+          $version = $installer.GetType().InvokeMember('ProductInfo', 'GetProperty', $null, $installer, @($env:CANDIDATE_PRODUCT, 'VersionString'))
+          # RelatedProducts includes both installed and advertised products;
+          # rejecting every other code also detects orphaned baseline entries.
+          # https://learn.microsoft.com/windows/win32/msi/installer-relatedproducts
+          $related = @($installer.GetType().InvokeMember('RelatedProducts', 'GetProperty', $null, $installer, @($env:UPGRADE_CODE)))
+          @{ candidate_state = $state; baseline_state = $oldState; installed_version = $version; related_products = $related } |
+            ConvertTo-Json -Depth 4 | Set-Content upgrade-result.json
+          if ($state -ne 5 -or [version]$version -ne [version]$env:CANDIDATE_VERSION) { throw 'Candidate registration has the wrong state or version.' }
+          if ($oldState -ne -1) { throw "Previous product remains installed or advertised (state $oldState)." }
+          if ($related.Count -ne 1 -or $related[0] -ne $env:CANDIDATE_PRODUCT) { throw 'Upgrade left missing or orphaned related product registrations.' }
+          Write-Host "Upgrade verified: $version; previous product removed."
+
       - name: Locate the installed binary
         run: |
           $ErrorActionPreference = 'Stop'
           # Glob rather than hardcode: the WiX install path follows productName,
           # and pinning it here would turn a rename into a mystery failure.
-          $exe = Get-ChildItem -LiteralPath $env:ProgramFiles -Recurse -Depth 3 `
-                   -Filter 'xnaut.exe' -ErrorAction SilentlyContinue |
-                 Select-Object -First 1
-          if (-not $exe) {
-            Write-Host "::error::The MSI installed but no xnaut.exe exists under $env:ProgramFiles."
+          $binaries = @(Get-ChildItem -LiteralPath $env:ProgramFiles -Recurse -Depth 3 `
+                   -Filter 'xnaut.exe' -ErrorAction SilentlyContinue)
+          if ($binaries.Count -ne 1) {
+            Write-Host "::error::Expected exactly one installed xnaut.exe under $env:ProgramFiles."
             Get-ChildItem -LiteralPath $env:ProgramFiles -Depth 1 |
               Select-Object -ExpandProperty FullName | Write-Host
             exit 1
           }
-          Write-Host "Binary: $($exe.FullName)"
+          $exe = $binaries[0]
+          $binaryVersion = [version]::new($exe.VersionInfo.ProductMajorPart, $exe.VersionInfo.ProductMinorPart, $exe.VersionInfo.ProductBuildPart)
+          if ($binaryVersion -ne [version]$env:CANDIDATE_VERSION) { throw "Installed executable version $binaryVersion differs from candidate $env:CANDIDATE_VERSION." }
+          Write-Host "Binary: $($exe.FullName), version $binaryVersion"
           "EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Launch it and hold
@@ -136,6 +247,27 @@ jobs:
           $gfx.Dispose(); $bmp.Dispose()
           Write-Host "Captured $($bounds.Width)x$($bounds.Height)."
 
+      # Leaves the runner clean and proves the uninstaller works, which is the
+      # other half of "it installs".
+      - name: Uninstall
+        if: always()
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-Process -Name xnaut -ErrorAction SilentlyContinue | Stop-Process -Force
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          foreach ($product in @($env:CANDIDATE_PRODUCT, $env:BASELINE_PRODUCT)) {
+            if (-not $product) { continue }
+            $state = $installer.GetType().InvokeMember('ProductState', 'GetProperty', $null, $installer, @($product))
+            if ($state -eq -1) { continue } # Already removed, e.g. the upgraded baseline.
+            $log = if ($product -eq $env:CANDIDATE_PRODUCT) { 'uninstall.log' } else { 'baseline-uninstall.log' }
+            $p = Start-Process msiexec.exe -Wait -PassThru `
+              -ArgumentList '/x', $product, '/qn', '/norestart', '/l*v', "`"$PWD\$log`""
+            if ($p.ExitCode -notin @(0, 3010)) { throw "msiexec /x failed with exit code $($p.ExitCode); see $log." }
+            $after = $installer.GetType().InvokeMember('ProductState', 'GetProperty', $null, $installer, @($product))
+            if ($after -ne -1) { throw "Uninstall left product registered: $product (state $after)." }
+            Write-Host "Uninstalled $product (msiexec exit $($p.ExitCode))."
+          }
+
       - name: Upload the evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -144,21 +276,10 @@ jobs:
           path: |
             desktop.png
             install.log
+            baseline-install.log
+            uninstall.log
+            baseline-uninstall.log
+            upgrade-selection.json
+            upgrade-result.json
           if-no-files-found: warn
           retention-days: 14
-
-      # Leaves the runner clean and proves the uninstaller works, which is the
-      # other half of "it installs".
-      - name: Uninstall
-        if: always()
-        run: |
-          Get-Process -Name xnaut -ErrorAction SilentlyContinue | Stop-Process -Force
-          if ($env:MSI) {
-            $p = Start-Process msiexec.exe -Wait -PassThru `
-              -ArgumentList '/x', "`"$env:MSI`"", '/qn', '/norestart'
-            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
-              Write-Host "::error::msiexec /x failed with exit code $($p.ExitCode); the installer cannot cleanly remove itself."
-              exit 1
-            }
-            Write-Host "Uninstalled (msiexec exit $($p.ExitCode))."
-          }
