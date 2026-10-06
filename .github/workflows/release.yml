@@ -151,6 +151,32 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: tauri build --target ${{ matrix.target }}
 
+      # XNAUT-467/468: build success does not prove that Windows actually
+      # excludes concurrent coordinators. These tests spawn real contenders.
+      - name: Verify portable coordinator locks (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          "Candidate ${{ github.sha }}; target ${{ matrix.target }}" | Set-Content portable-lock-tests.log
+          cargo test --locked --release --target ${{ matrix.target }} --bin xnaut portable_ -- --nocapture 2>&1 | Tee-Object -FilePath portable-lock-tests.log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = Get-Content portable-lock-tests.log -Raw
+          foreach ($name in @('portable_registry_lock_excludes_processes_and_releases_on_drop', 'portable_group_lock_excludes_processes_and_releases_on_drop', 'portable_quality_lock_excludes_processes_and_releases_on_drop')) {
+            if ($report -notmatch [regex]::Escape($name)) { throw "Required lock test did not execute: $name" }
+          }
+
+      - name: Upload Windows lock-test evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable-lock-tests-${{ github.ref_name }}
+          path: src-tauri/portable-lock-tests.log
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Verify signed microphone permission (macOS)
         if: runner.os == 'macOS'
         working-directory: src-tauri
