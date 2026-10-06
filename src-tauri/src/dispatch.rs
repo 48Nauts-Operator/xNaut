@@ -335,42 +335,6 @@ pub(crate) async fn dispatch_scoped(
         return Err("approved group scope, owner or model changed before native dispatch".into());
     }
     use crate::sandbox::launch_env::LaunchEnv;
-    let requested = environment.as_deref().map(|key| LaunchEnv::from_key(key)
-        .ok_or_else(|| format!("Unknown execution environment: {key}. Choose local, exe-dev or gitvm."))).transpose()?;
-    let sandboxes = crate::settings::load_or_default().sandboxes;
-    let destination = crate::sandbox::launch_env::resolve(requested.or_else(|| profile.execution.pinned_environment()), &sandboxes);
-    destination.route(&sandboxes)?;
-
-    if !crate::run_control::runtime_meets_in(&crate::agents::registry_dir()?, &profile.runtime_id, &profile.model, &ticket.model_requirement)? {
-        return Err(format!("@{handle} model {} does not meet ticket requirement {}", profile.model, ticket.model_requirement));
-    }
-    let continuation = crate::run_control::continuation_in(&crate::agents::registry_dir()?, &ticket.id)?;
-    if let Some(live) = crate::run_control::live_run_for_ticket_in(&crate::agents::registry_dir()?, &ticket.id)? {
-        return Err(format!(
-            "{} already has a live run: {} (@{}, {:?}). Retire it before dispatching again.",
-            ticket.id, live.run_id, live.agent_handle, live.state
-        ));
-    }
-
-    let projects =
-        crate::project_management::pm_project_list(app.state::<crate::state::AppState>()).await?;
-    let repo = projects
-        .iter()
-        .find(|item| item.key == project)
-        .map(crate::project_management::local_source_path)
-        .filter(|path| !path.is_empty())
-        .ok_or_else(|| format!("project {project} has no local repo path set"))?;
-    if !PathBuf::from(&repo).is_dir() {
-        return Err(format!("repo path does not exist: {repo}"));
-    }
-
-    let root = PathBuf::from(&repo).canonicalize().map_err(|e| e.to_string())?;
-    if approved.is_some_and(|run| {
-        !crate::swarm_plan::authorized(run, &ticket) || run.model != profile.model
-    }) {
-        return Err("approved group scope, owner or model changed before native dispatch".into());
-    }
-    use crate::sandbox::launch_env::LaunchEnv;
     let requested = environment
         .as_deref()
         .map(|key| {

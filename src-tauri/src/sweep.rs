@@ -155,10 +155,10 @@ impl Announced {
     ///
     /// ponytail: the rule is tested, the one line in `run_action` that calls it
     /// is not, because that needs an `AppHandle` and a live roster. Deleting the
-    /// call would not turn a test red. Same ceiling as `dispatch_kind` below and
+    /// call would not turn a test red. Same ceiling as native dispatch integration and
     /// the same fix if it ever matters: give `run_action` a seam for the nudge.
     fn dispatch_is_news(&mut self, key: String, kind: &str, reason: &str) -> bool {
-        if kind != "sweep_refused" {
+        if !matches!(kind, "sweep_refused" | "sweep_dispatch_refused") {
             self.refused.remove(&key);
             return true;
         }
@@ -1832,33 +1832,15 @@ mod tests {
     }
 
     #[test]
-    fn a_nudge_that_delivered_nothing_is_not_recorded_as_a_dispatch() {
-        // The rig, 2026-09-01: `sweep_refused` was in the binary with zero rows
-        // behind it in a 500-row ledger, because every non-delivery came back
-        // as an Ok and was written down as `sweep_dispatch`. The spend ceiling
-        // refusing a launch was logged as the sweep dispatching the ticket.
-        //
-        // The variants are serialized here rather than spelled out, because the
-        // classification reads a wire string. Renaming `Launched` or `Typed` in
-        // nudge.rs would otherwise silently reclassify every real dispatch as a
-        // refusal; this turns red instead. A rename on the other two is safe by
-        // construction, since anything unrecognised already reads as refused.
-        for (delivery, expected) in [
-            (crate::nudge::Delivery::Launched, "sweep_dispatch"),
-            (crate::nudge::Delivery::Typed, "sweep_dispatch"),
-            (crate::nudge::Delivery::SkippedBusy, "sweep_refused"),
-            (crate::nudge::Delivery::NoSession, "sweep_refused"),
-        ] {
-            let wire = serde_json::to_value(&delivery).expect("Delivery serializes");
-            let wire = wire.as_str().expect("as a plain string");
-            assert_eq!(
-                dispatch_kind(wire),
-                expected,
-                "{delivery:?} goes over the wire as {wire:?}"
-            );
-        }
-        // A payload with no `delivery` field is not evidence of a dispatch.
-        assert_eq!(dispatch_kind("unknown"), "sweep_refused");
+    fn typed_dispatch_refusals_repeat_only_when_the_reason_changes() {
+        let mut announced = Announced::default();
+        let key = "nautbot:XNAUT-1".to_string();
+        assert!(announced.dispatch_is_news(key.clone(), "sweep_dispatch_refused", "capacity"));
+        assert!(!announced.dispatch_is_news(key.clone(), "sweep_dispatch_refused", "capacity"));
+        assert!(announced.dispatch_is_news(key.clone(), "sweep_dispatch_refused", "stopped"));
+        assert!(announced.dispatch_is_news(key.clone(), "sweep_dispatch", "launched"));
+        assert!(announced.dispatch_is_news(key.clone(), "sweep_dispatch_refused", "stopped"));
+        assert!(!announced.dispatch_is_news(key, "sweep_refused", "stopped"));
     }
 
     #[test]

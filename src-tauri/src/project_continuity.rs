@@ -1121,7 +1121,7 @@ mod tests {
         parent.state = RunState::Done;
         parent.last_commit = "a".repeat(40);
         let mut child = parent.clone();
-        child.run_id = ulid::Ulid::new().to_string();
+        child.run_id = run().run_id;
         child.previous_run_id = Some(parent.run_id.clone());
         parent.next_run_id = Some(child.run_id.clone());
         child.last_commit = "d".repeat(40);
