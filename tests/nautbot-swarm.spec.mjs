@@ -63,13 +63,13 @@ test('a swarm plan arrives as a card and dispatches nothing until it is confirme
     .not.toContain('pm_ticket_dispatch');
 
   await card.getByRole('button', { name: 'Dispatch 2 agents' }).click();
-  // The plan ID is what starts the batch — the backend consumes it, so this is
-  // also what makes a second yes a no-op rather than a second swarm.
+  // The plan ID is what starts the batch — the backend persists its approval and members, so
+  // repeated confirmation can recover the same group without another swarm.
   const sent = await page.evaluate(() => window.__xnautInvokes.find((i) => i.cmd === 'swarm_plan_dispatch'));
   expect(sent.args).toMatchObject({ planId: 'swarm-abc12345' });
   // The outcome lands on the card, which stays in the thread, not in a toast
   // that is gone before anyone reads it.
-  await expect(card).toContainText('Dispatched 2 of 2');
+  await expect(card).toContainText('Started 2; queued 0; blocked 0');
   await expect(card.getByRole('button', { name: /Dispatch/ })).toHaveCount(0);
   expect(await page.evaluate(() => window.__xnautErrors)).toEqual([]);
 });
