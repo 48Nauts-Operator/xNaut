@@ -504,6 +504,10 @@ pub struct VerifyRecord {
     #[serde(default)]
     pub commit_sha: String,
     pub provider_kind: String,
+    /// Exact verification configuration observed before this run. Legacy
+    /// records lack it and cannot describe a changed current configuration.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub plan_hash: String,
     pub sandbox_id: String,
     pub public_url: String,
     /// Why a run failed, when it failed before any step could produce an exit
@@ -669,6 +673,7 @@ fn opening_record(
             Runner::GitVm => "gitvm-cli".into(),
             Runner::ExeDev => "exe-ssh".into(),
         },
+        plan_hash: String::new(),
         sandbox_id: String::new(),
         public_url: String::new(),
         error: String::new(),
@@ -724,6 +729,7 @@ pub async fn run_verify(
 ) -> Result<VerifyRecord, String> {
     let runner = runner_for(config);
     let mut record = opening_record(repo_dir, ticket_id, project, run_id, runner, steps);
+    record.plan_hash = verification_plan_hash(config, steps);
     let _live = LiveRun::start(&record.id);
     write_verify_record(&record)?;
     emit(app, &record);
@@ -1463,6 +1469,7 @@ fn record_refusal(app: Option<&tauri::AppHandle>, ticket_id: &str, project: &str
         repo_path: String::new(),
         commit_sha: String::new(),
         provider_kind: "none".into(),
+        plan_hash: String::new(),
         sandbox_id: String::new(),
         public_url: String::new(),
         error: error.to_string(),
@@ -1477,6 +1484,19 @@ fn record_refusal(app: Option<&tauri::AppHandle>, ticket_id: &str, project: &str
         created_at: now.clone(),
         updated_at: now,
     };
+    // A preflight refusal with a readable candidate still consumes that
+    // candidate's bounded budget; it must not become an unrelated empty epoch.
+    if let Ok(projects) = crate::project_management::repo_now().and_then(|repo| crate::project_management::list_projects(&repo)) {
+        if let Some(project) = projects.iter().find(|p| p.key == project) {
+            if let Ok(candidate) = retry_candidate(&crate::project_management::local_source_path(project), ticket_id) {
+                record.repo_path = candidate.repo_path;
+                record.commit_sha = candidate.commit_sha;
+                record.provider_kind = candidate.provider_kind;
+                record.plan_hash = candidate.plan_hash;
+                record.steps = candidate.steps;
+            }
+        }
+    }
     let _ = write_verify_record(&record);
     emit(app, &record);
     record.status = "failed".into();
@@ -1841,8 +1861,26 @@ fn another_run_is_live(records: &[VerifyRecord], dir: &Path, own_id: &str) -> bo
 /// changed verification plan gets a fresh check budget; identical failures do
 /// not consume another repair turn just because the clock advanced.
 pub(crate) fn retry_epoch(record: &VerifyRecord) -> String {
-    crate::jury::hash(&serde_json::json!({"head":record.commit_sha,"provider":record.provider_kind,"steps":record.steps.iter().map(|s| (&s.name,&s.command)).collect::<Vec<_>>()}).to_string())
+    crate::jury::hash(&serde_json::json!({"head":record.commit_sha,"provider":record.provider_kind,"plan":record.plan_hash,"steps":record.steps.iter().map(|s| (&s.name,&s.command)).collect::<Vec<_>>()}).to_string())
 }
+fn verification_plan_hash(config: &VerifyConfig, steps: &[PlannedStep]) -> String {
+    crate::jury::hash(&serde_json::json!({"config":config,"steps":steps.iter().map(|s| (&s.name,&s.command,&s.severity)).collect::<Vec<_>>()}).to_string())
+}
+
+/// Read the same ticket checkout/configuration that plan_run will execute.
+/// This is a candidate observation only: no provider, process or record write.
+pub(crate) fn retry_candidate(source_path: &str, ticket: &str) -> Result<VerifyRecord, String> {
+    let worktrees = crate::worktree::list_worktrees(Path::new(source_path)).unwrap_or_default();
+    let tree = PathBuf::from(resolve_verify_dir(ticket, &worktrees, source_path));
+    if !tree.is_dir() { return Err("Verification checkout unavailable".into()); }
+    let (config, steps) = load_verify_plan(&tree)?;
+    if steps.is_empty() { return Err("Verification plan has no steps".into()); }
+    let mut candidate = opening_record(&tree, ticket, "", "candidate", runner_for(&config), &steps);
+    if candidate.commit_sha.is_empty() { return Err("Verification candidate has no known Git revision".into()); }
+    candidate.plan_hash = verification_plan_hash(&config, &steps);
+    Ok(candidate)
+}
+
 /// Failed setup, missing commands and absent exit evidence require environment
 /// recovery. Only a check that actually ran can become an author code finding.
 pub(crate) fn failure_is_environment(record: &VerifyRecord) -> bool {
@@ -2387,6 +2425,7 @@ mod tests {
             repo_path: String::new(),
             commit_sha: String::new(),
             provider_kind: "gitvm-cli".into(),
+            plan_hash: String::new(),
             sandbox_id: String::new(),
             public_url: String::new(),
             error: String::new(),
@@ -2428,6 +2467,7 @@ mod tests {
             repo_path: String::new(),
             commit_sha: String::new(),
             provider_kind: "exe-ssh".into(),
+            plan_hash: String::new(),
             sandbox_id: String::new(),
             public_url: String::new(),
             error: String::new(),

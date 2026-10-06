@@ -389,12 +389,23 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         }
     }
     let grouped = crate::swarm_plan::managed_tickets(&registry);
-    let plan: Vec<Action> = plan_fleet_for(
+    let mut candidates = std::collections::HashMap::new();
+    for ticket in awaiting_review(&tickets) {
+        if !here.contains(&ticket.project) { continue; }
+        let Some(project) = projects.iter().find(|p| p.key == ticket.project) else { continue; };
+        let source = crate::project_management::local_source_path(project);
+        if let Ok(candidate) = crate::sandbox_verify::retry_candidate(&source, &ticket.id) {
+            candidates.insert(ticket.id.clone(), crate::sandbox_verify::retry_epoch(&candidate));
+        }
+        // Missing/unreadable current evidence never resets a historical hold.
+    }
+    let plan: Vec<Action> = plan_fleet_for_candidates(
         &tickets,
         &records,
         next_retry().as_deref(),
         chrono::Utc::now(),
         &Fleet::Only(fleet),
+        &candidates,
     )
     .into_iter()
     .filter(|a| match a {
@@ -1034,6 +1045,16 @@ fn plan_fleet_for(
     now: chrono::DateTime<chrono::Utc>,
     fleet: &Fleet,
 ) -> Vec<Action> {
+    plan_fleet_for_candidates(tickets, records, retry, now, fleet, &std::collections::HashMap::new())
+}
+fn plan_fleet_for_candidates(
+    tickets: &[crate::project_management::TicketRecord],
+    records: &[crate::sandbox_verify::VerifyRecord],
+    retry: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+    fleet: &Fleet,
+    candidates: &std::collections::HashMap<String, String>,
+) -> Vec<Action> {
     let mut actions = Vec::new();
     let mut budget = MAX_VERIFIES_IN_FLIGHT.saturating_sub(verifies_in_flight(records, now));
     let mut busy: std::collections::HashSet<String> = records
@@ -1046,7 +1067,7 @@ fn plan_fleet_for(
         match tickets.iter().find(|t| t.id == id) {
             Some(ticket) if ["done", "review"].contains(&ticket.status.as_str())
                 && budget > 0 && !busy.contains(&ticket.project)
-                && hold_for(records,&ticket.id,now) == Hold::None => {
+                && hold_for_candidate(records,&ticket.id,now,candidates.get(&ticket.id).map(String::as_str)) == Hold::None => {
                 actions.push(Action::Retry {
                     ticket: ticket.id.clone(),
                     project: ticket.project.clone(),
@@ -1068,7 +1089,7 @@ fn plan_fleet_for(
     // resolve directories (that needs git and settings), and the project is
     // the honest approximation at this altitude.
     for ticket in awaiting_review(tickets) {
-        let hold = hold_for(records, &ticket.id, now);
+        let hold = hold_for_candidate(records, &ticket.id, now, candidates.get(&ticket.id).map(String::as_str));
         if let Hold::GaveUp(failures) = hold {
             actions.push(Action::GaveUp {
                 ticket: ticket.id.clone(),
@@ -1404,6 +1425,10 @@ fn is_live_run(
 ///
 /// Pure so the policy is testable without a disk or a clock.
 fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, now: chrono::DateTime<chrono::Utc>) -> Hold {
+    hold_for_candidate(records, ticket_id, now, None)
+}
+fn hold_for_candidate(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str,
+    now: chrono::DateTime<chrono::Utc>, candidate: Option<&str>) -> Hold {
     let at = |record: &crate::sandbox_verify::VerifyRecord| {
         chrono::DateTime::parse_from_rfc3339(&record.updated_at)
             .map(|t| t.with_timezone(&chrono::Utc))
@@ -1420,8 +1445,8 @@ fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, no
     let mut failures = 0usize;
     let mut ordered: Vec<&crate::sandbox_verify::VerifyRecord> = mine.clone();
     ordered.sort_by_key(|r| r.updated_at.clone());
-    if let Some(latest) = ordered.last() {
-        let epoch = crate::sandbox_verify::retry_epoch(latest);
+    let epoch = candidate.map(str::to_owned).or_else(|| ordered.last().map(|r| crate::sandbox_verify::retry_epoch(r)));
+    if let Some(epoch) = epoch {
         ordered.retain(|r| crate::sandbox_verify::retry_epoch(r) == epoch);
     }
     if ordered.last().is_some_and(|r| r.status == "passed" && r.not_evidence) {
@@ -1623,6 +1648,7 @@ mod tests {
             repo_path: String::new(),
             commit_sha: String::new(),
             provider_kind: "gitvm-cli".into(),
+            plan_hash: String::new(),
             sandbox_id: String::new(),
             public_url: String::new(),
             error: String::new(),
@@ -2963,6 +2989,60 @@ mod tests {
         assert!(retry(plan_fleet(std::slice::from_ref(&target),&[],Some("XNAUT-1"),at("10:00"))));
         target.status="complete".into();
         assert!(plan_fleet(&[target],&[],Some("XNAUT-1"),at("10:00")).iter().any(|a|matches!(a,Action::RetryDropped{..})));
+    }
+
+    #[test]
+    fn three_failed_a_records_do_not_hide_first_b_or_changed_configuration() {
+        let root = std::env::temp_dir().join(format!("xnaut-candidate-epoch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".xnaut")).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").args(args).current_dir(&root)
+                .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid").output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-b", "agent/author/xnaut-1"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(root.join(".xnaut/verify.json"), r#"{"test":"sh test.sh","retries":1}"#).unwrap();
+        std::fs::write(root.join("app.sh"), "echo 4\n").unwrap();
+        git(&["add", "."]); git(&["commit", "-m", "A"]);
+        let source = root.to_str().unwrap();
+        let a = crate::sandbox_verify::retry_candidate(source, "XNAUT-1").unwrap();
+        let records_path = root.join("records");
+        std::fs::create_dir(&records_path).unwrap();
+        for n in 1..=3 {
+            let mut failed = a.clone(); failed.status = "failed".into();
+            failed.updated_at = format!("2026-09-01T0{n}:00:00Z");
+            std::fs::write(records_path.join(format!("{n}.json")), serde_json::to_vec(&failed).unwrap()).unwrap();
+        }
+        let records: Vec<crate::sandbox_verify::VerifyRecord> = std::fs::read_dir(&records_path).unwrap()
+            .map(|e| serde_json::from_slice(&std::fs::read(e.unwrap().path()).unwrap()).unwrap()).collect();
+        let target = ticket("XNAUT-1", "review", Some("nautbot"), "2026-09-01T01:00:00Z");
+        let planned = |candidate: &crate::sandbox_verify::VerifyRecord| {
+            let candidates = std::collections::HashMap::from([("XNAUT-1".into(), crate::sandbox_verify::retry_epoch(candidate))]);
+            plan_fleet_for_candidates(std::slice::from_ref(&target), &records, Some("XNAUT-1"), at("10:00"), &Fleet::Every, &candidates)
+        };
+        assert!(!planned(&a).iter().any(|a| matches!(a, Action::Verify {..} | Action::Retry {..})));
+        assert_eq!(hold_for_candidate(&records, "XNAUT-1", at("10:00"), Some(&crate::sandbox_verify::retry_epoch(&a))), Hold::GaveUp(3));
+        // No B record is manufactured before planning: the Git candidate changes.
+        std::fs::write(root.join("app.sh"), "echo 5\n").unwrap();
+        git(&["add", "app.sh"]); git(&["commit", "-m", "B repair"]);
+        let b = crate::sandbox_verify::retry_candidate(source, "XNAUT-1").unwrap();
+        assert_ne!(a.commit_sha, b.commit_sha);
+        assert!(planned(&b).iter().any(|a| matches!(a, Action::Retry {..})));
+        // Even configuration fields outside command text belong to the epoch.
+        git(&["checkout", "--detach", &a.commit_sha]);
+        std::fs::write(root.join(".xnaut/verify.json"), r#"{"test":"sh test.sh","retries":2}"#).unwrap();
+        let changed_config = crate::sandbox_verify::retry_candidate(source, "XNAUT-1").unwrap();
+        assert_eq!(a.commit_sha, changed_config.commit_sha);
+        assert_eq!(a.steps[0].command, changed_config.steps[0].command);
+        assert_ne!(a.plan_hash, changed_config.plan_hash);
+        assert!(planned(&changed_config).iter().any(|a| matches!(a, Action::Retry {..})));
+        // Unreadable current configuration does not reset old bounded failures.
+        std::fs::write(root.join(".xnaut/verify.json"), "broken").unwrap();
+        assert!(crate::sandbox_verify::retry_candidate(source, "XNAUT-1").is_err());
+        assert_eq!(hold_for_candidate(&records, "XNAUT-1", at("10:00"), None), Hold::GaveUp(3));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
