@@ -375,6 +375,7 @@ pub(crate) fn consumes_worker_capacity(run: &RunManifest) -> bool {
 
 /// Caller holds StoreLock. Requested successors reserve capacity across restarts;
 /// ticketless independent reviewers consume a worker slot just like authors.
+#[cfg(test)]
 pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
     let mut count = 0;
     for id in list_ids_in(dir)? {
@@ -2111,6 +2112,7 @@ pub(crate) fn bind_pending_in(dir: &Path, run: &mut RunManifest) -> Result<(), S
 /// Reserve one author repair after externally proving that the previous
 /// repository worker AND its publisher finished. No signals or guessing from
 /// terminal registry state. This shares admission's store lock and identity.
+#[cfg(test)]
 pub(crate) fn reserve_repair_in(dir: &Path, id: &str, proof: &Proofs, at: i64) -> Result<RunManifest,String> {
     reserve_repair_admitted_in(dir, id, proof, at, |_| Ok(()))
 }

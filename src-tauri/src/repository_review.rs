@@ -587,6 +587,7 @@ fn stopped_author_proof(
         ..Default::default()
     })
 }
+#[cfg(test)]
 fn reserve_repair_at(
     store: &Path,
     registry: &Path,
@@ -596,11 +597,10 @@ fn reserve_repair_at(
     proof: &crate::run_control::Proofs,
     now: i64,
 ) -> Result<(), String> {
-    reserve_repair_at_admitted(store, registry, t, q, author_id, proof, now, |_| Ok(()))
+    reserve_repair_at_admitted((store, registry), t, q, author_id, proof, now, |_| Ok(()))
 }
 fn reserve_repair_at_admitted(
-    store: &Path,
-    registry: &Path,
+    stores: (&Path, &Path),
     t: &mut Transfer,
     q: &mut Review,
     author_id: &str,
@@ -608,6 +608,7 @@ fn reserve_repair_at_admitted(
     now: i64,
     admit: impl FnOnce(&crate::run_control::RunManifest) -> Result<(), String>,
 ) -> Result<(), String> {
+    let (store, registry) = stores;
     if q.repair_attempts >= MAX_REPAIR_ATTEMPTS {
         return Err(
             "Author repair limit reached; owner must inspect the remaining findings".into(),
@@ -644,8 +645,7 @@ fn reserve_repair(t: &mut Transfer, q: &mut Review, rows: &[Transfer]) -> Result
     let proof = stopped_author_proof(t, q, &author)?;
     let registry = crate::agents::registry_dir()?;
     reserve_repair_at_admitted(
-        &transfer::store_dir()?,
-        &registry,
+        (&transfer::store_dir()?, &registry),
         t,
         q,
         &author.run_id,
@@ -1039,10 +1039,10 @@ pub(crate) fn accepted_review_evidence(
     {
         return Err("Configured independent verification evidence is missing".into());
     }
-    if !q
+    if q
         .comment_url
         .as_ref()
-        .is_some_and(|url| !url.trim().is_empty())
+        .is_none_or(|url| url.trim().is_empty())
     {
         return Err("Independent review publication is missing".into());
     }

@@ -1917,8 +1917,9 @@ fn record_matches_current_ticket(record: &VerifyRecord) -> bool {
 }
 fn record_matches_handback(record: &VerifyRecord, commits: &[String]) -> bool {
     let tree = Path::new(&record.repo_path);
-    if commits.iter().all(|commit| commit.trim().is_empty()) {
-        if crate::repository_transfer::git(tree, &["rev-parse", "HEAD"]).ok().as_deref() != Some(record.commit_sha.as_str()) { return false; }
+    if commits.iter().all(|commit| commit.trim().is_empty())
+        && crate::repository_transfer::git(tree, &["rev-parse", "HEAD"]).ok().as_deref() != Some(record.commit_sha.as_str()) {
+        return false;
     }
     evidence_refusal(&record.ticket_id, head_branch(tree).as_deref(), &record.commit_sha, commits,
         |commit| commit_is_in_tree(tree, commit, &record.commit_sha)).is_none()
