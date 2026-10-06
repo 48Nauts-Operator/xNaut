@@ -212,7 +212,7 @@ async function approvedGroups(page) {
 test('approved groups show queued work and scoped controls without internal approval scope',async({page})=>{
  await start(page);await approvedGroups(page);
  await expect(page.locator('[data-group]')).toHaveCount(1);
- await expect(page.locator('[data-groups]')).toContainText('1 queued · 1 running · 1 blocked');
+ await expect(page.locator('[data-groups]')).toContainText('1 queued · 1 active · 1 blocked');
  await expect(page.locator('[data-groups]')).toContainText('Active workers retain their current work.');
  await expect(page.getByRole('button',{name:'Stop further dispatch',exact:true})).toHaveCount(1);
  await expect(page.locator('[data-groups]')).not.toContainText('OTHER');
