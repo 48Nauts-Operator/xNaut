@@ -555,14 +555,38 @@ pub async fn repository_merge_preflight(
     }
     Ok(())
 }
-/// One immediate head-CAS merge request. No force, queued merge, or branch deletion.
+/// A policy hold is not an attempted/uncertain merge. Callers retain the
+/// accepted review and resume only after the owner lifts the hold.
+#[derive(Debug)]
+pub enum RepositoryMergeOutcome {
+    Merged(Value),
+    Held(String),
+}
+
+/// One immediate automatic head-CAS merge request. No force, queued merge, or branch deletion.
 pub async fn repository_merge(
     host: &ForgeHost,
     owner: &str,
     repo: &str,
     number: u64,
     head: &str,
-) -> Result<Value, String> {
+) -> Result<RepositoryMergeOutcome, String> {
+    repository_merge_guarded(host, owner, repo, number, head, || {
+        crate::switches::load()
+            .automatic_merge_hold()
+            .map(str::to_owned)
+    })
+    .await
+}
+
+async fn repository_merge_guarded(
+    host: &ForgeHost,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    head: &str,
+    hold: impl FnOnce() -> Option<String>,
+) -> Result<RepositoryMergeOutcome, String> {
     let (method, body) = if host.kind == "github" {
         (
             reqwest::Method::PUT,
@@ -576,18 +600,18 @@ pub async fn repository_merge(
     } else {
         return Err("Unsupported merge forge".into());
     };
-    let (status, _) = send(
-        &http_client()?,
-        method,
-        &format!(
-            "{}/repos/{owner}/{repo}/pulls/{number}/merge",
-            api_base(host)?
-        ),
-        host,
-        &token_for(host)?,
-        Some(&body),
-    )
-    .await?;
+    let client = http_client()?;
+    let url = format!(
+        "{}/repos/{owner}/{repo}/pulls/{number}/merge",
+        api_base(host)?
+    );
+    let token = token_for(host)?;
+    // Re-read at the irreversible boundary, after all asynchronous review,
+    // inference, and forge preflight work. No request is sent on a hold.
+    if let Some(reason) = hold() {
+        return Ok(RepositoryMergeOutcome::Held(reason));
+    }
+    let (status, _) = send(&client, method, &url, host, &token, Some(&body)).await?;
     if !status.is_success() {
         return Err(format!(
             "Forge refused merge (HTTP {}); inspect the PR before retrying",
@@ -598,7 +622,7 @@ pub async fn repository_merge(
     if result["merged"] != true || result["head"]["sha"] != head {
         return Err("Merge response is unconfirmed; inspect the PR before retrying".into());
     }
-    Ok(result)
+    Ok(RepositoryMergeOutcome::Merged(result))
 }
 
 /// Append a comment to an issue without modifying the reporter's original body.
@@ -1615,7 +1639,24 @@ mod tests {
             for field in ["draft","mergeable"] {let old=f.pr.lock().unwrap()[field].clone();f.pr.lock().unwrap()[field]=Value::Null;assert!(repository_merge_preflight(&config,"team","app",7,"head","base","task","main").await.is_err());f.pr.lock().unwrap()[field]=old;}
             let protected=f.protection.lock().unwrap().clone();*f.protection.lock().unwrap()=json!({});assert!(repository_merge_preflight(&config,"team","app",7,"head","base","task","main").await.is_err());*f.protection.lock().unwrap()=protected;
             assert_eq!(f.bodies.lock().unwrap().len(),0);
-            let merged=repository_merge(&config,"team","app",7,"head").await.unwrap();assert_eq!(merged["merged"],true);assert_eq!(f.bodies.lock().unwrap().len(),1);server.abort();
+            // Approval was clear before awaited preflight; each switch flips
+            // before the final native request. Neither forge may receive it.
+            for held in [
+                crate::switches::KillSwitches { read_only: true, ..Default::default() },
+                crate::switches::KillSwitches { freeze_merges: true, ..Default::default() },
+                crate::switches::KillSwitches { approve_everything: true, ..Default::default() },
+            ] {
+                assert!(crate::switches::KillSwitches::default().automatic_merge_hold().is_none());
+                repository_merge_preflight(&config,"team","app",7,"head","base","task","main").await.unwrap();
+                let result = repository_merge_guarded(&config,"team","app",7,"head", || held.automatic_merge_hold().map(str::to_owned)).await.unwrap();
+                assert!(matches!(result, RepositoryMergeOutcome::Held(reason) if !reason.is_empty()));
+                assert!(f.bodies.lock().unwrap().is_empty(), "switch changed during review must prevent the merge request");
+            }
+            // Lifting the hold uses the same exact-head request, with no lost
+            // review evidence or extra merge created by the paused attempts.
+            let result=repository_merge_guarded(&config,"team","app",7,"head", || None).await.unwrap();
+            let RepositoryMergeOutcome::Merged(merged) = result else { panic!("clear switches unexpectedly held merge") };
+            assert_eq!(merged["merged"],true);assert_eq!(f.bodies.lock().unwrap().len(),1);server.abort();
         }
     }
     #[test] fn task_merge_refuses_cross_repo_and_unprotected_admins() {

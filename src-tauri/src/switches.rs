@@ -36,6 +36,20 @@ fn normalize(handle: &str) -> String {
 }
 
 impl KillSwitches {
+    /// Project-level automatic merge permission is not a per-merge owner
+    /// approval. The explicit merge_ticket approval flow remains separate.
+    pub(crate) fn automatic_merge_hold(&self) -> Option<&'static str> {
+        if self.read_only {
+            Some("Automatic merge paused: read_only kill-switch engaged")
+        } else if self.freeze_merges {
+            Some("Automatic merge paused: freeze_merges kill-switch engaged")
+        } else if self.approve_everything {
+            Some("Automatic merge awaits explicit owner approval: approve_everything engaged")
+        } else {
+            None
+        }
+    }
+
     pub fn is_quarantined(&self, handle: &str) -> bool {
         let handle = normalize(handle);
         self.quarantined.iter().any(|q| normalize(q) == handle)

@@ -1465,6 +1465,12 @@ async fn advance_inner(
         }
     }
     if q.state == "ready" && permission.otto_merge {
+        if let Some(reason) = crate::switches::load().automatic_merge_hold() {
+            if q.message != reason {
+                persist(t, q, reason, None)?;
+            }
+            return Ok(());
+        }
         merge(app, t, q, hosts).await?;
         let reason = q.message.clone();
         persist(t, q, &reason, None)?;
@@ -1781,8 +1787,20 @@ async fn merge(
     );
     t.quality = Some(q.clone());
     transfer::save(t)?;
-    let merged =
-        crate::forges::repository_merge(host, &parsed.owner, &parsed.repo, number, &q.head).await?;
+    let merged = match crate::forges::repository_merge(
+        host, &parsed.owner, &parsed.repo, number, &q.head,
+    )
+    .await?
+    {
+        crate::forges::RepositoryMergeOutcome::Merged(value) => value,
+        crate::forges::RepositoryMergeOutcome::Held(reason) => {
+            // The final switch check proved no mutation was sent. Preserve
+            // accepted evidence instead of leaving an uncertain merging state.
+            q.state = "ready".into();
+            q.message = reason;
+            return Ok(());
+        }
+    };
     q.state = "merged".into();
     q.message = format!(
         "Otto merge stage confirmed commit {}; no release was published",
