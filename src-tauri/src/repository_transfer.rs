@@ -109,10 +109,16 @@ pub fn validate_remote(value: &str) -> Result<String, String> {
     Ok(value.into())
 }
 
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    use std::io::Read;
+fn git_command(dir: &Path, args: &[&str]) -> Command {
     use std::process::Stdio;
     let mut command = Command::new("git");
+    // Finder/launchd start the app with a minimal PATH. Git itself may be in
+    // /usr/bin while external subcommands (git-lfs) and credential helpers are
+    // installed by Homebrew. Reuse the native runtime search path for this
+    // child only; keep SSH/authentication overrides and owner settings intact.
+    if let Some(path) = crate::agents::runtime_path_public() {
+        command.env("PATH", path);
+    }
     command
         .arg("-C")
         .arg(dir)
@@ -121,6 +127,12 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    command
+}
+
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    use std::io::Read;
+    let mut command = git_command(dir, args);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1238,6 +1250,51 @@ mod tests {
             assert!(validate_remote(bad).is_err(), "{bad}");
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn native_git_inherits_runtime_path_for_external_subcommands_without_changing_parent() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("xnaut-git-path-{}", uuid::Uuid::new_v4()));
+        let helpers = root.join("tool installation with spaces");
+        std::fs::create_dir_all(&helpers).unwrap();
+        let helper = helpers.join("git-xnaut-lfs-path-fixture");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\nprintf 'external-helper-ready:%s' \"$1\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let before = std::env::var_os("PATH");
+        let expected = crate::agents::runtime_path_public().unwrap();
+        let mut command = git_command(&root, &["xnaut-lfs-path-fixture", "push"]);
+        let configured = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))
+            .and_then(|(_, value)| value)
+            .expect("native Git must explicitly receive the GUI-safe runtime PATH")
+            .to_owned();
+        assert_eq!(configured, std::ffi::OsString::from(&expected));
+        let dirs: Vec<_> = std::iter::once(helpers.clone())
+            .chain(std::env::split_paths(&configured))
+            .collect();
+        command.env("PATH", std::env::join_paths(dirs).unwrap());
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "Git must resolve external subcommands from its child PATH"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "external-helper-ready:push"
+        );
+        assert_eq!(
+            std::env::var_os("PATH"),
+            before,
+            "no process-global environment mutation"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn result_fetch_keeps_history_checks_identity_and_bounds_untrusted_data() {
         let root = std::env::temp_dir().join(format!("xnaut-transfer-{}", uuid::Uuid::new_v4()));
