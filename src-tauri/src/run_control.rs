@@ -327,9 +327,9 @@ pub fn pid_path(dir: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(dir.join(format!("{id}.pid")))
 }
 
-struct StoreLock(std::fs::File);
+pub(crate) struct StoreLock(std::fs::File);
 impl StoreLock {
-    fn acquire(dir: &Path) -> Result<Self, String> {
+    pub(crate) fn acquire(dir: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let file = std::fs::OpenOptions::new()
             .create(true)
