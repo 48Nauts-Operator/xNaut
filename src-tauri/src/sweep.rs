@@ -3848,6 +3848,7 @@ mod registry_tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     #[ignore = "real isolated zellij/process swap and SIGTERM-resistant refusal; takes three minutes"]
     fn registry_live_model_swap_and_undead() {

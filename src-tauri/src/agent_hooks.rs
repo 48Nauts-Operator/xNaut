@@ -2159,6 +2159,7 @@ mod tests {
     /// `document_path` only sees a string, so a symlinked directory inside the
     /// project scope would pass it and still land outside the vault. This is the
     /// guard `call_document_tool` runs on the resolved vault path.
+    #[cfg(unix)]
     #[test]
     fn document_writes_reject_symlinked_scope_dirs() {
         let root = std::env::temp_dir().join(format!("xnaut-mcp-symlink-{}", std::process::id()));

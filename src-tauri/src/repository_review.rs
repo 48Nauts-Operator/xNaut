@@ -2444,13 +2444,16 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("real fixture"));
-        std::fs::remove_file(artifacts.join("log.txt")).unwrap();
-        std::os::unix::fs::symlink("../../../source.txt", artifacts.join("log.txt")).unwrap();
-        publish();
-        assert!(read_report_in(&cache, &t, &child, &q)
-            .unwrap_err()
-            .contains("empty or missing"));
-        std::fs::remove_file(artifacts.join("log.txt")).unwrap();
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(artifacts.join("log.txt")).unwrap();
+            std::os::unix::fs::symlink("../../../source.txt", artifacts.join("log.txt")).unwrap();
+            publish();
+            assert!(read_report_in(&cache, &t, &child, &q)
+                .unwrap_err()
+                .contains("empty or missing"));
+            std::fs::remove_file(artifacts.join("log.txt")).unwrap();
+        }
         std::fs::write(artifacts.join("log.txt"), "Restored evidence").unwrap();
         std::fs::write(work.join("source.txt"), "reviewer changed source").unwrap();
         publish();
