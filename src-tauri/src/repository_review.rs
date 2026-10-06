@@ -70,6 +70,10 @@ pub struct Review {
     pub required_checks: Vec<RequiredCheck>,
     #[serde(default)]
     pub events: Vec<LoopEvent>,
+    /// Preserve newer/legacy evidence instead of silently treating an unknown
+    /// review field as an untouched prelaunch placeholder.
+    #[serde(default, flatten)]
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 impl Default for Review {
     fn default() -> Self {
@@ -92,6 +96,7 @@ impl Default for Review {
             deadline_at: 0,
             required_checks: vec![],
             events: vec![],
+            extra: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -929,6 +934,17 @@ fn completion_runs_in(registry: &Path, rows: &[Transfer], ticket: &str) -> Vec<c
     runs
 }
 
+/// prepare() seeds ordinary author receipts with Review::default() before any
+/// worker runs. Only that exact untouched value (or an absent legacy field) is
+/// empty quality: even an unknown field is retained and blocks supersession.
+fn pristine_prelaunch_quality(quality: Option<&Review>) -> bool {
+    quality.is_none_or(|quality| {
+        serde_json::to_value(quality).is_ok_and(|saved| {
+            serde_json::to_value(Review::default()).is_ok_and(|pristine| saved == pristine)
+        })
+    })
+}
+
 /// A failed staging receipt is history, not a second implementation, ONLY when
 /// native no-launch proof and a unique reciprocal chain bind it to an actual
 /// delivery in the same task/workspace. State strings alone never qualify.
@@ -955,7 +971,7 @@ fn superseded_prelaunch(t: &Transfer, rows: &[Transfer], runs: &[crate::run_cont
         && matches!(t.worker, crate::worker_bootstrap::Target::ExeDev)
         && r.review_parent.is_none() && r.repair_parent.is_none();
     let unlaunched = |r: &Transfer| r.state == "preparation_failed" && r.pr_url.is_none()
-        && r.quality.is_none() && !r.filed
+        && pristine_prelaunch_quality(r.quality.as_ref()) && !r.filed
         && r.branch == format!("xnaut/runs/{}", r.run_id)
         && r.workdir == format!("agents/runs/{}", r.run_id)
         && r.artifacts == format!(".xnaut/runs/{}", r.run_id);
@@ -2666,6 +2682,19 @@ mod repair_loop_tests {
     }
 
     #[test]
+    fn pristine_prelaunch_quality_preserves_unknown_review_fields_across_roundtrip() {
+        assert!(pristine_prelaunch_quality(None));
+        assert!(pristine_prelaunch_quality(Some(&Review::default())));
+        let mut saved = serde_json::to_value(Review::default()).unwrap();
+        saved["legacy_review_evidence"] = json!({"finding":"unrecognized evidence must not disappear"});
+        let quality: Review = serde_json::from_value(saved.clone()).unwrap();
+        let persisted = serde_json::to_value(&quality).unwrap();
+        assert_eq!(persisted, saved);
+        let reopened: Review = serde_json::from_value(persisted).unwrap();
+        assert!(!pristine_prelaunch_quality(Some(&reopened)));
+    }
+
+    #[test]
     fn prelaunch_failures_remain_history_after_proven_retry_and_independent_review() {
         use crate::run_control::PrelaunchPhase;
         let mut f = Fixture::new();
@@ -2686,7 +2715,7 @@ mod repair_loop_tests {
             let failed = Transfer {
                 run_id: run.run_id.clone(), branch: format!("xnaut/runs/{}", run.run_id),
                 workdir: format!("agents/runs/{}", run.run_id), artifacts: format!(".xnaut/runs/{}", run.run_id),
-                state: "preparation_failed".into(), pr_url: None, quality: None, filed: false,
+                state: "preparation_failed".into(), pr_url: None, quality: Some(Review::default()), filed: false,
                 ..f.parent.clone()
             };
             transfer::save_at(&f.store, &failed).unwrap();
@@ -2719,6 +2748,9 @@ mod repair_loop_tests {
         let runs = completion_runs_in(&f.registry, &rows, "TEST-1");
         assert_eq!(runs.len(), 3);
         assert!(independent_completion_refusal_with_runs(&rows, &runs, "TEST-1", &f.q.head).unwrap().is_none());
+        let mut absent_legacy_quality = rows.clone();
+        for predecessor in &mut absent_legacy_quality[..2] { predecessor.quality = None; }
+        assert!(independent_completion_refusal_with_runs(&absent_legacy_quality, &runs, "TEST-1", &f.q.head).unwrap().is_none());
         assert!(independent_completion_refusal_in(&rows, "TEST-1", &f.q.head).unwrap().is_some(), "state strings without native proof remain blocking");
         let ticket = serde_json::from_value(json!({"id":"TEST-1","project":"TEST","title":"Staging retry","type":"feature","status":"in_progress","priority":"high","owner":"author","revision":1,"created_at":"2026-10-05T12:00:00Z","updated_at":"2026-10-05T12:00:00Z"})).unwrap();
         let snapshot = crate::project_continuity::reconcile("TEST", &[ticket], &runs, &rows, 4000);
@@ -2726,6 +2758,27 @@ mod repair_loop_tests {
         assert_eq!(snapshot.assignments.len(), 4, "all staging and reviewer receipts remain visible");
         for failed in &rows[..2] {
             assert!(snapshot.assignments.iter().any(|a| a.run_id == failed.run_id && a.state != crate::project_continuity::ContinuityState::Verified));
+        }
+        for (field, value) in [
+            ("state", json!("blocked")), ("reviewer", json!("other-reviewer")),
+            ("head", json!("a".repeat(40))), ("base", json!("b".repeat(40))),
+            ("worktree", json!("/existing-review")), ("child", json!("review-child")),
+            ("attempts", json!(1)), ("message", json!("Preserve the owner's review notes")),
+            ("report", json!({"verdict":"blocked"})), ("jev", json!({"accepted":false})),
+            ("comment_url", json!("https://fixture/review/1")), ("repair_attempts", json!(1)),
+            ("repair_child", json!("repair-child")), ("author_run", json!("author-run")),
+            ("next_attempt_at", json!(1)), ("deadline_at", json!(1)),
+            ("required_checks", json!([{"name":"test","command":"sh test.sh"}])),
+            ("events", json!([{"id":"existing-event","at_ms":1,"state":"blocked","reason":"existing finding",
+                "head":"","base":"","worktree":"","review_child":null,"author_child":null,"predecessor_run_id":null,"actor":"owner"}])),
+            ("unknown_legacy_review_evidence", json!({"finding":"must retain"})),
+        ] {
+            let mut bad_rows = rows.clone();
+            let mut quality = serde_json::to_value(Review::default()).unwrap();
+            quality[field] = value;
+            bad_rows[0].quality = Some(serde_json::from_value(quality).unwrap());
+            assert!(independent_completion_refusal_with_runs(&bad_rows, &runs, "TEST-1", &f.q.head).unwrap().is_some(),
+                "non-pristine prelaunch quality remains blocking: {field}");
         }
         for case in ["missing_proof", "unknown_process", "broken_link", "foreign_root", "foreign_branch", "foreign_project", "foreign_owner", "foreign_remote", "published_predecessor", "duplicate_transfer", "duplicate_run", "live_successor", "stale_review"] {
             let mut bad_rows = rows.clone();
