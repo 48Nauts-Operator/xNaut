@@ -107,6 +107,13 @@ fn ticket_context(ticket: Option<&str>, root: &Path) -> Result<String, String> {
 }
 
 fn ticket_context_in(registry: &Path, id: &str, root: &Path) -> Result<String, String> {
+    ticket_context_admitted_in(registry, id, root, crate::ticket_triage::dispatch_admission)
+}
+
+fn ticket_context_admitted_in(
+    registry: &Path, id: &str, root: &Path,
+    admit: impl FnOnce(&crate::project_management::TicketRecord) -> Result<(), String>,
+) -> Result<String, String> {
     let record = crate::project_management::ticket_list_in(registry, None)?
         .into_iter()
         .find(|t| t.id == id)
@@ -124,6 +131,11 @@ fn ticket_context_in(registry: &Path, id: &str, root: &Path) -> Result<String, S
     if source != root {
         return Err("Ticket and repository do not belong to the same project.".into());
     }
+    // This boundary is called by model-generated worktree/launch tools. The
+    // authenticated handle, task text, and owner conversation are not recorded
+    // approval of an imported finding. Explicit owner dispatch/group approval
+    // use their separate native paths; models cannot opt into that exception.
+    admit(&record)?;
     Ok(format!("\nREGISTERED TICKET {} — {}\n{}\nPreserve this scope (including read-only restrictions). Do not expand it implicitly. Report execution evidence, findings, tests actually run and coverage gaps. A launch is not a completed audit.\n", record.id,record.title,record.body))
 }
 
@@ -1719,6 +1731,56 @@ mod tests {
                 assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
             }
         }
+    }
+    #[test]
+    fn chat_work_requires_current_approved_finding_before_worktree_or_reservation() {
+        let temp = Temp::new();
+        let project = temp.path().join("projects/APP");
+        std::fs::create_dir_all(project.join("tickets")).unwrap();
+        let source = temp.path().join("source"); std::fs::create_dir(&source).unwrap();
+        let source = source.canonicalize().unwrap();
+        std::fs::write(project.join("project.json"),json!({"key":"APP","name":"Fixture","source_path":source,"created_at":"fixture"}).to_string()).unwrap();
+        let mut ticket: crate::project_management::TicketRecord = serde_json::from_value(json!({
+            "id":"APP-1","project":"APP","title":"Finding in calc","type":"bug","status":"ready","priority":"high",
+            "source_id":"forgejo:team/app#7","body":"Inspect the imported report","revision":1,"created_at":"fixture","updated_at":"fixture"
+        })).unwrap();
+        let path = project.join("tickets/APP-1.json");
+        let save = |t: &crate::project_management::TicketRecord| std::fs::write(&path,serde_json::to_vec(t).unwrap()).unwrap();
+        save(&ticket);
+        let check = |records: &[crate::ticket_triage::TriageRecord]| ticket_context_admitted_in(temp.path(),"APP-1",&source,
+            |t| crate::ticket_triage::admission_from_records(t,records));
+        assert!(check(&[]).unwrap_err().contains("no recorded triage disposition"));
+        let evidence = source.join("calc.py"); std::fs::write(&evidence,"return 0\n").unwrap();
+        let scope_hash = format!("{:x}",Sha256::digest(serde_json::to_vec(&(
+            &ticket.id,&ticket.project,&ticket.source_id,&ticket.title,&ticket.body)).unwrap()));
+        let approved: crate::ticket_triage::TriageRecord = serde_json::from_value(json!({
+            "fingerprint":"fixture","source_id":ticket.source_id,
+            "binding":{"ticket":ticket.id,"project":ticket.project,"source_id":ticket.source_id,"scope_hash":scope_hash},
+            "run_id":"triage-one","forge_index":0,"forge_kind":"forgejo","owner":"team","repo":"app","issue_number":7,
+            "issue_url":"https://forge/issues/7","project":"APP","provider":"lmstudio","model":"local","classification":"confirmed","confidence":0.9,
+            "status":"approved","comment_url":"","created_at":"2026-10-06T10:00:00Z","updated_at":"2026-10-06T10:00:00Z",
+            "decision":{"actor":"owner","approved":true,"at":"2026-10-06T10:00:00Z","comment":"Approved this finding"},
+            "analysis":{"classification":"confirmed","confidence":0.9,"severity":"high","affected_components":["calc"],"likely_cause":"Recorded defect",
+                "evidence":[{"source":"ticket","reference":"https://forge/issues/7","summary":"Imported finding"}],"questions":[],"recommended_next_step":"Fix the approved scope"},
+            "evidence_files":[{"path":evidence,"digest":format!("{:x}",Sha256::digest(b"return 0\n"))}]
+        })).unwrap();
+        assert!(check(std::slice::from_ref(&approved)).unwrap().contains("Inspect the imported report"));
+        let mut unapproved = approved.clone(); unapproved.status = "waiting_for_approval".into(); unapproved.decision = None;
+        assert!(check(&[unapproved]).unwrap_err().contains("not actionable"));
+        let mut duplicate = approved.clone(); duplicate.classification = crate::ticket_triage::TriageClassification::Duplicate;
+        assert!(check(&[duplicate]).unwrap_err().contains("not actionable"));
+        let body = ticket.body.clone(); ticket.body.push_str("\n\n## Dispatched fixture\nNew unapproved instructions"); save(&ticket);
+        assert!(check(std::slice::from_ref(&approved)).unwrap_err().contains("scope changed"));
+        ticket.body = body; save(&ticket);
+        std::fs::write(&evidence,"return 1\n").unwrap();
+        assert!(check(std::slice::from_ref(&approved)).unwrap_err().contains("evidence changed"));
+        std::fs::write(&evidence,"return 0\n").unwrap();
+        ticket.source_id.clear(); save(&ticket);
+        // Ordinary owner work retains the production path's early nonfinding
+        // admission without loading the user's triage store.
+        assert!(ticket_context_in(temp.path(),"APP-1",&source).is_ok());
+        assert!(!source.join(".worktrees").exists());
+        assert!(!temp.path().join("registry").exists());
     }
     struct Temp(PathBuf);
     impl Temp {

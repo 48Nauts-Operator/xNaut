@@ -409,7 +409,7 @@ pub fn dispatch_admission(ticket: &crate::project_management::TicketRecord) -> R
     let records = ticket_triage_records()?;
     admission_from_records(ticket, &records)
 }
-fn admission_from_records(
+pub(crate) fn admission_from_records(
     ticket: &crate::project_management::TicketRecord,
     records: &[TriageRecord],
 ) -> Result<(), String> {
