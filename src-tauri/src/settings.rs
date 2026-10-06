@@ -581,14 +581,18 @@ fn settings_path() -> PathBuf {
     config_dir().join("settings.json")
 }
 
+// The acceptance build may never recover by loading owner defaults. Keep this
+// runtime guard parameterized so both build modes share the same checked path.
+fn assert_defaults_allowed(acceptance: bool, reason: &str) {
+    assert!(!acceptance, "{reason}");
+}
+
 pub fn load_or_default() -> Settings {
     let path = settings_path();
     let mut settings = match std::fs::read_to_string(&path) {
         Ok(body) => serde_json::from_str(&body).unwrap_or_else(|e| {
-            match crate::loop_acceptance::ENABLED {
-                true => panic!("Acceptance settings became invalid; refusing owner defaults"),
-                false => {},
-            }
+            assert_defaults_allowed(crate::loop_acceptance::ENABLED,
+                "Acceptance settings became invalid; refusing owner defaults");
             eprintln!(
                 "[settings] parse error in {}: {e} — using defaults",
                 path.display()
@@ -596,10 +600,8 @@ pub fn load_or_default() -> Settings {
             Settings::default()
         }),
         Err(_) => {
-            match crate::loop_acceptance::ENABLED {
-                true => panic!("Acceptance settings disappeared; refusing owner defaults"),
-                false => {},
-            }
+            assert_defaults_allowed(crate::loop_acceptance::ENABLED,
+                "Acceptance settings disappeared; refusing owner defaults");
             Settings::default()
         },
     };
@@ -858,6 +860,14 @@ mod forge_token_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn acceptance_settings_loss_never_uses_owner_defaults() {
+        super::assert_defaults_allowed(false, "ordinary missing settings");
+        for reason in ["invalid acceptance settings", "missing acceptance settings"] {
+            assert!(std::panic::catch_unwind(|| super::assert_defaults_allowed(true, reason)).is_err());
+        }
+    }
+
     /// The Settings page reads the local providers' URL from localStorage, the
     /// request reads it from here. Two stores for one fact: LM Studio on 1238
     /// meant the model dropdown probed a dead 1234, said "not reachable", and
