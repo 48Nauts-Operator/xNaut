@@ -683,7 +683,7 @@ pub fn run_script(t: &Transfer, command: &str, seed: &str) -> String {
     format!("#!/bin/bash -l\ncd {} || exit 1\n{}\nprintf '%s\\n' 'xNAUT: repository-backed run; results are retained until uploaded.'\necho $$ > .git/xnaut-supervisor.pid\nprintf running > .git/xnaut-phase\nenv {}\ncode=$?\nprintf uploading > .git/xnaut-phase\npython3 .git/xnaut-publish.py --finish \"$code\" --retry\npublished=$?\nif [ \"$published\" = 0 ]; then printf finished > .git/xnaut-phase; fi\nexit \"$code\"\n", directory, seed, command)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ResultRecord {
     run_id: String,
     source_sha: String,
