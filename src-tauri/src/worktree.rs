@@ -42,8 +42,18 @@ pub struct AddWorktreeOptions {
     pub no_auto_setup_remote: bool,
 }
 
+/// Shared by native launch/worktree Git callers. Keep credential and SSH
+/// overrides inherited; only augment the child PATH for GUI-launched apps.
+pub(crate) fn git_command() -> Command {
+    let mut command = Command::new("git");
+    if let Some(path) = crate::agents::runtime_path_public() {
+        command.env("PATH", path);
+    }
+    command
+}
+
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -160,7 +170,7 @@ pub fn add_worktree(
     // Enable autoSetupRemote so a plain `git push` from the new worktree creates the
     // upstream automatically — no -u flag, no failed first push.
     if !opts.no_auto_setup_remote {
-        let _ = Command::new("git")
+        let _ = git_command()
             .arg("-C")
             .arg(worktree_path)
             .args(["config", "push.autoSetupRemote", "true"])
@@ -178,7 +188,7 @@ pub fn add_worktree(
 /// Returns Err if the worktree has any uncommitted/untracked changes. Used as a
 /// preflight before non-force removal so we don't silently delete unfinished work.
 pub fn assert_worktree_clean_for_removal(worktree_path: &Path) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(worktree_path)
         .args(["status", "--porcelain", "--untracked-files=all"])
@@ -315,7 +325,7 @@ pub fn repo_bootstrap(path: String) -> Result<bool, String> {
     }
     std::fs::create_dir_all(&p).map_err(|e| format!("mkdir {}: {}", path, e))?;
     let git = |args: &[&str]| -> Result<(), String> {
-        let out = Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(&p)
             .output()
@@ -349,6 +359,50 @@ pub fn worktree_suggest_path(repo_path: String, branch: String) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn native_worktree_checkout_finds_required_filter_with_gui_path_and_spaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("xnaut-worktree-lfs-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("source repo");
+        let tools = root.join("installed tools");
+        let target = root.join("agent worktree");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        let helper = tools.join("git-xnaut-lfs-path-fixture");
+        std::fs::write(&helper, "#!/bin/sh\ncase \"$1\" in smudge) cat >/dev/null; printf 'hydrated media\\n';; clean) cat;; *) exit 1;; esac\n").unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let before = std::env::var_os("PATH");
+        let production = git_command();
+        let explicit = production.get_envs().find(|(key,_)| *key == std::ffi::OsStr::new("PATH")).and_then(|(_,v)| v).expect("GUI-safe PATH must be explicit");
+        assert_eq!(explicit, std::ffi::OsStr::new(&crate::agents::runtime_path_public().unwrap()));
+        assert!(production.get_envs().all(|(key,_)| key != "GIT_SSH_COMMAND" && key != "GIT_SSH"), "SSH overrides remain inherited");
+        // A fixture tool directory stands in for a user/Homebrew install;
+        // every command still uses the production native Git builder.
+        let gui_path = "/usr/bin:/bin";
+        let augmented = std::env::join_paths([tools.clone(), PathBuf::from("/usr/bin"), PathBuf::from("/bin")]).unwrap();
+        let git = |args: &[&str], path: &std::ffi::OsStr| {
+            git_command().arg("-C").arg(&repo).args(args).env("PATH", path)
+                .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+                .output().unwrap()
+        };
+        for args in [vec!["init", "-b", "main"], vec!["config", "commit.gpgsign", "false"], vec!["config", "filter.xnaut-lfs.clean", "git xnaut-lfs-path-fixture clean"], vec!["config", "filter.xnaut-lfs.smudge", "git xnaut-lfs-path-fixture smudge"], vec!["config", "filter.xnaut-lfs.required", "true"]] {
+            assert!(git(&args, &augmented).status.success());
+        }
+        std::fs::write(repo.join(".gitattributes"), "asset.bin filter=xnaut-lfs\n").unwrap();
+        std::fs::write(repo.join("asset.bin"), format!("version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 15\n", "a".repeat(64))).unwrap();
+        assert!(git(&["add", "."], &augmented).status.success());
+        assert!(git(&["commit", "-m", "LFS-like checkout fixture"], &augmented).status.success());
+        let missing = git(&["cat-file", "--filters", "HEAD:asset.bin"], std::ffi::OsStr::new(gui_path));
+        assert!(!missing.status.success(), "minimal GUI PATH cannot find the required external filter");
+        let checkout = git(&["worktree", "add", "--no-track", "-b", "agent/fixture", target.to_str().unwrap()], &augmented);
+        assert!(checkout.status.success(), "{}", String::from_utf8_lossy(&checkout.stderr));
+        assert_eq!(std::fs::read_to_string(target.join("asset.bin")).unwrap(), "hydrated media\n");
+        assert_eq!(std::env::var_os("PATH"), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn parses_porcelain_list() {

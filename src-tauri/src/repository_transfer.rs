@@ -111,14 +111,7 @@ pub fn validate_remote(value: &str) -> Result<String, String> {
 
 fn git_command(dir: &Path, args: &[&str]) -> Command {
     use std::process::Stdio;
-    let mut command = Command::new("git");
-    // Finder/launchd start the app with a minimal PATH. Git itself may be in
-    // /usr/bin while external subcommands (git-lfs) and credential helpers are
-    // installed by Homebrew. Reuse the native runtime search path for this
-    // child only; keep SSH/authentication overrides and owner settings intact.
-    if let Some(path) = crate::agents::runtime_path_public() {
-        command.env("PATH", path);
-    }
+    let mut command = crate::worktree::git_command();
     command
         .arg("-C")
         .arg(dir)

@@ -182,7 +182,7 @@ pub fn branch_for_ticket(ticket: &crate::project_management::TicketRecord, handl
 /// where the last one stopped (the whole point: an Anthropic outage hands the
 /// task to Codex, and the log in the ticket is the handover).
 fn branch_has_history(repo: &std::path::Path, branch: &str) -> bool {
-    std::process::Command::new("git")
+    crate::worktree::git_command()
         .args(["-C", &repo.to_string_lossy(), "rev-list", "--count", &format!("HEAD..{branch}")])
         .output()
         .ok()
@@ -428,7 +428,7 @@ pub(crate) async fn dispatch_scoped(
         // sent back by a revert (XNAUT-266, 2026-09-08 evening, "fatal: a
         // branch named agent/claude/xnaut-266 already exists"). Check the
         // branch out again rather than trying to create it.
-        let branch_exists = std::process::Command::new("git")
+        let branch_exists = crate::worktree::git_command()
                 .args(["-C", &repo, "rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
                 .output()
                 .is_ok_and(|o| o.status.success());
@@ -448,7 +448,7 @@ pub(crate) async fn dispatch_scoped(
     // is still the run's history; the agent continues it, not a blank slate.
     let continuing = continuation.is_some()
         || branch_has_history(std::path::Path::new(&repo), &branch)
-        || std::process::Command::new("git")
+        || crate::worktree::git_command()
             .args(["-C", &repo, "rev-list", "--count", "--max-count=1", &format!("refs/heads/{branch}")])
             .output()
             .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1");

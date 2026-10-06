@@ -53,7 +53,7 @@ fn workspace_key(handle: &str, task_key: &str) -> String {
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+    let out = crate::worktree::git_command()
         .args(args)
         .current_dir(repo)
         .output()
