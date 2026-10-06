@@ -965,7 +965,11 @@ fn recover_member(
                 if crate::run_control::prelaunch_refused(&next)
                     && crate::agent_work::recovery_guard(&serde_json::json!(snapshot), ticket, Some(&next)).is_ok()
                 {
-                    if assignments.len() >= 3 {
+                    let staging_attempts = assignments.iter().filter(|a| {
+                        !crate::run_control::load_manifest_in(registry, &a.run_id)
+                            .is_ok_and(|run| crate::run_control::spend_prelaunch_refused(&run))
+                    }).count();
+                    if staging_attempts >= 3 {
                         transition(group, i, MemberState::Blocked,
                             "prelaunch retry limit reached; inspect preserved staging evidence before further dispatch".into(),
                             Some(next.run_id), now);
@@ -1851,15 +1855,18 @@ mod tests {
         let mut group = groups_in(&dir, None).unwrap().remove(0);
         approve(&mut group, 1);
         let mut runs = Vec::new();
-        for attempt in 0..3 {
-            let mut run = RunManifest::requested("claude", "fixture", "/preserved", Some(task.id.clone()), None, &[], 10 + attempt);
+        let phases = [PrelaunchPhase::RepositoryStaging, PrelaunchPhase::SpendAdmission,
+            PrelaunchPhase::SpendAdmission, PrelaunchPhase::RepositoryStaging,
+            PrelaunchPhase::SpendAdmission, PrelaunchPhase::RepositoryStaging];
+        for (attempt, phase) in phases.into_iter().enumerate() {
+            let mut run = RunManifest::requested("claude", "fixture", "/preserved", Some(task.id.clone()), None, &[], 10 + attempt as i64);
             run.branch = "agent/preserved".into();
             run_control::bind_pending_in(&dir, &mut run).unwrap();
-            run_control::refuse_prelaunch_in(&dir, run, PrelaunchPhase::RepositoryStaging, "fixture staging failure").unwrap();
+            run_control::refuse_prelaunch_in(&dir, run, phase, "fixture prelaunch failure").unwrap();
             runs = run_control::list_ids_in(&dir).unwrap().iter().map(|id| run_control::load_manifest_in(&dir, id).unwrap()).collect();
             let snapshot = crate::project_continuity::reconcile("XNAUT", &[task.clone()], &runs, &[], 100);
             group.members[0].state = MemberState::Blocked;
-            if attempt < 2 {
+            if attempt < 5 {
                 assert!(!recover_member(&dir, &mut group, 0, &snapshot, 100));
                 assert_eq!(group.members[0].state, MemberState::Queued);
                 save_in(&dir, &group).unwrap();
@@ -1874,7 +1881,7 @@ mod tests {
                 assert_eq!(group.members[0].state, MemberState::Blocked);
             }
         }
-        assert_eq!(runs.len(), 3);
+        assert_eq!(runs.len(), 6);
         assert!(runs.iter().all(|r| r.branch == "agent/preserved" && r.worktree_path == "/preserved"));
         std::fs::remove_dir_all(dir).unwrap();
     }

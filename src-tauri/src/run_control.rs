@@ -48,7 +48,7 @@ pub enum RunKind {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PrelaunchPhase { RepositoryPreparation, RepositoryStaging, LegacyRepositoryStaging }
+pub enum PrelaunchPhase { RepositoryPreparation, RepositoryStaging, LegacyRepositoryStaging, SpendAdmission }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PrelaunchFailure {
@@ -397,7 +397,8 @@ pub(crate) fn live_viewport_count_in(
     // a viewport; neither a handle nor a guessed tmux name is proof alone.
     let transfers = runs.iter().filter_map(|run| {
         let body = std::fs::read(dir.join("repository-transfers").join(format!("{}.json", run.run_id))).ok()?;
-        serde_json::from_slice(&body).ok()
+        let transfer: crate::repository_transfer::Transfer = serde_json::from_slice(&body).ok()?;
+        (transfer.run_id == run.run_id).then_some(transfer)
     }).collect::<Vec<crate::repository_transfer::Transfer>>();
     Ok(live_viewport_count(&runs, sessions, &transfers))
 }
@@ -545,10 +546,17 @@ fn persist_locked(dir: &Path, run: &mut RunManifest) -> Result<(), String> {
 }
 pub fn request_in(
     dir: &Path,
-    mut run: RunManifest,
+    run: RunManifest,
     admit: impl FnOnce() -> Result<(), String>,
 ) -> Result<RunManifest, String> {
     let _lock = StoreLock::acquire(dir)?;
+    request_locked_in(dir, run, admit)
+}
+fn request_locked_in(
+    dir: &Path,
+    mut run: RunManifest,
+    admit: impl FnOnce() -> Result<(), String>,
+) -> Result<RunManifest, String> {
     if manifest_path(dir, &run.run_id).exists() || journal_path(dir, &run.run_id).exists() {
         // A remote launch must know its reserved continuation ID before it
         // stages repository receipts. Consume that exact reservation once.
@@ -661,6 +669,30 @@ pub(crate) fn refuse_prelaunch_in(dir: &Path, mut run: RunManifest, phase: Prela
     let saved = load_manifest_in(dir, &id).map_err(|_| error.clone())?;
     if !prelaunch_refused(&saved) { return Err(error); }
     Ok(saved)
+}
+
+/// Migrate a recorded pre-execution refusal only while the exact prior
+/// reservation is still current. A concurrent resume cannot be overwritten.
+pub(crate) fn refuse_spend_after_in(
+    dir: &Path, prior: &RunManifest, mut next: RunManifest, reason: &str,
+) -> Result<RunManifest, String> {
+    let _lock = StoreLock::acquire(dir)?;
+    let current = continuation_in(dir, prior.ticket.as_deref().ok_or("Missing refusal ticket")?)?
+        .ok_or("Prelaunch predecessor is no longer current")?;
+    if current.run_id != prior.run_id || current.revision != prior.revision
+        || !prelaunch_refused(&current) || !crate::spend::is_concurrent_refusal(reason)
+    { return Err("Prelaunch predecessor or refusal changed; preserve reservation".into()); }
+    next.prelaunch_failure = Some(PrelaunchFailure { phase: PrelaunchPhase::SpendAdmission, recorded_at: now_ms() });
+    let id = next.run_id.clone();
+    let error = request_locked_in(dir, next, || Err(reason.to_owned())).err()
+        .ok_or("Spend refusal unexpectedly admitted a worker")?;
+    let saved = load_manifest_in(dir, &id).map_err(|_| error)?;
+    if !prelaunch_refused(&saved) { return Err("Spend refusal proof was not saved".into()); }
+    Ok(saved)
+}
+pub(crate) fn spend_prelaunch_refused(run: &RunManifest) -> bool {
+    prelaunch_refused(run) && run.prelaunch_failure.as_ref()
+        .is_some_and(|proof| proof.phase == PrelaunchPhase::SpendAdmission)
 }
 
 pub(crate) fn prelaunch_refused(run: &RunManifest) -> bool {
@@ -1424,6 +1456,23 @@ pub(crate) mod tests {
         assert_eq!(live_viewport_count(rows, &sessions, &[transfer.clone(), transfer.clone()]), 1);
         let mut wrong_env = sessions.clone(); wrong_env[0].2 = Some("gitvm".into());
         assert_eq!(live_viewport_count(rows, &wrong_env, std::slice::from_ref(&transfer)), 1);
+        // A.json carrying B's payload cannot substitute for missing B.json.
+        let dir = directory("misfiled-viewport-proof");
+        let mut other = author.clone(); other.run_id = "another-native-run".into();
+        for run in [&author, &other] {
+            std::fs::write(dir.join(format!("{}.run.json",run.run_id)), serde_json::to_vec(run).unwrap()).unwrap();
+        }
+        let mut misplaced = transfer.clone(); misplaced.run_id = other.run_id.clone();
+        misplaced.workdir = format!("agents/runs/{}",other.run_id);
+        let store = dir.join("repository-transfers"); std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join(format!("{}.json",author.run_id)), serde_json::to_vec(&misplaced).unwrap()).unwrap();
+        let other_sessions = vec![(crate::sandbox::launch_env::repository_session_name(&other.agent_handle,&other.run_id),other.agent_handle.clone(),Some("exe-dev".into()))];
+        assert_eq!(live_viewport_count_in(&dir, &other_sessions).unwrap(), 1);
+        std::fs::write(store.join(format!("{}.json",other.run_id)), b"{broken").unwrap();
+        assert_eq!(live_viewport_count_in(&dir, &other_sessions).unwrap(), 1);
+        std::fs::write(store.join(format!("{}.json",other.run_id)), serde_json::to_vec(&misplaced).unwrap()).unwrap();
+        assert_eq!(live_viewport_count_in(&dir, &other_sessions).unwrap(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
         author.state = RunState::Running;
         assert_eq!(live_viewport_count(&[author], &sessions, &[transfer]), 1);
     }

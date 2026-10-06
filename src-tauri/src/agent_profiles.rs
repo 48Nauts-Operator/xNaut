@@ -2046,7 +2046,21 @@ pub async fn agent_profile_launch(
                 .map(|meta| (meta.session_id.clone(), meta.agent_id.clone(), meta.remote_env.clone())).collect::<Vec<_>>()
         };
         let live = crate::run_control::live_viewport_count_in(&crate::agents::registry_dir()?, &live_sessions)?;
-        crate::spend::admit_launch(live)?;
+        if let Err(error) = crate::spend::admit_launch(live) {
+            if crate::spend::is_concurrent_refusal(&error) && req.ticket.is_some() {
+                let registry = crate::agents::registry_dir()?;
+                let mut refused = crate::run_control::RunManifest::requested(
+                    &profile.handle, &profile.runtime_id, &req.worktree_path, req.ticket.clone(),
+                    (!profile.model.trim().is_empty()).then(|| profile.model.clone()),
+                    &crate::run_control::ProjectSite::board(), crate::run_control::now_ms(),
+                );
+                refused.remote_env = Some(env.key().into());
+                crate::run_control::bind_pending_in(&registry, &mut refused)?;
+                crate::run_control::refuse_prelaunch_in(&registry, refused,
+                    crate::run_control::PrelaunchPhase::SpendAdmission, &error)?;
+            }
+            return Err(error);
+        }
         // The writer lease (XNAUT-232) was only ever claimed by the build
         // flow's workspace step. Dispatch, a cold wake and a direct launch all
         // arrive here with a worktree already chosen and claimed nothing, so

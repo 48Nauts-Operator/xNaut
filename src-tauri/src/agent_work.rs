@@ -278,6 +278,7 @@ pub(crate) fn release_refused_continuation(
     if latest.run_id == reserved.run_id && latest.revision <= reserved.revision {
         return Ok(false);
     }
+    let refused = latest.clone();
     let mut seen = std::collections::HashSet::new();
     while latest.run_id != reserved.run_id {
         if !seen.insert(latest.run_id.clone()) {
@@ -288,13 +289,29 @@ pub(crate) fn release_refused_continuation(
         };
         latest = crate::run_control::load_manifest_in(registry, previous)?;
     }
-    let pending: Value =
+    let mut pending: Value =
         serde_json::from_slice(&std::fs::read(receipt_path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
     if pending["pending"] != true || pending["continuation_run_id"] != reserved.run_id {
         return Ok(false);
     }
-    std::fs::remove_file(receipt_path).map_err(|e| e.to_string())?;
+    pending["pending"] = json!(false);
+    pending["ok"] = json!(false);
+    pending["execution_started"] = json!(false);
+    pending["admission_refused"] = json!(true);
+    pending["launch"] = json!({"run_id":refused.run_id});
+    pending["prelaunch_failure"] = json!(refused.prelaunch_failure);
+    pending["note"] = json!("Native admission refused before execution; original reservation retained as evidence. Retry the current continuation in its preserved workspace.");
+    save_launch_receipt(receipt_path, &pending)?;
+    if refused.run_id == reserved.run_id {
+        // A Requested continuation can fail admission under the same ID. Its
+        // next attempt needs this slot again: move, never erase, the finalized
+        // receipt to a sibling file that the snapshot reader also consumes.
+        let archived = receipt_path.with_file_name(format!("{}-refused-{}.json",
+            receipt_path.file_stem().and_then(|s| s.to_str()).ok_or("Invalid receipt path")?, refused.revision));
+        if archived.exists() { return Err("Refusal evidence archive already exists; inspect before retrying".into()); }
+        std::fs::rename(receipt_path, archived).map_err(|e| e.to_string())?;
+    }
     Ok(true)
 }
 
@@ -359,6 +376,7 @@ pub(crate) fn reconcile_prelaunch(project: &str, ticket: &str) -> Result<bool, S
 }
 
 fn reconcile_prelaunch_in(registry: &Path, root: &Path, project: &str, ticket: &str) -> Result<bool, String> {
+    if reconcile_spend_prelaunch_in(registry, root, project, ticket)? { return Ok(true); }
     // Ordinary launches and completed reconciliations have no dependency on
     // the historical transfer store. Uncertainty matters only for a pending slot.
     if pending_initial_receipt(registry, root, project, ticket)?.is_none() { return Ok(false); }
@@ -376,6 +394,103 @@ fn reconcile_prelaunch_in(registry: &Path, root: &Path, project: &str, ticket: &
         }
     }
     reconcile_initial_prelaunch_in(registry, root, project, ticket, &transfers)
+}
+
+/// Exact native group chronology binds the old string refusal to this one
+/// reservation. A pending slot, an absent PID, or a capacity-like message alone
+/// is never evidence that execution did not start.
+fn legacy_group_spend_proof<'a>(
+    group: &'a crate::swarm_plan::Group, pending: &Value, path: &Path,
+) -> Option<&'a str> {
+    use crate::swarm_plan::MemberState;
+    let ticket = pending["ticket"].as_str()?;
+    let requested = pending["requested_at"].as_i64()?;
+    if pending["pending"] != true || group.approved_at.is_none_or(|at| at > requested)
+        || pending["project"].as_str() != Some(group.plan.project.as_str()) { return None; }
+    let run = group.plan.runs.iter().find(|r| r.ticket == ticket)?;
+    if pending["handle"] != run.owner || pending["branch"] != run.branch
+        || pending["repository_root"].as_str() != run.repository_root.as_deref()
+        || pending["environment"].as_str() != run.environment.as_deref() { return None; }
+    let member = group.members.iter().find(|m| m.ticket == ticket)?;
+    if member.state != MemberState::Blocked || member.started.is_some() || member.run_id.is_some() { return None; }
+    let refusal = member.refusal.as_ref()?;
+    if refusal.kind != crate::dispatch::RefusalKind::Uncertain { return None; }
+    let suffix = format!(". Launch reservation retained at {}; reconcile the run before retrying.", path.display());
+    let error = refusal.reason.strip_suffix(&suffix)?;
+    if !crate::spend::is_concurrent_refusal(error)
+        || member.reason != format!("dispatch outcome requires reconciliation: {}", refusal.reason) { return None; }
+    let mut events = group.events.iter().rev().filter(|e| e.ticket == ticket);
+    let blocked = events.next()?; let starting = events.next()?;
+    if blocked.state != MemberState::Blocked || blocked.reason != member.reason
+        || blocked.at_ms < requested || starting.at_ms > requested
+        || starting.state != MemberState::Starting || starting.reason != "dispatch reserved by approved group"
+        || [blocked, starting].iter().any(|e| e.project != group.plan.project || e.actor != "nautbot"
+            || e.source != format!("swarm-plans/{}.json", group.plan.id) || e.run_id.is_some()) { return None; }
+    Some(error)
+}
+
+fn reconcile_spend_prelaunch_in(registry: &Path, root: &Path, project: &str, ticket: &str) -> Result<bool, String> {
+    use crate::run_control::{self, RunManifest};
+    let Some(current) = run_control::continuation_in(registry, ticket)? else { return Ok(false); };
+    if !run_control::prelaunch_refused(&current) { return Ok(false); }
+    let mut slots = Vec::new();
+    for id in std::iter::once(current.run_id.as_str()).chain(current.previous_run_id.as_deref()) {
+        let path = launch_receipt_path(registry, root, ticket, Some(id))?;
+        let body = match std::fs::read(&path) {
+            Ok(body) => body,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        let pending: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+        if pending["pending"] == true { slots.push((path, pending)); }
+    }
+    if slots.len() != 1 { return Ok(false); }
+    let (path, pending) = &slots[0];
+    let Some(prior_id) = pending["continuation_run_id"].as_str() else { return Ok(false); };
+    let prior = run_control::load_manifest_in(registry, prior_id)?;
+    let Some(requested) = pending["requested_at"].as_i64() else { return Ok(false); };
+    if pending["project"] != project || pending["ticket"] != ticket
+        || pending["repository_root"].as_str() != root.to_str()
+        || pending["handle"] != prior.agent_handle || pending["branch"] != prior.branch
+        || pending["worktree_path"] != prior.worktree_path || pending["environment"] != "exe-dev"
+        || prior.project != project || prior.remote_env.as_deref() != Some("exe-dev")
+        || prior.started_at > requested { return Ok(false); }
+    if current.run_id != prior.run_id {
+        // Crash after writing native proof but before binding its receipt.
+        if run_control::spend_prelaunch_refused(&current) && current.started_at >= requested {
+            return release_refused_continuation(registry, path, &prior);
+        }
+        return Ok(false);
+    }
+    let groups = crate::swarm_plan::groups_in(registry, Some(project))?;
+    let Some(group) = groups.iter().filter(|g| g.approved_at.is_some()
+        && g.members.iter().any(|m| m.ticket == ticket)).max_by_key(|g| g.approved_at) else { return Ok(false); };
+    let Some(error) = legacy_group_spend_proof(group, pending, path) else { return Ok(false); };
+    let runs = run_control::list_ids_in(registry)?.iter().map(|id| run_control::load_manifest_in(registry, id)).collect::<Result<Vec<_>,_>>()?;
+    if runs.iter().any(|r| r.run_id != prior.run_id
+        && (r.ticket.as_deref() == Some(ticket) || r.worktree_path == prior.worktree_path)) { return Ok(false); }
+    let store = registry.join("repository-transfers");
+    if store.exists() {
+        for entry in std::fs::read_dir(store).map_err(|e| e.to_string())? {
+            let candidate = entry.map_err(|e| e.to_string())?.path();
+            if candidate.extension().and_then(|s| s.to_str()) != Some("json") { continue; }
+            let value: Value = serde_json::from_slice(&std::fs::read(candidate).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            if value["ticket"] != ticket && value["local_path"] != prior.worktree_path { continue; }
+            if value["run_id"] != prior.run_id || value["state"] != "preparation_failed"
+                || value["project"] != project || value["handle"] != prior.agent_handle
+                || value["local_path"] != prior.worktree_path || value["local_branch"] != prior.branch
+                || !value["pr_url"].is_null() || value["filed"] == true { return Ok(false); }
+        }
+    }
+    let worktree = Path::new(&prior.worktree_path);
+    verify_workspace(root, worktree, &prior.branch)?;
+    if crate::repository_transfer::git(worktree, &["rev-parse", "HEAD"])? != prior.last_commit
+        || !crate::repository_transfer::git(worktree, &["status", "--porcelain"])?.is_empty() { return Ok(false); }
+    let mut next = RunManifest::requested(&prior.agent_handle, &prior.runtime_id, &prior.worktree_path,
+        prior.ticket.clone(), prior.model.clone(), &[], requested);
+    next.project = project.into(); next.remote_env = prior.remote_env.clone();
+    run_control::refuse_spend_after_in(registry, &prior, next, error)?;
+    release_refused_continuation(registry, path, &prior)
 }
 
 fn pending_initial_receipt(registry: &Path, root: &Path, project: &str, ticket: &str) -> Result<Option<Value>, String> {
@@ -856,6 +971,81 @@ mod tests {
     }
 
     #[test]
+    fn saved_group_spend_refusal_migrates_only_exact_preexecution_proof() {
+        use crate::run_control;
+        let (_temp, root, registry, initial, transfer) = prelaunch_fixture();
+        crate::repository_transfer::save_at(&registry.join("repository-transfers"), &transfer).unwrap();
+        assert!(reconcile_initial_prelaunch_in(&registry, &root, "TEST", "TEST-1", &[transfer]).unwrap());
+        let prior = run_control::continuation_in(&registry, "TEST-1").unwrap().unwrap();
+        let path = launch_receipt_path(&registry, &root, "TEST-1", Some(&prior.run_id)).unwrap();
+        let mut pending = initial.clone(); pending["continuation_run_id"] = json!(prior.run_id); pending["requested_at"] = json!(3_000);
+        reserve(&path, &pending).unwrap();
+        let refusal = format!("spend ceiling: 2 agent sessions are already live and the concurrent cap is 2. Wait for one to finish, or raise the cap (spend-ceiling.json).. Launch reservation retained at {}; reconcile the run before retrying.", path.display());
+        let reason = format!("dispatch outcome requires reconciliation: {refusal}");
+        let group: crate::swarm_plan::Group = serde_json::from_value(json!({
+            "plan":{"id":"legacy-spend","project":"TEST","created_at":1,"max_parallel":2,"skipped":[],"runs":[{
+                "ticket":"TEST-1","title":"Fixture","owner":"fixture","model":"fixture-model","branch":"agent/fixture","scope":"fixture",
+                "repository_root":root,"environment":"exe-dev","runtime_id":"fixture-runtime"}]},
+            "approved_at":2,"members":[{"ticket":"TEST-1","state":"blocked","reason":reason,"run_id":null,"started":null,"refusal":{"kind":"uncertain","reason":refusal}}],
+            "events":[
+                {"id":"starting","project":"TEST","ticket":"TEST-1","actor":"nautbot","source":"swarm-plans/legacy-spend.json","at_ms":2_900,"state":"starting","reason":"dispatch reserved by approved group","run_id":null},
+                {"id":"blocked","project":"TEST","ticket":"TEST-1","actor":"nautbot","source":"swarm-plans/legacy-spend.json","at_ms":3_100,"state":"blocked","reason":reason,"run_id":null}]
+        })).unwrap();
+        assert!(legacy_group_spend_proof(&group, &pending, &path).is_some());
+        for change in 0..7 {
+            let mut bad = group.clone();
+            match change {
+                0 => bad.events[0].at_ms = 3_001,
+                1 => bad.events[1].at_ms = 2_999,
+                2 => bad.events[1].reason = "unknown outcome".into(),
+                3 => bad.plan.runs[0].owner = "different-agent".into(),
+                4 => bad.events[0].run_id = Some("already-started".into()),
+                5 => bad.members[0].refusal.as_mut().unwrap().kind = crate::dispatch::RefusalKind::Capacity,
+                _ => bad.events[1].source = "another-group.json".into(),
+            }
+            assert!(legacy_group_spend_proof(&bad, &pending, &path).is_none(), "{change}");
+        }
+        assert!(legacy_group_spend_proof(&group, &pending, &path.with_extension("elsewhere")).is_none());
+        let mut daily = group.clone();
+        let daily_refusal = format!("spend ceiling: 20 launches today reached the daily cap of 20.. Launch reservation retained at {}; reconcile the run before retrying.", path.display());
+        daily.members[0].refusal.as_mut().unwrap().reason = daily_refusal.clone();
+        daily.members[0].reason = format!("dispatch outcome requires reconciliation: {daily_refusal}");
+        daily.events[1].reason = daily.members[0].reason.clone();
+        assert!(legacy_group_spend_proof(&daily, &pending, &path).is_none());
+        let groups = registry.join("swarm-plans"); std::fs::create_dir_all(&groups).unwrap();
+        let group_path = groups.join("legacy-spend.json");
+        let saved_group = serde_json::to_vec(&group).unwrap(); std::fs::write(&group_path, &saved_group).unwrap();
+        let dirty = Path::new(&prior.worktree_path).join("uncommitted.txt"); std::fs::write(&dirty, "preserve me").unwrap();
+        assert!(!reconcile_spend_prelaunch_in(&registry, &root, "TEST", "TEST-1").unwrap());
+        assert_eq!(run_control::list_ids_in(&registry).unwrap().len(), 1);
+        std::fs::remove_file(dirty).unwrap();
+        assert!(reconcile_spend_prelaunch_in(&registry, &root, "TEST", "TEST-1").unwrap());
+        let next = run_control::continuation_in(&registry, "TEST-1").unwrap().unwrap();
+        assert!(run_control::spend_prelaunch_refused(&next));
+        assert_eq!(next.previous_run_id.as_deref(), Some(prior.run_id.as_str()));
+        assert_eq!(next.worktree_path, prior.worktree_path); assert_eq!(next.branch, prior.branch);
+        assert_eq!(std::fs::read(&group_path).unwrap(), saved_group, "migration retains every group event");
+        let bound = read_launch_receipt(&path).unwrap().unwrap();
+        assert_eq!(bound["continuation_run_id"], prior.run_id); assert_eq!(bound["launch"]["run_id"], next.run_id);
+        assert_eq!(bound["execution_started"], false); assert_eq!(bound["requested_at"], 3_000);
+        assert!(!reconcile_spend_prelaunch_in(&registry, &root, "TEST", "TEST-1").unwrap());
+        // A restart between native proof and receipt binding recovers the same
+        // successor; it never mints a second chain or discards the old slot.
+        save_launch_receipt(&path, &pending).unwrap();
+        assert!(reconcile_spend_prelaunch_in(&registry, &root, "TEST", "TEST-1").unwrap());
+        assert_eq!(run_control::list_ids_in(&registry).unwrap().len(), 2);
+        let mut conflicting = next.clone(); conflicting.state = run_control::RunState::Running;
+        assert!(!run_control::spend_prelaunch_refused(&conflicting));
+        let mut retry = run_control::RunManifest::requested("fixture", "fixture-runtime", &next.worktree_path,
+            Some("TEST-1".into()), None, &[], 4_000); retry.project = "TEST".into(); retry.remote_env = Some("exe-dev".into());
+        let admitted = run_control::request_in(&registry, retry, || Ok(())).unwrap();
+        assert_eq!(admitted.previous_run_id.as_deref(), Some(next.run_id.as_str()));
+        assert_eq!(admitted.worktree_path, prior.worktree_path);
+        save_launch_receipt(&path, &pending).unwrap();
+        assert!(!reconcile_spend_prelaunch_in(&registry, &root, "TEST", "TEST-1").unwrap());
+    }
+
+    #[test]
     fn no_pending_prelaunch_does_not_read_unrelated_corrupt_transfer_store() {
         let (_temp, root, registry, pending, _) = prelaunch_fixture();
         let path = launch_receipt_path(&registry, &root, "TEST-1", None).unwrap();
@@ -1262,6 +1452,10 @@ mod tests {
         persist(&refused);
         assert!(release_refused_continuation(registry, &receipt, &successor).unwrap());
         assert!(!receipt.exists());
+        let archived = receipt.with_file_name(format!("{}-refused-{}.json", receipt.file_stem().unwrap().to_str().unwrap(), refused.revision));
+        let evidence: Value = serde_json::from_slice(&std::fs::read(archived).unwrap()).unwrap();
+        assert_eq!(evidence["launch"]["run_id"], refused.run_id);
+        assert_eq!(evidence["execution_started"], false);
         // Native continuation remains available and the same ticket can reserve
         // again; its old failed manifest has not been deleted or rewritten.
         assert_eq!(
