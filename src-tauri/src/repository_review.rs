@@ -891,12 +891,15 @@ pub(crate) fn independent_completion_refusal(
     head: &str,
 ) -> Result<Option<String>, String> {
     let rows = transfer::list()?;
-    let refusal = independent_completion_refusal_in(&rows, ticket, head)?;
+    let registry = crate::agents::registry_dir()?;
+    let runs = completion_runs_in(&registry, &rows, ticket);
+    let refusal = independent_completion_refusal_with_runs(&rows, &runs, ticket, head)?;
     if refusal.is_none() {
         if let Some(t) = rows.iter().find(|t| {
             t.ticket.as_deref() == Some(ticket)
                 && t.repair_parent.is_none()
                 && t.review_parent.is_none()
+                && !superseded_prelaunch(t, &rows, &runs)
         }) {
             if !policy(&t.project, &t.remote)?.automatic_review || crate::switches::load().read_only
             {
@@ -908,29 +911,98 @@ pub(crate) fn independent_completion_refusal(
     }
     Ok(refusal)
 }
-pub(crate) fn independent_completion_refusal_in(
+/// Read only the native chains named by this ticket's root receipts. Missing
+/// or unreadable proof stays absent, so an unresolved root continues to block.
+fn completion_runs_in(registry: &Path, rows: &[Transfer], ticket: &str) -> Vec<crate::run_control::RunManifest> {
+    let mut pending: Vec<_> = rows.iter().filter(|t| t.ticket.as_deref() == Some(ticket)
+        && t.review_parent.is_none() && t.repair_parent.is_none()).map(|t| t.run_id.clone()).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut runs = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id.clone()) { continue; }
+        if let Ok(run) = crate::run_control::load_manifest_in(registry, &id) {
+            if let Some(next) = &run.next_run_id { pending.push(next.clone()); }
+            runs.push(run);
+        }
+    }
+    runs
+}
+
+/// A failed staging receipt is history, not a second implementation, ONLY when
+/// native no-launch proof and a unique reciprocal chain bind it to an actual
+/// delivery in the same task/workspace. State strings alone never qualify.
+fn superseded_prelaunch(t: &Transfer, rows: &[Transfer], runs: &[crate::run_control::RunManifest]) -> bool {
+    use crate::run_control::{prelaunch_refused, RunKind};
+    let unique_run = |id: &str| {
+        let mut matches = runs.iter().filter(|r| r.run_id == id);
+        let run = matches.next()?;
+        matches.next().is_none().then_some(run)
+    };
+    let unique_transfer = |id: &str| {
+        let mut matches = rows.iter().filter(|r| r.run_id == id);
+        let transfer = matches.next()?;
+        matches.next().is_none().then_some(transfer)
+    };
+    let same_run = |r: &crate::run_control::RunManifest| r.kind == RunKind::Agent
+        && r.project == t.project && r.ticket == t.ticket && r.agent_handle == t.handle
+        && r.worktree_path == t.local_path && r.branch == t.local_branch
+        && r.remote_env.as_deref() == Some("exe-dev");
+    let same_transfer = |r: &Transfer| r.project == t.project && r.ticket == t.ticket
+        && r.handle == t.handle && r.local_path == t.local_path && r.local_branch == t.local_branch
+        && r.remote == t.remote && r.base == t.base
+        && matches!(r.worker, crate::worker_bootstrap::Target::ExeDev)
+        && matches!(t.worker, crate::worker_bootstrap::Target::ExeDev)
+        && r.review_parent.is_none() && r.repair_parent.is_none();
+    let unlaunched = |r: &Transfer| r.state == "preparation_failed" && r.pr_url.is_none()
+        && r.quality.is_none() && !r.filed
+        && r.branch == format!("xnaut/runs/{}", r.run_id)
+        && r.workdir == format!("agents/runs/{}", r.run_id)
+        && r.artifacts == format!(".xnaut/runs/{}", r.run_id);
+    if t.ticket.is_none() || t.project.is_empty() || t.local_branch.is_empty()
+        || !same_transfer(t) || !unlaunched(t) || unique_transfer(&t.run_id).is_none() { return false; }
+    let Some(mut current) = unique_run(&t.run_id).filter(|r| same_run(r) && prelaunch_refused(r)) else { return false; };
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(current.run_id.as_str()) {
+        let Some(next) = current.next_run_id.as_deref().and_then(unique_run) else { return false; };
+        if !same_run(next) || next.previous_run_id.as_deref() != Some(current.run_id.as_str())
+            || next.started_at < current.started_at
+            || runs.iter().any(|r| r.run_id != next.run_id && r.previous_run_id.as_deref() == Some(current.run_id.as_str()))
+            || runs.iter().any(|r| r.run_id != current.run_id && r.next_run_id.as_deref() == Some(next.run_id.as_str())) { return false; }
+        let transfer = unique_transfer(&next.run_id);
+        if prelaunch_refused(next) {
+            // Preparation can fail before any transfer was created. Duplicated
+            // or conflicting receipts still invalidate the proof chain.
+            if rows.iter().any(|r| r.run_id == next.run_id)
+                && transfer.is_none_or(|r| !same_transfer(r) || !unlaunched(r)) { return false; }
+            current = next;
+            continue;
+        }
+        return next.state.terminal() && !next.admission_refused && next.prelaunch_failure.is_none()
+            && transfer.is_some_and(|r| same_transfer(r) && r.state == "review"
+                && r.pr_url.as_ref().is_some_and(|url| !url.is_empty()));
+    }
+    false
+}
+
+#[cfg(test)]
+pub(crate) fn independent_completion_refusal_in(rows: &[Transfer], ticket: &str, head: &str) -> Result<Option<String>, String> {
+    independent_completion_refusal_with_runs(rows, &[], ticket, head)
+}
+
+pub(crate) fn independent_completion_refusal_with_runs(
     rows: &[Transfer],
+    runs: &[crate::run_control::RunManifest],
     ticket: &str,
     head: &str,
 ) -> Result<Option<String>, String> {
-    let roots: Vec<_> = rows
-        .iter()
-        .filter(|t| {
-            t.ticket.as_deref() == Some(ticket)
-                && t.review_parent.is_none()
-                && t.repair_parent.is_none()
-        })
-        .collect();
-    if roots.is_empty() {
-        return Ok(None);
-    }
+    let roots: Vec<_> = rows.iter().filter(|t| t.ticket.as_deref() == Some(ticket)
+        && t.review_parent.is_none() && t.repair_parent.is_none()
+        && !superseded_prelaunch(t, rows, runs)).collect();
+    if roots.is_empty() { return Ok(None); }
     if roots.len() != 1 {
-        return Ok(Some(
-            "Multiple repository deliveries need reconciliation before completion".into(),
-        ));
+        return Ok(Some("Multiple repository deliveries need reconciliation before completion".into()));
     }
-    let t = roots[0];
-    Ok(accepted_review_evidence(t, rows, head).err())
+    Ok(accepted_review_evidence(roots[0], rows, head).err())
 }
 
 /// Shared, read-only acceptance of the exact saved review version. Both the
@@ -2489,6 +2561,87 @@ mod repair_loop_tests {
             run_control::worker_capacity_in(&f.registry, 2, "next-worker", None)
         })
         .is_ok());
+    }
+
+    #[test]
+    fn prelaunch_failures_remain_history_after_proven_retry_and_independent_review() {
+        use crate::run_control::PrelaunchPhase;
+        let mut f = Fixture::new();
+        // Start at the real pre-admission boundary, with the preserved local
+        // task branch, two persisted staging refusals, then native continuation.
+        std::fs::remove_dir_all(&f.registry).unwrap();
+        let request = |at| {
+            let mut run = RunManifest::requested("author", "fixture", f.work.to_str().unwrap(),
+                Some("TEST-1".into()), None, &[], at);
+            run.project = "TEST".into();
+            run.remote_env = Some("exe-dev".into());
+            run
+        };
+        let mut rows = Vec::new();
+        for at in [1000, 2000] {
+            let run = run_control::refuse_prelaunch_in(&f.registry, request(at),
+                PrelaunchPhase::RepositoryStaging, "fixture LFS staging error").unwrap();
+            let failed = Transfer {
+                run_id: run.run_id.clone(), branch: format!("xnaut/runs/{}", run.run_id),
+                workdir: format!("agents/runs/{}", run.run_id), artifacts: format!(".xnaut/runs/{}", run.run_id),
+                state: "preparation_failed".into(), pr_url: None, quality: None, filed: false,
+                ..f.parent.clone()
+            };
+            transfer::save_at(&f.store, &failed).unwrap();
+            rows.push(failed);
+        }
+        let successor = run_control::request_in(&f.registry, request(3000), || Ok(())).unwrap();
+        f.parent.run_id = successor.run_id.clone();
+        f.parent.branch = format!("xnaut/runs/{}", successor.run_id);
+        f.parent.artifacts = format!(".xnaut/runs/{}", successor.run_id);
+        std::fs::write(f.work.join("app.sh"), "#!/bin/sh\necho 5\n").unwrap();
+        git(&f.work, &["add", "app.sh"]).unwrap();
+        git(&f.work, &["commit", "-m", "author implementation after staging retry"]).unwrap();
+        f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
+        run_control::update_in(&f.registry, &successor.run_id, |run| {
+            run.state = RunState::Done;
+            run.last_commit = f.q.head.clone();
+        }).unwrap();
+        let review = f.review("review-after-staging-retry", 0);
+        transfer::save_at(&f.store, &review).unwrap();
+        rows.extend([f.parent.clone(), review]);
+        // Reopen every transfer and native chain, as the completion gate does
+        // after a restart. Real committed independent report/logs remain required.
+        let rows: Vec<Transfer> = rows.iter().map(|t| serde_json::from_slice(
+            &std::fs::read(f.store.join(format!("{}.json", t.run_id))).unwrap()).unwrap()).collect();
+        let runs = completion_runs_in(&f.registry, &rows, "TEST-1");
+        assert_eq!(runs.len(), 3);
+        assert!(independent_completion_refusal_with_runs(&rows, &runs, "TEST-1", &f.q.head).unwrap().is_none());
+        assert!(independent_completion_refusal_in(&rows, "TEST-1", &f.q.head).unwrap().is_some(), "state strings without native proof remain blocking");
+        let ticket = serde_json::from_value(json!({"id":"TEST-1","project":"TEST","title":"Staging retry","type":"feature","status":"in_progress","priority":"high","owner":"author","revision":1,"created_at":"2026-10-05T12:00:00Z","updated_at":"2026-10-05T12:00:00Z"})).unwrap();
+        let snapshot = crate::project_continuity::reconcile("TEST", &[ticket], &runs, &rows, 4000);
+        assert_eq!(snapshot.tickets[0].state, crate::project_continuity::ContinuityState::Verified);
+        assert_eq!(snapshot.assignments.len(), 4, "all staging and reviewer receipts remain visible");
+        for failed in &rows[..2] {
+            assert!(snapshot.assignments.iter().any(|a| a.run_id == failed.run_id && a.state != crate::project_continuity::ContinuityState::Verified));
+        }
+        for case in ["missing_proof", "unknown_process", "broken_link", "foreign_root", "foreign_branch", "foreign_project", "foreign_owner", "foreign_remote", "published_predecessor", "duplicate_transfer", "duplicate_run", "live_successor", "stale_review"] {
+            let mut bad_rows = rows.clone();
+            let mut bad_runs = runs.clone();
+            let predecessor = bad_runs.iter_mut().find(|r| r.run_id == rows[0].run_id).unwrap();
+            match case {
+                "missing_proof" => predecessor.prelaunch_failure = None,
+                "unknown_process" => predecessor.pid = Some(123),
+                "broken_link" => predecessor.next_run_id = None,
+                "foreign_root" => predecessor.worktree_path.push_str("-other"),
+                "foreign_branch" => predecessor.branch.push_str("-other"),
+                "foreign_project" => predecessor.project = "OTHER".into(),
+                "foreign_owner" => predecessor.agent_handle = "other".into(),
+                "foreign_remote" => bad_rows[0].remote.push_str("-other"),
+                "published_predecessor" => bad_rows[0].pr_url = Some("https://fixture/pulls/other".into()),
+                "duplicate_transfer" => bad_rows.push(bad_rows[0].clone()),
+                "duplicate_run" => bad_runs.push(bad_runs[0].clone()),
+                "live_successor" => bad_runs.iter_mut().find(|r| r.run_id == successor.run_id).unwrap().state = RunState::Running,
+                "stale_review" => bad_rows[2].quality.as_mut().unwrap().head = "f".repeat(40),
+                _ => unreachable!(),
+            }
+            assert!(independent_completion_refusal_with_runs(&bad_rows, &bad_runs, "TEST-1", &f.q.head).unwrap().is_some(), "{case}");
+        }
     }
 
     #[test]
