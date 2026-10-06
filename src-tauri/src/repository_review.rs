@@ -3304,7 +3304,7 @@ mod repair_loop_tests {
     #[test]
     fn portable_quality_lock_excludes_processes_and_releases_on_drop() {
         crate::run_control::tests::cross_process_lock_fixture(
-            "repository_review::tests::portable_quality_lock_excludes_processes_and_releases_on_drop",
+            "repository_review::repair_loop_tests::portable_quality_lock_excludes_processes_and_releases_on_drop",
             |root| root.join(".fixture.quality.lock"),
             |root| QualityLease::acquire(root, "fixture").unwrap().unwrap(),
         );
