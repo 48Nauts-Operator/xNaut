@@ -1937,6 +1937,40 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn previously_verified_group_member_tracks_corrected_blocked_evidence_after_restart() {
+        let dir = scratch();
+        let ticket = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
+        let plan = plan_from("corrected-review", "XNAUT", &[],
+            &board(&[ticket], &models(), &HashSet::new()), 2, 0).unwrap();
+        remember_in(&dir, plan).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        approve(&mut group, 1);
+        transition(&mut group, 0, MemberState::Verified,
+            "independent verification evidence recorded".into(), Some("author-run".into()), 2);
+        save_in(&dir, &group).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        let previous_events = group.events.len();
+        let mut snapshot: crate::project_continuity::ProjectSnapshot = serde_json::from_value(serde_json::json!({
+            "project":"XNAUT","observed_at":3,"tickets":[],"assignments":[],"diagnostics":[]
+        })).unwrap();
+        crate::project_continuity::add_launch_receipt(&mut snapshot, &serde_json::json!({
+            "ticket":"XNAUT-1","project":"XNAUT","handle":"claude","branch":"agent/claude/xnaut-1",
+            "worktree_path":"/existing","launch":{"run_id":"author-run"}
+        }), "preserved author receipt");
+        snapshot.assignments[0].state = crate::project_continuity::ContinuityState::Blocked;
+        assert!(recover_member(&dir, &mut group, 0, &snapshot, 3));
+        assert_eq!(group.members[0].state, MemberState::Blocked);
+        assert_eq!(group.events.len(), previous_events + 1);
+        assert!(group.events.iter().any(|e| e.state == MemberState::Verified));
+        save_in(&dir, &group).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        assert!(recover_member(&dir, &mut group, 0, &snapshot, 4));
+        assert_eq!(group.members[0].state, MemberState::Blocked);
+        assert_eq!(group.events.len(), previous_events + 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     struct RefillFixture {
         registry: PathBuf,
         tickets: Vec<TicketRecord>,

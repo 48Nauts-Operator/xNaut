@@ -257,7 +257,7 @@ fn quoted(text: &str) -> String {
 }
 
 /// Is `not_finished` the sanctioned "nothing"?
-fn says_nothing_outstanding(text: &str) -> bool {
+pub(crate) fn says_nothing_outstanding(text: &str) -> bool {
     let cleaned = text
         .trim()
         .trim_end_matches(['.', '!', ',', ';'])

@@ -43,6 +43,15 @@ pub struct RequiredCheck {
     pub command: String,
 }
 
+/// Native extraction from the author's committed handback at the reviewed
+/// revision. A reviewer passing a blocked report cannot complete its task.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthorOutcome {
+    pub run_id: String,
+    pub head: String,
+    pub not_finished: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Review {
     pub state: String,
@@ -54,6 +63,8 @@ pub struct Review {
     pub attempts: u32,
     pub message: String,
     pub report: Option<Value>,
+    #[serde(default)]
+    pub author_outcome: Option<AuthorOutcome>,
     pub jev: Option<Value>,
     pub comment_url: Option<String>,
     #[serde(default)]
@@ -87,6 +98,7 @@ impl Default for Review {
             attempts: 0,
             message: String::new(),
             report: None,
+            author_outcome: None,
             jev: None,
             comment_url: None,
             repair_attempts: 0,
@@ -564,6 +576,56 @@ fn author_for<'a>(
         _ => Ok(t),
     }
 }
+/// Read immutable Git content, never the editable worktree or mutable PM
+/// handback. Legacy handbacks may omit run_id/from; their exact artifact path,
+/// task identity and reviewed revision still bind them to this author.
+fn read_author_outcome_in(root: &Path, author: &Transfer, head: &str) -> Result<AuthorOutcome, String> {
+    if !sha(head) || author.artifacts != format!(".xnaut/runs/{}", author.run_id) {
+        return Err("Author handback revision or artifact identity is invalid".into());
+    }
+    let path = format!("{head}:{}/handback.json", author.artifacts);
+    let size: usize = git(root, &["cat-file", "-s", &path])
+        .map_err(|_| "Author handback is missing at the reviewed revision")?
+        .parse().map_err(|_| "Invalid author handback size")?;
+    if size > 256 * 1024 { return Err("Author handback exceeds 256 KiB".into()); }
+    let handback: crate::handback::Handback = serde_json::from_str(&git(root, &["show", &path])?)
+        .map_err(|_| "Author handback is malformed at the reviewed revision")?;
+    if handback.run_id.as_deref().is_some_and(|id| id != author.run_id)
+        || author.ticket.as_deref().is_some_and(|ticket| ticket != handback.ticket)
+        || (!handback.from.is_empty() && handback.from != author.handle)
+    { return Err("Author handback does not match the reviewed task and author".into()); }
+    Ok(AuthorOutcome { run_id: author.run_id.clone(), head: head.into(), not_finished: handback.not_finished.map(|text| crate::project_wiki::redact(&text)) })
+}
+
+fn author_completion_evidence(t: &Transfer, q: &Review) -> Result<(), String> {
+    let outcome = q.author_outcome.as_ref().ok_or("Author completion evidence is missing; reconcile the exact reviewed handback")?;
+    if outcome.head != q.head || outcome.run_id != *q.author_run.as_ref().unwrap_or(&t.run_id) {
+        return Err("Author completion evidence belongs to a different run or revision".into());
+    }
+    match outcome.not_finished.as_deref() {
+        Some(text) if crate::handback::says_nothing_outstanding(text) => Ok(()),
+        Some(text) if !text.trim().is_empty() => Err(format!("Author work remains unfinished: {}", crate::project_wiki::redact(text))),
+        _ => Err("Author handback does not explicitly state whether work remains unfinished".into()),
+    }
+}
+
+/// Also rechecks legacy Ready records after restart, without dispatching a
+/// reviewer or charging a repair attempt. Failure preserves the passing review
+/// as evidence of what was checked, not evidence that unfinished work is done.
+fn reconcile_author_outcome(t: &Transfer, q: &mut Review, rows: &[Transfer]) -> Result<(), String> {
+    q.author_outcome = None;
+    let result = (|| {
+        let author = author_for(t, q, rows)?;
+        q.author_outcome = Some(read_author_outcome_in(Path::new(&q.worktree), author, &q.head)?);
+        author_completion_evidence(t, q)
+    })();
+    if let Err(reason) = &result {
+        q.state = "blocked".into();
+        q.message = reason.clone();
+    }
+    result
+}
+
 fn stopped_author_proof(
     t: &Transfer,
     q: &Review,
@@ -712,6 +774,7 @@ fn accept_repair_publication(
         return Err("Author repair did not change the reviewed implementation; repeated verification stopped".into());
     }
     q.author_run = Some(child.run_id.clone());
+    q.author_outcome = None;
     q.state = "pending".into();
     q.attempts = 0;
     q.child = None;
@@ -1066,6 +1129,7 @@ pub(crate) fn accepted_review_evidence(
     {
         return Err("Independent review is missing, stale, blocked or awaiting repair for this exact revision".into());
     }
+    author_completion_evidence(t, q)?;
     if q.reviewer.trim().is_empty()
         || q.reviewer
             .trim()
@@ -1315,6 +1379,10 @@ async fn advance_inner(
     permission: &Policy,
 ) -> Result<(), String> {
     let mut recovered_report = None;
+    if matches!(q.state.as_str(), "ready" | "merging" | "merged")
+        || (q.state == "publishing" && q.report.as_ref().is_some_and(|r| r["verdict"] == "pass")) {
+        reconcile_author_outcome(t, q, rows)?;
+    }
     if q.state == "blocked" && (crate::spend::is_concurrent_refusal(&q.message) || q.message == REVIEW_PAUSED_REASON) {
         let registry = crate::agents::registry_dir()?;
         let runs = crate::run_control::list_ids_in(&registry)?.iter()
@@ -1524,7 +1592,9 @@ async fn advance_inner(
             None => tokio::task::spawn_blocking(move || read_report(&tc, &cc, &qc))
                 .await.map_err(|e| e.to_string())??,
         };
+        q.report = Some(report.clone());
         if report["verdict"] == "pass" {
+            reconcile_author_outcome(t, q, rows)?;
             let author = author_for(t, q, rows)?;
             let Some((result, _)) = transfer::fetch_result(author)? else {
                 return Err("Author publication evidence missing; review cannot pass".into());
@@ -1799,6 +1869,7 @@ async fn merge(
     q: &mut Review,
     hosts: &[crate::settings::ForgeHost],
 ) -> Result<(), String> {
+    reconcile_author_outcome(t, q, &transfer::list()?)?;
     let permission = policy(&t.project, &t.remote)?;
     if !permission.automatic_review || !permission.otto_merge {
         return Err("Project merge permission was revoked".into());
@@ -2249,14 +2320,6 @@ mod repair_loop_tests {
             let base = git(&work, &["rev-parse", "HEAD"]).unwrap();
             git(&work, &["push", remote.to_str().unwrap(), "main"]).unwrap();
             git(&work, &["checkout", "-b", "task"]).unwrap();
-            std::fs::create_dir_all(work.join(".xnaut")).unwrap();
-            std::fs::write(work.join(".xnaut/verify.json"), r#"{"test":"sh test.sh"}"#).unwrap();
-            std::fs::write(work.join("app.sh"), "#!/bin/sh\necho 4\n").unwrap();
-            std::fs::write(work.join("test.sh"),"#!/bin/sh\ngot=$(sh app.sh)\nif [ \"$got\" != 5 ]; then echo \"FAIL: expected 5, got $got\"; exit 1; fi\necho 'PASS: expected 5'\n").unwrap();
-            git(&work, &["add", "."]).unwrap();
-            git(&work, &["commit", "-m", "author defect"]).unwrap();
-            let head = git(&work, &["rev-parse", "HEAD"]).unwrap();
-            git(&work, &["push", remote.to_str().unwrap(), "task"]).unwrap();
             let mut run = RunManifest::requested(
                 "author",
                 "fixture",
@@ -2266,6 +2329,18 @@ mod repair_loop_tests {
                 &[],
                 1000,
             );
+            std::fs::create_dir_all(work.join(".xnaut")).unwrap();
+            std::fs::write(work.join(".xnaut/verify.json"), r#"{"test":"sh test.sh"}"#).unwrap();
+            std::fs::write(work.join("app.sh"), "#!/bin/sh\necho 4\n").unwrap();
+            std::fs::write(work.join("test.sh"),"#!/bin/sh\ngot=$(sh app.sh)\nif [ \"$got\" != 5 ]; then echo \"FAIL: expected 5, got $got\"; exit 1; fi\necho 'PASS: expected 5'\n").unwrap();
+            let artifacts = work.join(format!(".xnaut/runs/{}", run.run_id));
+            std::fs::create_dir_all(&artifacts).unwrap();
+            std::fs::write(artifacts.join("handback.json"), json!({"ticket":"TEST-1","not_finished":"nothing"}).to_string()).unwrap();
+            git(&work, &["add", "."]).unwrap();
+            git(&work, &["commit", "-m", "author defect"]).unwrap();
+            let head = git(&work, &["rev-parse", "HEAD"]).unwrap();
+            git(&work, &["push", remote.to_str().unwrap(), "task"]).unwrap();
+
             run.project = "TEST".into();
             run.state = RunState::Done;
             let run = run_control::request_in(&registry, run, || Ok(())).unwrap();
@@ -2353,6 +2428,12 @@ mod repair_loop_tests {
             self.q.child = Some(id.into());
             self.q.worktree = path.to_string_lossy().into();
             self.q.report = Some(read_report_in(&cache, &self.parent, &child, &self.q).unwrap());
+            let mut author = self.parent.clone();
+            if let Some(id) = &self.q.author_run {
+                author.run_id = id.clone();
+                author.artifacts = format!(".xnaut/runs/{id}");
+            }
+            self.q.author_outcome = Some(read_author_outcome_in(&path, &author, &self.q.head).unwrap());
             self.q.state = if exit == 0 {
                 "ready"
             } else {
@@ -2460,7 +2541,9 @@ mod repair_loop_tests {
         f.save();
         f.reload();
         std::fs::write(f.work.join("app.sh"), "#!/bin/sh\necho 5\n").unwrap();
-        git(&f.work, &["add", "app.sh"]).unwrap();
+        std::fs::create_dir_all(f.work.join(&child.artifacts)).unwrap();
+        std::fs::write(f.work.join(&child.artifacts).join("handback.json"), json!({"ticket":"TEST-1","not_finished":"nothing"}).to_string()).unwrap();
+        git(&f.work, &["add", "."]).unwrap();
         git(&f.work, &["commit", "-m", "repair independent finding"]).unwrap();
         let fixed = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
         git(&f.work, &["push", f.remote.to_str().unwrap(), "task"]).unwrap();
@@ -2908,7 +2991,9 @@ mod repair_loop_tests {
         f.parent.branch = format!("xnaut/runs/{}", successor.run_id);
         f.parent.artifacts = format!(".xnaut/runs/{}", successor.run_id);
         std::fs::write(f.work.join("app.sh"), "#!/bin/sh\necho 5\n").unwrap();
-        git(&f.work, &["add", "app.sh"]).unwrap();
+        std::fs::create_dir_all(f.work.join(&f.parent.artifacts)).unwrap();
+        std::fs::write(f.work.join(&f.parent.artifacts).join("handback.json"), json!({"ticket":"TEST-1","not_finished":"nothing"}).to_string()).unwrap();
+        git(&f.work, &["add", "."]).unwrap();
         git(&f.work, &["commit", "-m", "author implementation after staging retry"]).unwrap();
         f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
         // Match the native publisher: the preserved local branch publishes to
@@ -2984,6 +3069,91 @@ mod repair_loop_tests {
             }
             assert!(independent_completion_refusal_with_runs(&bad_rows, &bad_runs, "TEST-1", &f.q.head).unwrap().is_some(), "{case}");
         }
+    }
+
+    #[test]
+    fn passing_review_of_blocked_author_stays_blocked_after_restart() {
+        let mut f = Fixture::new();
+        let handback_path = f.work.join(&f.parent.artifacts).join("handback.json");
+        let unfinished = "Signed exchange-rate import waits on missing docs/approved-exchange-contract.json";
+        std::fs::write(&handback_path, json!({"ticket":"TEST-1","not_finished":unfinished}).to_string()).unwrap();
+        std::fs::write(f.work.join("app.sh"), "#!/bin/sh\necho 5\n").unwrap();
+        git(&f.work, &["add", "."]).unwrap();
+        git(&f.work, &["commit", "-m", "passing baseline with explicit blocked task"]).unwrap();
+        f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
+        git(&f.work, &["push", f.remote.to_str().unwrap(), "task"]).unwrap();
+        let reviewer = f.review("review-blocked-report", 0);
+        // Reproduce an older native Ready record with no author-outcome field.
+        f.q.author_outcome = None;
+        f.save(); f.reload();
+        let history = serde_json::to_value(&f.q.events).unwrap();
+        let report = f.q.report.clone();
+        let head = f.q.head.clone();
+        let child = f.q.child.clone();
+        assert!(independent_completion_refusal_in(&[f.parent.clone(), reviewer.clone()], "TEST-1", &head).unwrap().is_some());
+        // Editing the working copy cannot erase a blocker committed at head.
+        std::fs::write(Path::new(&f.q.worktree).join(&f.parent.artifacts).join("handback.json"), json!({"ticket":"TEST-1","not_finished":"nothing"}).to_string()).unwrap();
+        for state in ["ready", "publishing", "running"] {
+            f.q.state = state.into();
+            let error = reconcile_author_outcome(&f.parent, &mut f.q, &[]).unwrap_err();
+            assert!(error.contains("docs/approved-exchange-contract.json"));
+            assert_eq!(f.q.state, "blocked");
+            assert_eq!(f.q.report, report);
+            assert_eq!(f.q.head, head);
+            assert_eq!(f.q.child, child);
+            assert_eq!(f.q.repair_attempts, 0);
+            assert_eq!(serde_json::to_value(&f.q.events).unwrap(), history);
+        }
+        let reason = f.q.message.clone();
+        let evidence = f.q.report.clone();
+        event(&f.parent, &mut f.q, &reason, evidence);
+        f.save(); f.reload();
+        assert_eq!(f.q.state, "blocked");
+        assert_eq!(f.q.events.len(), history.as_array().unwrap().len() + 1);
+        assert_eq!(f.q.author_outcome.as_ref().unwrap().not_finished.as_deref(), Some(unfinished));
+        assert!(independent_completion_refusal_in(&[f.parent.clone(), reviewer], "TEST-1", &head).unwrap().is_some());
+    }
+
+    #[test]
+    fn author_completion_requires_bound_explicit_answer_and_accepts_legacy_identity_omissions() {
+        let mut f = Fixture::new();
+        f.q.worktree = f.work.to_string_lossy().into();
+        let path = f.work.join(&f.parent.artifacts).join("handback.json");
+        // Old schema did not require run_id/from. Exact committed artifact path
+        // and ticket still identify it; explicit sanctioned answers are valid.
+        for answer in ["nothing", "Nothing.", "none", "NOTHING LEFT", "nothing outstanding"] {
+            std::fs::write(&path, json!({"ticket":"TEST-1","not_finished":answer}).to_string()).unwrap();
+            git(&f.work, &["add", "."]).unwrap();
+            git(&f.work, &["commit", "--allow-empty", "-m", "legacy completed handback"]).unwrap();
+            f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
+            f.q.state = "ready".into();
+            reconcile_author_outcome(&f.parent, &mut f.q, &[]).unwrap();
+            assert_eq!(f.q.state, "ready");
+            author_completion_evidence(&f.parent, &f.q).unwrap();
+        }
+        for bad in [
+            json!({"ticket":"TEST-1"}),
+            json!({"ticket":"TEST-1","not_finished":""}),
+            json!({"ticket":"TEST-1","not_finished":"none except missing contract"}),
+            json!({"ticket":"FOREIGN-1","not_finished":"nothing"}),
+            json!({"ticket":"TEST-1","run_id":"foreign-run","not_finished":"nothing"}),
+            json!({"ticket":"TEST-1","from":"other-author","not_finished":"nothing"}),
+            json!({"ticket":"TEST-1","not_finished":[]}),
+        ] {
+            std::fs::write(&path, bad.to_string()).unwrap();
+            git(&f.work, &["add", "."]).unwrap();
+            git(&f.work, &["commit", "-m", "invalid author handback"]).unwrap();
+            f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
+            f.q.state = "ready".into();
+            assert!(reconcile_author_outcome(&f.parent, &mut f.q, &[]).is_err(), "{bad}");
+            assert_eq!(f.q.state, "blocked");
+        }
+        std::fs::remove_file(&path).unwrap();
+        git(&f.work, &["add", "."]).unwrap();
+        git(&f.work, &["commit", "-m", "missing author handback"]).unwrap();
+        f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
+        assert!(reconcile_author_outcome(&f.parent, &mut f.q, &[]).unwrap_err().contains("missing"));
+        assert!(f.q.author_outcome.is_none());
     }
 
     #[test]

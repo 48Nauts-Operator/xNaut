@@ -1068,6 +1068,9 @@ mod tests {
         let workspace = format!("{}.review", t.local_path);
         t.quality = Some(crate::repository_review::Review {
             state: "ready".into(),
+            author_outcome: Some(crate::repository_review::AuthorOutcome {
+                run_id: r.run_id.clone(), head: head.clone(), not_finished: Some("nothing".into()),
+            }),
             reviewer: "reviewer".into(),
             head: head.clone(),
             base: base.clone(),
@@ -1428,6 +1431,7 @@ mod tests {
         };
         assert!(accepted(&[parent.clone(), reviewer.clone()]));
         for mutation in [
+            "missing_author_outcome", "unfinished_author", "stale_author", "foreign_author",
             "empty_checks",
             "blank_check",
             "forged_child",
@@ -1447,6 +1451,10 @@ mod tests {
             let mut task = parent.clone();
             let mut child = reviewer.clone();
             match mutation {
+                "missing_author_outcome" => task.quality.as_mut().unwrap().author_outcome = None,
+                "unfinished_author" => task.quality.as_mut().unwrap().author_outcome.as_mut().unwrap().not_finished = Some("Waiting on missing external contract".into()),
+                "stale_author" => task.quality.as_mut().unwrap().author_outcome.as_mut().unwrap().head = "f".repeat(40),
+                "foreign_author" => task.quality.as_mut().unwrap().author_outcome.as_mut().unwrap().run_id = "foreign-run".into(),
                 "empty_checks" => task.quality.as_mut().unwrap().required_checks.clear(),
                 "blank_check" => {
                     task.quality.as_mut().unwrap().required_checks[0].command = " ".into()
