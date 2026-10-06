@@ -124,6 +124,7 @@ pub fn save_config(cfg: &MobileConfig) -> Result<(), String> {
 }
 
 fn mobile_config_path() -> std::path::PathBuf {
+    if crate::loop_acceptance::ENABLED { return crate::loop_acceptance::config().join("mobile.json"); }
     dirs::config_dir()
         .map(|p| p.join("xnaut"))
         .unwrap_or_else(|| std::path::PathBuf::from(".xnaut"))

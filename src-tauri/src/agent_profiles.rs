@@ -514,6 +514,7 @@ fn delete_legacy_profile(rel: &str) -> Result<(), String> {
 // ─── Persistent identity profiles (XNAUT-143) ──────────────────────────────
 
 fn profile_store_path() -> PathBuf {
+    if crate::loop_acceptance::ENABLED { return crate::loop_acceptance::config().join("agent-profiles.toml"); }
     dirs::config_dir()
         .map(|path| path.join("xnaut").join("agent-profiles.toml"))
         .unwrap_or_else(|| PathBuf::from(".xnaut/agent-profiles.toml"))

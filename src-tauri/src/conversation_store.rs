@@ -25,6 +25,7 @@ fn allowed(key: &str) -> bool {
         || key.starts_with("xnaut-notebook:")
 }
 pub(crate) fn root() -> Result<PathBuf, String> {
+    if crate::loop_acceptance::ENABLED { return Ok(crate::loop_acceptance::config()); }
     Ok(dirs::config_dir()
         .ok_or("Configuration directory unavailable")?
         .join(if crate::CONTINUITY_PREVIEW { "xnaut/continuity-preview" } else if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))

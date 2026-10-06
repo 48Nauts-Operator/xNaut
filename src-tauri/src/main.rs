@@ -7,6 +7,7 @@ mod agent_hook_setup;
 mod claims;
 mod tool_support;
 mod ledger;
+mod loop_acceptance;
 mod veto;
 mod agent_hooks;
 mod agent_notes_broker;
@@ -181,6 +182,7 @@ fn print_startup_banner() {
 
 #[tokio::main]
 async fn main() {
+    loop_acceptance::initialize();
     if option_env!("XNAUT_WIKI_PREVIEW") == Some("1") {
         project_wiki::preview();
         return;
@@ -888,7 +890,7 @@ async fn main() {
                 }
             });
 
-            if FULL_WIKI_PREVIEW {
+            if FULL_WIKI_PREVIEW && !loop_acceptance::ENABLED {
                 // Continuity preview permits owner-initiated Agent tools while
                 // keeping all automatic dispatch/reconciliation below disabled.
                 if CONTINUITY_PREVIEW {
@@ -906,7 +908,7 @@ async fn main() {
 
             // Tasks Mode v1.6: automation scheduler tick.
             nudge::set_app(app.handle().clone());
-            scheduler::spawn_scheduler_task(app.handle().clone());
+            if !loop_acceptance::ENABLED { scheduler::spawn_scheduler_task(app.handle().clone()); }
             // The durable sweep (XNAUT-239): the board is worked on its own
             // clock, not only inside a chat turn.
             // The safety net (XNAUT-264): correct the records a dead app left
@@ -932,8 +934,10 @@ async fn main() {
             }
 
             // Daily consolidation of verified ticket learnings for all agents.
-            engram::spawn_daily_learning_task(app.handle().clone());
-            memory::spawn_backfill();
+            if !loop_acceptance::ENABLED {
+                engram::spawn_daily_learning_task(app.handle().clone());
+                memory::spawn_backfill();
+            }
 
             // Optional local-model triage for configured forge repositories.
             ticket_triage::spawn_auto_triage_task(app.handle().clone());

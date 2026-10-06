@@ -571,6 +571,7 @@ fn shellexpand_home(path: &str) -> String {
 }
 
 fn config_dir() -> PathBuf {
+    if crate::loop_acceptance::ENABLED { return crate::loop_acceptance::config(); }
     dirs::config_dir()
         .map(|p| p.join(if crate::CONTINUITY_PREVIEW { "xnaut/continuity-preview" } else if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))

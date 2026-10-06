@@ -220,6 +220,7 @@ pub fn vault_root(vault: &str) -> Result<PathBuf, String> {
     if vault != "work" && vault != "personal" {
         return Err(format!("unknown vault: {vault}"));
     }
+    if crate::loop_acceptance::ENABLED { return Ok(crate::loop_acceptance::root().join("vault").join(vault)); }
     // Test-only redirect, so a test can exercise real vault reads and writes
     // without touching the user's actual vault. `#[cfg(test)]` means this does
     // not exist in the shipped binary, so no environment variable can move the
