@@ -375,7 +375,6 @@ pub(crate) fn consumes_worker_capacity(run: &RunManifest) -> bool {
 
 /// Caller holds StoreLock. Requested successors reserve capacity across restarts;
 /// ticketless independent reviewers consume a worker slot just like authors.
-#[cfg(test)]
 pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
     let mut count = 0;
     for id in list_ids_in(dir)? {
