@@ -764,25 +764,18 @@ impl GroupLease {
             .write(true)
             .open(dir.join(".lock"))
             .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-                return Err("group coordinator is already advancing; retry next sweep".into());
-            }
+        match file.try_lock() {
+            Ok(()) => {},
+            Err(std::fs::TryLockError::WouldBlock) =>
+                return Err("group coordinator is already advancing; retry next sweep".into()),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.to_string()),
         }
         Ok(Self(file))
     }
 }
 impl Drop for GroupLease {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            unsafe {
-                libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-            }
-        }
+        let _ = self.0.unlock();
     }
 }
 
@@ -2211,6 +2204,13 @@ mod tests {
             .all(|member| member.state == MemberState::Queued));
     }
 
+    #[test]
+    fn portable_group_lock_excludes_processes_and_releases_on_drop() {
+        crate::run_control::tests::cross_process_lock_fixture(
+            "swarm_plan::tests::portable_group_lock_excludes_processes_and_releases_on_drop",
+            |root| root.join("swarm-plans/.lock"), |root| GroupLease::acquire(root).unwrap(),
+        );
+    }
     #[test]
     fn coordinator_lock_excludes_overlapping_refills_and_releases_on_drop() {
         let dir = scratch();

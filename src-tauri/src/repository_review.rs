@@ -1552,29 +1552,17 @@ impl QualityLease {
             .write(true)
             .open(dir.join(format!(".{id}.quality.lock")))
             .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::WouldBlock {
-                    return Ok(None);
-                }
-                return Err(error.to_string());
-            }
+        match file.try_lock() {
+            Ok(()) => {},
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.to_string()),
         }
         Ok(Some(Self(file)))
     }
 }
 impl Drop for QualityLease {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            unsafe {
-                libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-            }
-        }
+        let _ = self.0.unlock();
     }
 }
 
@@ -3311,6 +3299,14 @@ mod repair_loop_tests {
         assert_eq!(
             f.q.repair_attempts, 0,
             "reservation/environment checks are not code-fix attempts"
+        );
+    }
+    #[test]
+    fn portable_quality_lock_excludes_processes_and_releases_on_drop() {
+        crate::run_control::tests::cross_process_lock_fixture(
+            "repository_review::tests::portable_quality_lock_excludes_processes_and_releases_on_drop",
+            |root| root.join(".fixture.quality.lock"),
+            |root| QualityLease::acquire(root, "fixture").unwrap().unwrap(),
         );
     }
     #[test]

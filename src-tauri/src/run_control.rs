@@ -338,25 +338,14 @@ impl StoreLock {
             .truncate(false)
             .open(dir.join(".lock"))
             .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-        }
+        file.lock().map_err(|e| e.to_string())?;
         Ok(Self(file))
     }
 }
 impl Drop for StoreLock {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            unsafe {
-                libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-            }
-        }
+        // Explicit release also handles inherited/cloned file descriptors.
+        let _ = self.0.unlock();
     }
 }
 /// Operations revoking worker authority share the admission lock so a stop
@@ -1555,6 +1544,49 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(dir).unwrap();
         author.state = RunState::Running;
         assert_eq!(live_viewport_count(&[author], &sessions, &[transfer]), 1);
+    }
+
+    /// Exercise each production lease against a separate process, including
+    /// Windows where the previous cfg(unix) implementation acquired no lock.
+    pub(crate) fn cross_process_lock_fixture<L>(
+        name: &str, lock_path: impl Fn(&Path) -> PathBuf, acquire: impl Fn(&Path) -> L,
+    ) {
+        if std::env::var("XNAUT_TEST_LOCK_CASE").as_deref() == Ok(name) {
+            let root = PathBuf::from(std::env::var_os("XNAUT_TEST_LOCK_ROOT").unwrap());
+            let file = std::fs::OpenOptions::new().read(true).write(true).open(lock_path(&root)).unwrap();
+            let blocked = match file.try_lock() {
+                Ok(()) => { file.unlock().unwrap(); false },
+                Err(std::fs::TryLockError::WouldBlock) => true,
+                Err(std::fs::TryLockError::Error(error)) => panic!("contender lock error: {error}"),
+            };
+            assert_eq!(blocked, std::env::var("XNAUT_TEST_LOCK_HELD").unwrap() == "true");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("xnaut-portable-lock-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let check = |held: bool| {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--nocapture"])
+                .env("XNAUT_TEST_LOCK_CASE", name).env("XNAUT_TEST_LOCK_ROOT", &root)
+                .env("XNAUT_TEST_LOCK_HELD", held.to_string()).output().unwrap();
+            assert!(output.status.success(), "contender failed: {} {}",
+                String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "contender test did not execute");
+        };
+        let holder = acquire(&root);
+        check(true);
+        drop(holder);
+        check(false);
+        // Reacquisition proves the old process did not leave a stale lease.
+        drop(acquire(&root));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn portable_registry_lock_excludes_processes_and_releases_on_drop() {
+        cross_process_lock_fixture(
+            "run_control::tests::portable_registry_lock_excludes_processes_and_releases_on_drop",
+            |root| root.join(".lock"), |root| StoreLock::acquire(root).unwrap(),
+        );
     }
 
     pub(crate) fn run() -> RunManifest {
