@@ -199,9 +199,26 @@ pub(crate) fn refuse_local_worker() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("xnaut-loop-isolation-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
     #[test]
     fn scoped_paths_never_escape_or_follow_owner_links() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = Scratch::new();
         let root = tmp.path().canonicalize().unwrap();
         assert_eq!(
             checked_child(&root, "config-base/xnaut/debug.log").unwrap(),
@@ -212,7 +229,7 @@ mod tests {
         }
         #[cfg(unix)]
         {
-            let outside = tempfile::tempdir().unwrap();
+            let outside = Scratch::new();
             std::os::unix::fs::symlink(outside.path(), root.join("config")).unwrap();
             assert!(checked_child(&root, "config/settings.json").is_err());
             std::os::unix::fs::symlink(outside.path().join("missing"), root.join("broken"))
@@ -222,7 +239,7 @@ mod tests {
     }
     #[test]
     fn startup_requires_own_ports_and_disables_unrelated_automation() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = Scratch::new();
         let root = tmp.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("config")).unwrap();
         std::fs::write(
