@@ -1283,7 +1283,11 @@ mod tests {
     /// resume its reserved PR, while the same commit cannot start a fresh task.
     #[test]
     fn reserved_repair_inherits_base_before_fresh_source_branch_validation() {
-        let dir = tempfile::tempdir().unwrap();
+        struct Scratch(PathBuf);
+        impl Scratch { fn path(&self) -> &Path { &self.0 } }
+        impl Drop for Scratch { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+        let dir = Scratch(std::env::temp_dir().join(format!("xnaut-repair-base-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(dir.path()).unwrap();
         let root = dir.path().join("source");
         let remote = dir.path().join("remote.git");
         git(dir.path(), &["init", "--bare", "-b", "main", remote.to_str().unwrap()]).unwrap();
