@@ -166,6 +166,14 @@ fn review_verified(t: &Transfer, run: Option<&RunManifest>, revoked: bool) -> bo
         && r["findings"]
             .as_array()
             .is_some_and(|fs| fs.iter().all(|f| f["severity"] == "info"))
+        && q.required_checks.iter().all(|required| {
+            r["tests"].as_array().is_some_and(|tests| {
+                tests.iter().any(|test| {
+                    test["command"].as_str() == Some(required.command.as_str())
+                        && test["exit_code"] == 0
+                })
+            })
+        })
         && r["tests"].as_array().is_some_and(|tests| {
             !tests.is_empty()
                 && tests.iter().all(|test| {
@@ -317,6 +325,92 @@ pub fn reconcile(
             && a.state != ContinuityState::Blocked
         {
             a.state = ContinuityState::Review;
+        }
+    }
+    // A review belongs to the delivered author revision. After a repair the
+    // root transfer retains the review history, but its old worker did not
+    // produce the revised commit. Project that evidence onto the proven
+    // successor and retain the predecessor as history.
+    for original in transfers.iter().filter(|t| t.project == project) {
+        let Some(q) = &original.quality else {
+            continue;
+        };
+        let Some(author_id) = q.author_run.as_deref().filter(|id| *id != original.run_id) else {
+            continue;
+        };
+        let child = transfers.iter().find(|t| {
+            t.run_id == author_id
+                && t.project == project
+                && t.ticket == original.ticket
+                && t.repair_parent.as_deref() == Some(original.run_id.as_str())
+                && t.handle == original.handle
+                && t.local_path == original.local_path
+                && t.branch == original.branch
+                && t.remote == original.remote
+                && t.pr_url == original.pr_url
+        });
+        let author_run = selected.get(author_id).copied();
+        let mut current = author_run;
+        let mut seen = std::collections::HashSet::new();
+        let mut linked = false;
+        while let Some(run) = current {
+            if !seen.insert(run.run_id.as_str()) {
+                break;
+            }
+            if run.run_id == original.run_id {
+                linked = true;
+                break;
+            }
+            let Some(prior) = run
+                .previous_run_id
+                .as_deref()
+                .and_then(|id| selected.get(id).copied())
+            else {
+                break;
+            };
+            if prior.next_run_id.as_deref() != Some(run.run_id.as_str())
+                || prior.ticket != run.ticket
+                || prior.branch != run.branch
+                || prior.worktree_path != run.worktree_path
+                || prior.agent_handle != run.agent_handle
+            {
+                break;
+            }
+            current = Some(prior);
+        }
+        if child.is_none()
+            || !linked
+            || author_run
+                .is_none_or(|r| r.ticket != original.ticket || r.agent_handle != original.handle)
+        {
+            result.diagnostics.push(Diagnostic { blocking: true, source: format!("transfer:{}#quality/author_run", original.run_id), message: "Repair review does not have a matching reciprocal author lineage; inspect the original and successor records.".into() });
+            continue;
+        }
+        let Some(a) = rows.get_mut(author_id) else {
+            continue;
+        };
+        let revoked = tickets
+            .iter()
+            .filter(|t| Some(&t.id) == original.ticket.as_ref())
+            .any(|t| {
+                t.approval
+                    .signoff
+                    .as_ref()
+                    .is_some_and(|s| s.revoked || s.revert_sha.is_some())
+                    || t.approval
+                        .jury_reviews
+                        .iter()
+                        .any(|j| ["revoked", "revoke_requested"].contains(&j.state.as_str()))
+            });
+        a.review_state = Some(q.state.clone());
+        a.evidence.push(evidence("review", format!("transfer:{}#quality", original.run_id),
+            format!("Original delivery retains review {} for successor {} at {}; original workers remain in history.", q.state, author_id, q.head)));
+        if review_verified(original, author_run, revoked) {
+            a.state = ContinuityState::Verified;
+            a.evidence.push(evidence("verification", format!("transfer:{}#quality/report", original.run_id),
+                format!("Independent evidenced tests passed at the repaired revision {}; reciprocal native continuation and same delivery branch/PR recorded. Current remote refs and merge permission were not checked.", q.head)));
+        } else if revoked || ["blocked", "changes_requested"].contains(&q.state.as_str()) {
+            a.state = ContinuityState::Blocked;
         }
     }
     let pr_pattern = regex::Regex::new(r#"https?://[^\s<>"')]+/(?:pulls|pull)/[0-9]+"#);
@@ -1021,6 +1115,73 @@ mod tests {
             ..Default::default()
         });
     }
+    #[test]
+    fn repaired_review_applies_only_to_reciprocal_same_delivery_successor() {
+        let mut parent = run();
+        parent.state = RunState::Done;
+        parent.last_commit = "a".repeat(40);
+        let mut child = parent.clone();
+        child.run_id = ulid::Ulid::new().to_string();
+        child.previous_run_id = Some(parent.run_id.clone());
+        parent.next_run_id = Some(child.run_id.clone());
+        child.last_commit = "d".repeat(40);
+        let mut original = transfer(&parent);
+        accepted_review(&mut original, &child);
+        original.quality.as_mut().unwrap().author_run = Some(child.run_id.clone());
+        let mut delivered = transfer(&child);
+        delivered.repair_parent = Some(parent.run_id.clone());
+        let board = vec![ticket()];
+        let observed = reconcile(
+            "XNAUT",
+            &board,
+            &[parent.clone(), child.clone()],
+            &[original.clone(), delivered.clone()],
+            child.last_seen_at,
+        );
+        assert_eq!(
+            observed
+                .assignments
+                .iter()
+                .find(|a| a.run_id == child.run_id)
+                .unwrap()
+                .state,
+            ContinuityState::Verified
+        );
+        assert_ne!(
+            observed
+                .assignments
+                .iter()
+                .find(|a| a.run_id == parent.run_id)
+                .unwrap()
+                .state,
+            ContinuityState::Verified
+        );
+        assert_eq!(observed.tickets[0].state, ContinuityState::Verified);
+        // A real new PR, changed branch or missing reciprocal pointer is not
+        // an authorized repair merely because somebody copied its run ID.
+        delivered.pr_url = Some("https://forge.invalid/pulls/other".into());
+        let different = reconcile(
+            "XNAUT",
+            &board,
+            &[parent.clone(), child.clone()],
+            &[original.clone(), delivered],
+            child.last_seen_at,
+        );
+        assert_ne!(different.tickets[0].state, ContinuityState::Verified);
+        assert!(different.diagnostics.iter().any(|d| d.blocking));
+        child.previous_run_id = None;
+        let mut delivered = transfer(&child);
+        delivered.repair_parent = Some(parent.run_id.clone());
+        let unlinked = reconcile(
+            "XNAUT",
+            &board,
+            &[parent, child.clone()],
+            &[original, delivered],
+            child.last_seen_at,
+        );
+        assert_ne!(unlinked.tickets[0].state, ContinuityState::Verified);
+    }
+
     struct Scratch(std::path::PathBuf);
     impl Scratch {
         fn new() -> Self {
