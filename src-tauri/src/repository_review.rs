@@ -577,8 +577,8 @@ fn author_for<'a>(
     }
 }
 /// Read immutable Git content, never the editable worktree or mutable PM
-/// handback. Legacy handbacks may omit run_id/from; their exact artifact path,
-/// task identity and reviewed revision still bind them to this author.
+/// handback. Legacy handbacks may omit ticket/run_id/from; the native transfer,
+/// exact artifact path and reviewed revision still bind them to this author.
 fn read_author_outcome_in(root: &Path, author: &Transfer, head: &str) -> Result<AuthorOutcome, String> {
     if !sha(head) || author.artifacts != format!(".xnaut/runs/{}", author.run_id) {
         return Err("Author handback revision or artifact identity is invalid".into());
@@ -591,7 +591,7 @@ fn read_author_outcome_in(root: &Path, author: &Transfer, head: &str) -> Result<
     let handback: crate::handback::Handback = serde_json::from_str(&git(root, &["show", &path])?)
         .map_err(|_| "Author handback is malformed at the reviewed revision")?;
     if handback.run_id.as_deref().is_some_and(|id| id != author.run_id)
-        || author.ticket.as_deref().is_some_and(|ticket| ticket != handback.ticket)
+        || (!handback.ticket.is_empty() && author.ticket.as_deref() != Some(handback.ticket.as_str()))
         || (!handback.from.is_empty() && handback.from != author.handle)
     { return Err("Author handback does not match the reviewed task and author".into()); }
     Ok(AuthorOutcome { run_id: author.run_id.clone(), head: head.into(), not_finished: handback.not_finished.map(|text| crate::project_wiki::redact(&text)) })
@@ -3119,10 +3119,10 @@ mod repair_loop_tests {
         let mut f = Fixture::new();
         f.q.worktree = f.work.to_string_lossy().into();
         let path = f.work.join(&f.parent.artifacts).join("handback.json");
-        // Old schema did not require run_id/from. Exact committed artifact path
-        // and ticket still identify it; explicit sanctioned answers are valid.
+        // Old publishers let the importer bind ticket/run_id/from from the native
+        // Transfer. Exact committed artifact path still identifies the author.
         for answer in ["nothing", "Nothing.", "none", "NOTHING LEFT", "nothing outstanding"] {
-            std::fs::write(&path, json!({"ticket":"TEST-1","not_finished":answer}).to_string()).unwrap();
+            std::fs::write(&path, json!({"not_finished":answer}).to_string()).unwrap();
             git(&f.work, &["add", "."]).unwrap();
             git(&f.work, &["commit", "--allow-empty", "-m", "legacy completed handback"]).unwrap();
             f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
