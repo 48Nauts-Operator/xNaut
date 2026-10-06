@@ -358,11 +358,14 @@ pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
     Ok(count)
 }
 pub(crate) fn worker_capacity_in(dir: &Path, cap: usize, own: &str, replacing: Option<&str>) -> Result<(),String> {
+    worker_capacity_matching_in(dir, cap, own, replacing, |_| true)
+}
+pub(crate) fn worker_capacity_matching_in(dir: &Path, cap: usize, own: &str, replacing: Option<&str>, belongs: impl Fn(&RunManifest)->bool) -> Result<(),String> {
     let mut live = 0;
     for id in list_ids_in(dir)? {
         let run = load_manifest_in(dir, &id)?;
         if id != own && replacing != Some(id.as_str())
-            && matches!(run.kind, RunKind::Agent | RunKind::Review) && !run.state.terminal() { live += 1; }
+            && matches!(run.kind, RunKind::Agent | RunKind::Review) && !run.state.terminal() && belongs(&run) { live += 1; }
     }
     if live >= cap { return Err(format!("worker capacity: {live} durable author/reviewer reservations already consume limit {cap}")); }
     Ok(())

@@ -554,6 +554,63 @@ fn pins_match(
         && run.environment.as_deref() == Some(environment)
 }
 
+struct WorkerGroupScope {
+    tickets: HashSet<String>,
+    review_worktrees: HashSet<String>,
+}
+impl WorkerGroupScope {
+    fn new(group: &Group, transfers: &[crate::repository_transfer::Transfer]) -> Self {
+        let tickets: HashSet<_> = group.members.iter().map(|m| m.ticket.clone()).collect();
+        let parents: HashSet<_> = transfers
+            .iter()
+            .filter(|t| t.ticket.as_ref().is_some_and(|id| tickets.contains(id)))
+            .map(|t| t.run_id.as_str())
+            .collect();
+        let mut review_worktrees = HashSet::new();
+        for transfer in transfers {
+            if parents.contains(transfer.run_id.as_str()) {
+                if let Some(q) = &transfer.quality {
+                    if !q.worktree.is_empty() {
+                        review_worktrees.insert(q.worktree.clone());
+                    }
+                }
+            }
+            if transfer
+                .review_parent
+                .as_deref()
+                .is_some_and(|id| parents.contains(id))
+            {
+                review_worktrees.insert(transfer.local_path.clone());
+            }
+        }
+        Self {
+            tickets,
+            review_worktrees,
+        }
+    }
+    fn contains(&self, run: &crate::run_control::RunManifest) -> bool {
+        run.ticket
+            .as_ref()
+            .is_some_and(|ticket| self.tickets.contains(ticket))
+            || self.review_worktrees.contains(&run.worktree_path)
+    }
+    fn count(&self, registry: &Path) -> Result<usize, String> {
+        let mut count = 0;
+        for id in crate::run_control::list_ids_in(registry)? {
+            let run = crate::run_control::load_manifest_in(registry, &id)?;
+            if matches!(
+                run.kind,
+                crate::run_control::RunKind::Agent | crate::run_control::RunKind::Review
+            ) && !run.state.terminal()
+                && self.contains(&run)
+            {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+}
+
 /// Called while native StoreLock is held, before a Requested worker becomes
 /// admitted or a repair successor consumes a slot. Includes ticketless reviewers.
 pub(crate) fn worker_admission_in(
@@ -583,7 +640,8 @@ pub(crate) fn worker_admission_for_ticket_in(
             ticket = parent.ticket.clone();
         }
     }
-    let mut cap = crate::spend::load_ceiling().max_concurrent as usize;
+    let global_cap = crate::spend::load_ceiling().max_concurrent as usize;
+    let mut group_capacity = None;
     if let Some(ticket) = ticket {
         if let Some(group) = groups
             .iter()
@@ -627,9 +685,10 @@ pub(crate) fn worker_admission_for_ticket_in(
                 crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.into(),
             )?
             .max_parallel as usize;
-            cap = cap
-                .min(group.plan.max_parallel)
-                .min(profile_cap.clamp(1, HARD_CAP));
+            group_capacity = Some((
+                group.plan.max_parallel.min(profile_cap.clamp(1, HARD_CAP)),
+                WorkerGroupScope::new(group, &crate::repository_transfer::list()?),
+            ));
         }
     }
     // During repair reservation, the proven-stopped predecessor may itself
@@ -653,7 +712,13 @@ pub(crate) fn worker_admission_for_ticket_in(
         })
         .map(|p| p.run_id.as_str())
         .unwrap_or(&run.run_id);
-    crate::run_control::worker_capacity_in(registry, cap, own, replacing)
+    crate::run_control::worker_capacity_in(registry, global_cap, own, replacing)?;
+    if let Some((cap, scope)) = group_capacity {
+        crate::run_control::worker_capacity_matching_in(registry, cap, own, replacing, |run| {
+            scope.contains(run)
+        })?;
+    }
+    Ok(())
 }
 
 pub(crate) fn authorizes_ticket_repair(
@@ -1036,7 +1101,8 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
             .unwrap_or(DEFAULT_MAX_PARALLEL);
             if !slot_available(
                 &group.members[i],
-                crate::run_control::worker_count_in(&registry)?,
+                WorkerGroupScope::new(&group, &crate::repository_transfer::list()?)
+                    .count(&registry)?,
                 group.plan.max_parallel.min(profile_cap.clamp(1, HARD_CAP)),
             ) {
                 transition(
@@ -1449,6 +1515,67 @@ mod tests {
         assert_eq!(report(&restarted).queued.len(), 3);
         assert!(groups_in(&dir, Some("OTHER")).unwrap().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn group_cap_excludes_other_projects_but_counts_its_ticketless_reviewer() {
+        use crate::run_control::{self, RunManifest};
+        let registry = scratch();
+        let target = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
+        let plan = plan_from(
+            "parallel-projects",
+            "XNAUT",
+            &[],
+            &board(&[target], &models(), &HashSet::new()),
+            2,
+            0,
+        )
+        .unwrap();
+        remember_in(&registry, plan).unwrap();
+        let group = groups_in(&registry, None).unwrap().remove(0);
+        let parent: crate::repository_transfer::Transfer = serde_json::from_value(serde_json::json!({"run_id":"author", "project":"XNAUT", "ticket":"XNAUT-1", "handle":"claude", "local_path":"/task", "remote":"https://fixture/team/repo.git", "source_sha":"a".repeat(40), "base":"main", "branch":"task", "workdir":"worker", "artifacts":".xnaut/runs/author", "state":"review", "pr_url":"https://fixture/pulls/1"})).unwrap();
+        let mut reviewer = parent.clone();
+        reviewer.run_id = "reviewer".into();
+        reviewer.ticket = None;
+        reviewer.review_parent = Some(parent.run_id.clone());
+        reviewer.local_path = "/group-review".into();
+        let scope = WorkerGroupScope::new(&group, &[parent, reviewer]);
+        for n in 0..2 {
+            let run = RunManifest::requested(
+                "other-project",
+                "fixture",
+                &format!("/elsewhere-{n}"),
+                Some(format!("OTHER-{n}")),
+                None,
+                &[],
+                n,
+            );
+            run_control::request_in(&registry, run, || Ok(())).unwrap();
+        }
+        let launch = |path: &str, ticket: Option<String>| {
+            let run = RunManifest::requested("worker", "fixture", path, ticket, None, &[], 10);
+            let own = run.run_id.clone();
+            run_control::request_in(&registry, run, || {
+                run_control::worker_capacity_in(&registry, 8, &own, None)?;
+                run_control::worker_capacity_matching_in(&registry, 2, &own, None, |r| {
+                    scope.contains(r)
+                })
+            })
+        };
+        assert!(
+            launch("/task", Some("XNAUT-1".into())).is_ok(),
+            "other projects do not consume this group's cap"
+        );
+        assert!(
+            launch("/group-review", None).is_ok(),
+            "independent reviewer consumes the second group slot"
+        );
+        assert_eq!(scope.count(&registry).unwrap(), 2);
+        assert!(launch("/third-group-worker", Some("XNAUT-1".into()))
+            .unwrap_err()
+            .contains("worker capacity:"));
+        assert_eq!(run_control::worker_count_in(&registry).unwrap(), 4);
+        std::fs::remove_dir_all(registry).unwrap();
     }
 
     #[test]
