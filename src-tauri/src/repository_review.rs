@@ -2598,6 +2598,11 @@ mod repair_loop_tests {
         git(&f.work, &["add", "app.sh"]).unwrap();
         git(&f.work, &["commit", "-m", "author implementation after staging retry"]).unwrap();
         f.q.head = git(&f.work, &["rev-parse", "HEAD"]).unwrap();
+        // Match the native publisher: the preserved local branch publishes to
+        // this run's remote delivery ref before independent review reads it.
+        git(&f.work, &["push", f.remote.to_str().unwrap(),
+            &format!("HEAD:refs/heads/{}", f.parent.branch)]).unwrap();
+        assert_eq!(ref_sha(&f.parent, &format!("refs/heads/{}", f.parent.branch)).unwrap(), f.q.head);
         run_control::update_in(&f.registry, &successor.run_id, |run| {
             run.state = RunState::Done;
             run.last_commit = f.q.head.clone();
