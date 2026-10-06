@@ -350,7 +350,10 @@ def verify(remote, branch, ssh, parsed):
         )
         if pushed.returncode:
             detail = (pushed.stdout + pushed.stderr).lower()
-            if any(reason in detail for reason in ("(non-fast-forward)", "(fetch first)", "(stale info)")):
+            if any(
+                reason in detail
+                for reason in ("(non-fast-forward)", "(fetch first)", "(stale info)")
+            ):
                 raise SetupError("repository_branch_changed")
             raise SetupError("repository_write_denied")
     # LFS uses separate authorization; a successful Git probe is insufficient.

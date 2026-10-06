@@ -369,14 +369,24 @@ else: sys.exit(1)
                     return real_run(args, **kwargs)
 
                 with patch.object(access, "run", side_effect=record_run):
-                    access.verify(url, "xnaut/runs/existing", [str(ssh)], access.endpoint(url))
+                    access.verify(
+                        url, "xnaut/runs/existing", [str(ssh)], access.endpoint(url)
+                    )
                 probes = [args for args in commands if "push" in args]
                 self.assertEqual(len(probes), 1)
                 self.assertIn("--dry-run", probes[0])
-                self.assertFalse(any(arg.startswith("--force") or arg.startswith("+") for arg in probes[0]))
-                self.assertEqual(probes[0][-1], "FETCH_HEAD:refs/heads/xnaut/runs/existing")
+                self.assertFalse(
+                    any(
+                        arg.startswith("--force") or arg.startswith("+")
+                        for arg in probes[0]
+                    )
+                )
+                self.assertEqual(
+                    probes[0][-1], "FETCH_HEAD:refs/heads/xnaut/runs/existing"
+                )
                 fetches = [args for args in commands if "fetch" in args]
                 self.assertEqual(fetches[0][-1], "refs/heads/xnaut/runs/existing")
+
                 # A concurrent branch move is not misreported as missing write
                 # permission. Simulate the movement only in the disposable repo.
                 def move_after_listing(args, **kwargs):
@@ -384,16 +394,28 @@ else: sys.exit(1)
                     if "ls-remote" in args:
                         (seed / "source.txt").write_text("concurrent task revision")
                         git("-C", str(seed), "commit", "-am", "Concurrent revision")
-                        git("-C", str(seed), "push", str(remote), "HEAD:refs/heads/xnaut/runs/existing")
+                        git(
+                            "-C",
+                            str(seed),
+                            "push",
+                            str(remote),
+                            "HEAD:refs/heads/xnaut/runs/existing",
+                        )
                     return result
 
                 with patch.object(access, "run", side_effect=move_after_listing):
-                    with self.assertRaisesRegex(access.SetupError, "^repository_branch_changed$"):
-                        access.verify(url, "xnaut/runs/existing", [str(ssh)], access.endpoint(url))
+                    with self.assertRaisesRegex(
+                        access.SetupError, "^repository_branch_changed$"
+                    ):
+                        access.verify(
+                            url, "xnaut/runs/existing", [str(ssh)], access.endpoint(url)
+                        )
                 before = git("--git-dir", str(remote), "show-ref")
                 denied.touch()
                 for branch in ("xnaut/runs/fourth", "xnaut/runs/existing"):
-                    with self.assertRaisesRegex(access.SetupError, "^repository_write_denied$"):
+                    with self.assertRaisesRegex(
+                        access.SetupError, "^repository_write_denied$"
+                    ):
                         access.verify(url, branch, [str(ssh)], access.endpoint(url))
                 self.assertEqual(git("--git-dir", str(remote), "show-ref"), before)
         finally:
