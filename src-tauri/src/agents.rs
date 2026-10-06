@@ -1983,7 +1983,10 @@ pub(crate) async fn launch_agent_with_env(
     let mut run = RunManifest::requested(handle, &req.agent_id, &req.worktree_path,
         req.ticket.clone(), req.model.clone(), &run_control::ProjectSite::board(), run_control::now_ms());
     run.user_conversation = req.conversation_mode || req.resume;
-    let live = state.agent_sessions.lock().await.values().filter(|m| status::counts_as_live(m.status)).count();
+    let live_sessions = state.agent_sessions.lock().await.values()
+        .filter(|m| status::counts_as_live(m.status))
+        .map(|m| (m.session_id.clone(), m.agent_id.clone())).collect::<Vec<_>>();
+    let live = run_control::live_viewport_count_in(&dir, &live_sessions)?;
     let capacity_run = run.clone();
     let run = run_control::request_in(&dir,run,|| {
         if !req.conversation_mode && !req.resume { crate::swarm_plan::worker_admission_in(&dir, &capacity_run, None)?; }

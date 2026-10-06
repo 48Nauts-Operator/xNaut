@@ -144,6 +144,18 @@ fn concurrent_refusal(live_sessions: usize, cap: u32) -> String {
     )
 }
 
+/// Exact legacy pre-execution concurrency refusal, not a daily-budget hold
+/// or an arbitrary provider/launch error that happens to mention capacity.
+pub(crate) fn is_concurrent_refusal(reason: &str) -> bool {
+    let Some(rest) = reason.strip_prefix("spend ceiling: ") else { return false; };
+    let Some((live, rest)) = rest.split_once(" agent sessions are already live and the concurrent cap is ") else { return false; };
+    let Some((cap, _)) = rest.split_once('.') else { return false; };
+    match (live.parse::<usize>(), cap.parse::<u32>()) {
+        (Ok(live), Ok(cap)) => reason == concurrent_refusal(live, cap),
+        _ => false,
+    }
+}
+
 fn daily_refusal(used: u32, cap: u32) -> String {
     format!("spend ceiling: {used} launches today reached the daily cap of {cap}.")
 }

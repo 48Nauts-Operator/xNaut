@@ -18,6 +18,7 @@ pub struct Policy {
 pub const MAX_REPAIR_ATTEMPTS: u32 = 3;
 const REVIEW_TIMEOUT_MS: i64 = 60 * 60_000;
 const REPAIR_BACKOFF_MS: i64 = 60_000;
+const REVIEW_PAUSED_REASON: &str = "Review/repair paused by current project permission or read-only switch";
 
 /// Immutable chronology consumed by the project Journal. Native IDs, exact
 /// revisions and original observation times survive each repair/re-review.
@@ -1187,7 +1188,7 @@ pub async fn advance(
     let permission = policy(&t.project, &t.remote)?;
     let mut q = t.quality.clone().unwrap();
     if !permission.automatic_review || crate::switches::load().read_only {
-        let reason = "Review/repair paused by current project permission or read-only switch";
+        let reason = REVIEW_PAUSED_REASON;
         if q.message != reason {
             persist(t, &mut q, reason, None)?;
         }
@@ -1203,6 +1204,35 @@ pub async fn advance(
     transfer::save(t)?;
     result
 }
+/// The old spend gate returned this exact error before creating any native
+/// run or transfer. Recover only that recorded path, never a generic failed
+/// launch or a receipt whose worker admission is uncertain.
+fn legacy_spend_hold_proven(
+    t: &Transfer,
+    q: &Review,
+    rows: &[Transfer],
+    runs: &[crate::run_control::RunManifest],
+) -> bool {
+    if q.state != "blocked" || !(crate::spend::is_concurrent_refusal(&q.message) || q.message == REVIEW_PAUSED_REASON)
+        || q.child.is_some() || q.attempts == 0 || !sha(&q.head)
+        || q.required_checks.is_empty() || q.deadline_at == 0
+    { return false; }
+    let mut events = q.events.iter().rev().filter(|e| e.reason != REVIEW_PAUSED_REASON);
+    if !events.next().is_some_and(|e| e.state == "blocked" && crate::spend::is_concurrent_refusal(&e.reason) && e.head == q.head && e.review_child.is_none())
+        || !events.next().is_some_and(|e| e.state == "dispatching" && e.head == q.head && e.review_child.is_none())
+    { return false; }
+    let expected = crate::sandbox::launch_env::project_root(Path::new(&t.local_path))
+        .join(".worktrees").join(format!("review-{}-{}-{}", t.run_id, &q.head[..12], q.attempts));
+    Path::new(&q.worktree) == expected
+        && !rows.iter().any(|row| row.local_path == q.worktree)
+        && !runs.iter().any(|run| run.worktree_path == q.worktree)
+}
+fn requeue_unlaunched_review(q: &mut Review) {
+    q.state = "pending".into();
+    q.attempts = q.attempts.saturating_sub(1);
+    q.deadline_at = 0;
+}
+
 async fn advance_inner(
     app: &tauri::AppHandle,
     t: &mut Transfer,
@@ -1211,6 +1241,19 @@ async fn advance_inner(
     hosts: &[crate::settings::ForgeHost],
     permission: &Policy,
 ) -> Result<(), String> {
+    if q.state == "blocked" && (crate::spend::is_concurrent_refusal(&q.message) || q.message == REVIEW_PAUSED_REASON) {
+        let registry = crate::agents::registry_dir()?;
+        let runs = crate::run_control::list_ids_in(&registry)?.iter()
+            .map(|id| crate::run_control::load_manifest_in(&registry, id))
+            .collect::<Result<Vec<_>, _>>()?;
+        if legacy_spend_hold_proven(t, q, rows, &runs)
+            && git(Path::new(&q.worktree), &["rev-parse", "HEAD"])? == q.head
+            && git(Path::new(&q.worktree), &["status", "--porcelain"])?.is_empty()
+        {
+            requeue_unlaunched_review(q);
+            persist(t, q, "Recovered proven pre-execution spend-capacity refusal; existing review workspace retained", None)?;
+        }
+    }
     if matches!(
         q.state.as_str(),
         "changes_requested" | "repair_reserved" | "repair_running"
@@ -1328,12 +1371,11 @@ async fn advance_inner(
         .await;
         let launched = match launched {
             Ok(launched) => launched,
-            Err(error) if error.starts_with("worker capacity:") => {
-                // Native request_in durably marked this admission refused
-                // before worker execution. Keep the worktree/evidence; no
-                // actual reviewer attempt was spent racing another refill.
-                q.state = "pending".into();
-                q.attempts = q.attempts.saturating_sub(1);
+            Err(error) if error.starts_with("worker capacity:") || crate::spend::is_concurrent_refusal(&error) => {
+                // Native request_in refused admission, or the legacy spend
+                // gate refused before run creation. Neither started a worker.
+                // Daily budget and uncertain/provider failures are not retries.
+                requeue_unlaunched_review(q);
                 persist(t, q, &format!("Independent reviewer queued: {error}"), None)?;
                 return Ok(());
             }
@@ -2040,6 +2082,48 @@ mod tests {
 mod repair_loop_tests {
     use super::*;
     use crate::run_control::{self, RunManifest, RunState};
+    #[test]
+    fn only_proven_preexecution_spend_refusal_requeues_without_spending_attempt() {
+        let mut f = Fixture::new();
+        f.q.state = "dispatching".into();
+        f.q.attempts = 1;
+        f.q.deadline_at = 60_000;
+        f.q.worktree = crate::sandbox::launch_env::project_root(Path::new(&f.parent.local_path))
+            .join(".worktrees").join(format!("review-{}-{}-1", f.parent.run_id, &f.q.head[..12])).to_string_lossy().into();
+        event(&f.parent, &mut f.q, "Required project verification commands bound to the reviewed revision", None);
+        let error = "spend ceiling: 2 agent sessions are already live and the concurrent cap is 2. Wait for one to finish, or raise the cap (spend-ceiling.json).";
+        f.q.state = "blocked".into();
+        f.q.message = error.into();
+        event(&f.parent, &mut f.q, error, None);
+        f.save(); f.reload(); // restart carries native event provenance
+        assert!(legacy_spend_hold_proven(&f.parent, &f.q, &[], &[]));
+        let mut paused = f.q.clone(); paused.message = REVIEW_PAUSED_REASON.into();
+        event(&f.parent, &mut paused, REVIEW_PAUSED_REASON, None);
+        assert!(legacy_spend_hold_proven(&f.parent, &paused, &[], &[]));
+        let mut uncertain = f.q.clone(); uncertain.child = Some("existing-child".into());
+        assert!(!legacy_spend_hold_proven(&f.parent, &uncertain, &[], &[]));
+        uncertain = f.q.clone(); uncertain.events.clear();
+        assert!(!legacy_spend_hold_proven(&f.parent, &uncertain, &[], &[]));
+        uncertain = f.q.clone(); uncertain.worktree.push_str("-changed");
+        assert!(!legacy_spend_hold_proven(&f.parent, &uncertain, &[], &[]));
+        for error in ["spend ceiling: 20 launches today reached the daily cap of 20.", "worker viewport disconnected", "provider: spend ceiling: 2 agent sessions are already live"] {
+            assert!(!crate::spend::is_concurrent_refusal(error));
+        }
+        let mut child = crate::run_control::tests::run(); child.worktree_path = f.q.worktree.clone();
+        for state in [RunState::Requested, RunState::Running, RunState::Failed, RunState::Done] {
+            child.state = state;
+            assert!(!legacy_spend_hold_proven(&f.parent, &f.q, &[], std::slice::from_ref(&child)));
+        }
+        let mut receipt = f.parent.clone(); receipt.local_path = f.q.worktree.clone();
+        assert!(!legacy_spend_hold_proven(&f.parent, &f.q, &[receipt], &[]));
+        let checks = serde_json::to_value(&f.q.required_checks).unwrap();
+        let worktree = f.q.worktree.clone();
+        requeue_unlaunched_review(&mut f.q);
+        assert_eq!(f.q.state, "pending"); assert_eq!(f.q.attempts, 0);
+        assert_eq!(f.q.worktree, worktree);
+        assert_eq!(serde_json::to_value(&f.q.required_checks).unwrap(), checks);
+    }
+
     struct Fixture {
         root: PathBuf,
         work: PathBuf,

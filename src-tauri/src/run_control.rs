@@ -384,6 +384,31 @@ pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
     }
     Ok(count)
 }
+/// A terminal native run can leave its viewport attached. Only an exact,
+/// unique session/agent match retires that UI row from the legacy spend count;
+/// unknown, ambiguous, or failed workers remain conservative. Atomic native
+/// worker admission still counts detached workers and Requested reservations.
+pub(crate) fn live_viewport_count_in(
+    dir: &Path,
+    sessions: &[(String, String)],
+) -> Result<usize, String> {
+    let runs = list_ids_in(dir)?.iter()
+        .map(|id| load_manifest_in(dir, id)).collect::<Result<Vec<_>, _>>()?;
+    Ok(live_viewport_count(&runs, sessions))
+}
+fn live_viewport_count(runs: &[RunManifest], sessions: &[(String, String)]) -> usize {
+    sessions.iter().filter(|(session, handle)| {
+        let mut matching = runs.iter().filter(|run| {
+            run.pty_session.as_deref() == Some(session.as_str())
+                || run.zellij_session.as_deref() == Some(session.as_str())
+        });
+        let Some(run) = matching.next() else { return true; };
+        matching.next().is_some()
+            || run.agent_handle != *handle
+            || !matches!(run.state, RunState::Done | RunState::Retired)
+    }).count()
+}
+
 pub(crate) fn worker_capacity_in(dir: &Path, cap: usize, own: &str, replacing: Option<&str>) -> Result<(),String> {
     worker_capacity_matching_in(dir, cap, own, replacing, |_| true)
 }
@@ -1341,6 +1366,26 @@ pub fn finish_failed_in(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[test]
+    fn completed_viewport_does_not_hold_worker_spend_capacity() {
+        let mut author = run();
+        author.pty_session = Some("author-viewport".into());
+        author.state = RunState::Done;
+        let sessions = vec![("author-viewport".into(), "codex".into()), ("unregistered-live".into(), "other".into())];
+        assert_eq!(live_viewport_count(std::slice::from_ref(&author), &sessions), 1);
+        for state in [RunState::Running, RunState::Starting, RunState::Blocked, RunState::Failed, RunState::Undead] {
+            author.state = state;
+            assert_eq!(live_viewport_count(std::slice::from_ref(&author), &sessions), 2, "{state:?}");
+        }
+        author.state = RunState::Done;
+        let mut another = author.clone();
+        another.run_id = "conflicting-identity".into();
+        assert_eq!(live_viewport_count(&[author.clone(), another], &sessions), 2);
+        author.agent_handle = "different-owner".into();
+        assert_eq!(live_viewport_count(&[author], &sessions), 2);
+        assert_eq!(live_viewport_count(&[], &sessions), 2);
+    }
+
     pub(crate) fn run() -> RunManifest {
         RunManifest {
             schema_version: SCHEMA_VERSION,

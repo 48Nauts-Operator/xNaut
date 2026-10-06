@@ -2040,13 +2040,12 @@ pub async fn agent_profile_launch(
     // fleet spend, and stay ungated.
     let fresh = !req.conversation_mode && !req.resume;
     if fresh && !matches!(route, LaunchRoute::Local) {
-        let live = {
+        let live_sessions = {
             let sessions = state.agent_sessions.lock().await;
-            sessions
-                .values()
-                .filter(|meta| crate::status::counts_as_live(meta.status))
-                .count()
+            sessions.values().filter(|meta| crate::status::counts_as_live(meta.status))
+                .map(|meta| (meta.session_id.clone(), meta.agent_id.clone())).collect::<Vec<_>>()
         };
+        let live = crate::run_control::live_viewport_count_in(&crate::agents::registry_dir()?, &live_sessions)?;
         crate::spend::admit_launch(live)?;
         // The writer lease (XNAUT-232) was only ever claimed by the build
         // flow's workspace step. Dispatch, a cold wake and a direct launch all
