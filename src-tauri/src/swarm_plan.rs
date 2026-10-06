@@ -1193,14 +1193,14 @@ async fn refill_in(
         .filter(|g| g.approved_at.is_some() && g.stopped_at.is_none())
     {
         let mut unavailable = vec![false; group.members.len()];
-        for i in 0..group.members.len() {
+        for (i, is_unavailable) in unavailable.iter_mut().enumerate() {
             if let Err(error) = backend.reconcile(&group.plan.project, &group.members[i].ticket) {
                 let reason = format!(
                     "Prelaunch recovery unavailable for {}: {error}",
                     group.members[i].ticket
                 );
                 block_local(registry, &mut group, i, reason)?;
-                unavailable[i] = true;
+                *is_unavailable = true;
             }
         }
         if unavailable.iter().all(|blocked| *blocked) {
@@ -1209,8 +1209,8 @@ async fn refill_in(
         let snapshot = match backend.snapshot(&group.plan.project) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                for i in 0..group.members.len() {
-                    if !unavailable[i] {
+                for (i, is_unavailable) in unavailable.iter().enumerate() {
+                    if !is_unavailable {
                         let reason = format!(
                             "Project recovery unavailable for {}: {error}",
                             group.plan.project
@@ -1221,8 +1221,8 @@ async fn refill_in(
                 continue;
             }
         };
-        for i in 0..group.members.len() {
-            if unavailable[i] {
+        for (i, is_unavailable) in unavailable.into_iter().enumerate() {
+            if is_unavailable {
                 continue;
             }
             let run = group.plan.runs[i].clone();
@@ -1249,8 +1249,8 @@ async fn refill_in(
                 )?;
                 continue;
             }
-            if recover_member(&registry, &mut group, i, &snapshot, now) {
-                save_in(&registry, &group)?;
+            if recover_member(registry, &mut group, i, &snapshot, now) {
+                save_in(registry, &group)?;
                 continue;
             }
             if group.members[i].state != MemberState::Queued {
@@ -1265,7 +1265,7 @@ async fn refill_in(
                     None,
                     now,
                 );
-                save_in(&registry, &group)?;
+                save_in(registry, &group)?;
                 continue;
             }
             if !backend.capacity(registry, &group, i)? {
@@ -1277,7 +1277,7 @@ async fn refill_in(
                     None,
                     now,
                 );
-                save_in(&registry, &group)?;
+                save_in(registry, &group)?;
                 continue;
             }
             if let Err(refusal) = backend.admission(&run, &group.plan.project) {
@@ -1288,7 +1288,7 @@ async fn refill_in(
                 };
                 group.members[i].refusal = Some(refusal.clone());
                 transition(&mut group, i, state, refusal.reason, None, now);
-                save_in(&registry, &group)?;
+                save_in(registry, &group)?;
                 continue;
             }
             group.members[i].refusal = None;
@@ -1300,7 +1300,7 @@ async fn refill_in(
                 None,
                 now,
             );
-            save_in(&registry, &group)?;
+            save_in(registry, &group)?;
             match backend
                 .dispatch(run.clone(), group.plan.project.clone())
                 .await
@@ -1336,7 +1336,7 @@ async fn refill_in(
                     )
                 }
             }
-            save_in(&registry, &group)?;
+            save_in(registry, &group)?;
         }
     }
     Ok(())
