@@ -2044,13 +2044,21 @@ async function offerOrphanedWorklog() {
   (document.getElementById('app') || document.body).prepend(bar);
 }
 
+function syncSettingsMotion() {
+  // Hidden native webviews can leave fadeIn pending at opacity zero while the
+  // full-screen panel still intercepts input. Keep its final state available.
+  document.getElementById('settings-panel')?.classList.toggle('settings-no-motion', document.hidden);
+}
+document.addEventListener('visibilitychange', syncSettingsMotion);
+
 window.toggleSettingsPanel = function() {
   const panel = document.getElementById('settings-panel');
   if (!panel) return;
+  syncSettingsMotion();
   if (panel.style.display === 'none' || !panel.style.display) {
     panel.style.display = 'flex';
     loadSettingsSection('ai');
-    document.getElementById('settings-search-input')?.focus();
+    if (!document.hidden) document.getElementById('settings-search-input')?.focus();
   } else {
     panel.style.display = 'none';
   }
@@ -2059,6 +2067,7 @@ window.toggleSettingsPanel = function() {
 window.xnautOpenVoiceSettings = function () {
   const panel = document.getElementById('settings-panel');
   if (!panel) return;
+  syncSettingsMotion();
   panel.style.display = 'flex';
   loadSettingsSection('voice');
 };

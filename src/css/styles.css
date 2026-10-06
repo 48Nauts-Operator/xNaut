@@ -220,6 +220,8 @@ body {
   animation: fadeIn 0.15s ease-out;
 }
 
+.settings-panel.settings-no-motion { animation: none; }
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
