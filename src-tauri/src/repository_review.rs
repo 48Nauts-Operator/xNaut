@@ -879,6 +879,139 @@ fn accept_repair_publication(
     q.repair_child = None;
     Ok(())
 }
+/// Only a recorded spend refusal before execution may reopen a reserved repair.
+/// Missing transfer/process evidence alone is not a retry authorization.
+fn repair_spend_refusal_proven(
+    t: &Transfer, q: &Review, rows: &[Transfer], runs: &[crate::run_control::RunManifest],
+) -> Option<crate::run_control::RunManifest> {
+    use crate::run_control::{RunKind, RunState};
+    if !matches!(q.state.as_str(), "blocked" | "repair_reserved")
+        || q.repair_attempts >= MAX_REPAIR_ATTEMPTS || !sha(&q.head) || !sha(&q.base)
+        || q.report.as_ref().is_none_or(|r| r["verdict"] != "changes_requested"
+            || r["head"] != q.head || r["base"] != q.base)
+    { return None; }
+    let id = q.repair_child.as_deref()?;
+    let matching: Vec<_> = runs.iter().filter(|r| r.run_id == id).collect();
+    let [run] = matching.as_slice() else { return None; };
+    let error = run.last_signal.strip_prefix("admission failed: ")?;
+    if !crate::spend::is_concurrent_refusal(error) { return None; }
+    let bound = |e: &LoopEvent| e.head == q.head && e.base == q.base
+        && e.author_child.as_deref() == Some(id) && e.review_child == q.child
+        && e.predecessor_run_id.as_deref() == Some(q.author_run.as_deref().unwrap_or(&t.run_id));
+    let events: Vec<_> = q.events.iter().filter(|e| e.reason != REVIEW_PAUSED_REASON).collect();
+    let reservation = events.iter().rposition(|e| bound(e) && e.state == "repair_reserved"
+        && e.reason == "Author repair reserved on the existing branch/worktree/PR")?;
+    let refusals = &events[reservation + 1..];
+    if refusals.is_empty() || !refusals.iter().all(|e| bound(e)
+        && ((e.state == "blocked" && e.reason == error)
+            || (e.state == "repair_reserved" && e.reason.strip_prefix("Author repair queued: ")
+                .is_some_and(|s| s.starts_with("worker capacity:") || crate::spend::is_concurrent_refusal(s)))))
+        || !refusals.iter().any(|e| e.reason == error || e.reason == format!("Author repair queued: {error}"))
+    { return None; }
+    let mut proof = (*run).clone();
+    // Native reservation writes the child first, then retires its predecessor.
+    // Replay either crash boundary only for a unique unstarted successor.
+    let candidates: Vec<_> = runs.iter().filter(|r| r.previous_run_id.as_deref() == Some(id)).collect();
+    if run.state == RunState::Retired || !candidates.is_empty() {
+        let [child] = candidates.as_slice() else { return None; };
+        if (run.next_run_id.as_deref() != Some(child.run_id.as_str())
+                && !(run.state == RunState::Failed && run.next_run_id.is_none()))
+            || child.state != RunState::Requested
+            || child.ticket != run.ticket || child.project != run.project
+            || child.agent_handle != run.agent_handle || child.runtime_id != run.runtime_id
+            || child.remote_env != run.remote_env || child.worktree_path != run.worktree_path
+            || child.branch != run.branch || child.last_commit != q.head
+            || child.kind != RunKind::Agent || child.user_conversation || child.admission_refused
+            || child.prelaunch_failure.is_some() || child.pid.is_some() || child.pty_session.is_some()
+            || child.process_birth.is_some() || child.zellij_session.is_some() || child.output_path.is_some()
+            || child.last_hook_at.is_some() || child.capture_bytes != 0 || child.next_run_id.is_some()
+            || child.last_signal != format!("independent review requested author repair after {id}")
+            || rows.iter().any(|r| r.run_id == child.run_id)
+        { return None; }
+        proof.state = RunState::Failed;
+    } else if run.next_run_id.is_some() {
+        return None;
+    }
+    if !crate::run_control::spend_prelaunch_refused(&proof) || proof.user_conversation
+        || proof.output_path.is_some() || proof.kind != RunKind::Agent
+        || proof.project != t.project || proof.ticket != t.ticket || t.ticket.is_none()
+        || proof.agent_handle != t.handle || proof.worktree_path != t.local_path
+        || proof.branch != t.local_branch || t.local_branch.is_empty() || proof.last_commit != q.head
+        || rows.iter().any(|r| r.run_id == id)
+    { return None; }
+    let author = q.author_run.as_deref().unwrap_or(&t.run_id);
+    let mut current = *run;
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        if !seen.insert(current.run_id.clone()) { return None; }
+        let previous = current.previous_run_id.as_deref()?;
+        let parents: Vec<_> = runs.iter().filter(|r| r.run_id == previous).collect();
+        let [parent] = parents.as_slice() else { return None; };
+        if parent.state != RunState::Retired || !parent.ticket_returned
+            || parent.retirement.as_ref().and_then(|r| r.stopped_at).is_none()
+            || parent.next_run_id.as_deref() != Some(current.run_id.as_str()) || parent.ticket != run.ticket
+            || parent.project != run.project || parent.agent_handle != run.agent_handle
+            || parent.runtime_id != run.runtime_id || parent.remote_env != run.remote_env
+            || parent.worktree_path != run.worktree_path || parent.branch != run.branch
+            || runs.iter().filter(|r| r.previous_run_id.as_deref() == Some(previous)).count() != 1
+        { return None; }
+        if parent.run_id == author { break; }
+        let mut refused_parent = (*parent).clone();
+        refused_parent.state = RunState::Failed;
+        if !crate::run_control::spend_prelaunch_refused(&refused_parent)
+            || parent.last_commit != q.head || parent.output_path.is_some()
+            || rows.iter().any(|r| r.run_id == parent.run_id)
+        { return None; }
+        current = *parent;
+    }
+    Some((*run).clone())
+}
+fn repair_registry_rows(registry: &Path) -> Result<Vec<crate::run_control::RunManifest>, String> {
+    crate::run_control::list_ids_in(registry)?.iter()
+        .map(|id| crate::run_control::load_manifest_in(registry, id)).collect()
+}
+fn reserve_after_repair_spend_at(
+    stores: (&Path, &Path), t: &mut Transfer, q: &mut Review, rows: &[Transfer], now: i64,
+    admit: impl FnOnce(&crate::run_control::RunManifest) -> Result<(), String>,
+) -> Result<(), String> {
+    let (store, registry) = stores;
+    let refused = repair_spend_refusal_proven(t, q, rows, &repair_registry_rows(registry)?)
+        .ok_or("Repair capacity refusal lacks exact pre-execution reservation proof")?;
+    let tree = Path::new(&t.local_path);
+    if git(tree, &["symbolic-ref", "--short", "HEAD"])? != t.local_branch
+        || git(tree, &["rev-parse", "HEAD"])? != q.head
+        || !git(tree, &["status", "--porcelain"])?.is_empty()
+    { return Err("Capacity-held repair worktree changed; preserve it for owner recovery".into()); }
+    let proof = crate::run_control::Proofs {
+        pid_absent: true, session_known: true, capture_known: true, capture_quiet: true,
+        worktree_exists: true, branch_matches: true, commit: q.head.clone(), ..Default::default()
+    };
+    let next = crate::run_control::reserve_repair_admitted_in(registry, &refused.run_id, &proof, now, |next| {
+        // The native store lock is held. Refuse a concurrent change instead of
+        // retiring a different worker from the earlier snapshot.
+        if crate::run_control::load_manifest_in(registry, &refused.run_id)? != refused {
+            return Err("Repair reservation changed before capacity recovery".into());
+        }
+        admit(next)
+    })?;
+    if next.state != crate::run_control::RunState::Requested
+        || next.previous_run_id.as_deref() != Some(refused.run_id.as_str())
+        || next.project != refused.project || next.ticket != refused.ticket
+        || next.agent_handle != refused.agent_handle || next.runtime_id != refused.runtime_id
+        || next.remote_env != refused.remote_env || next.worktree_path != refused.worktree_path
+        || next.branch != refused.branch || next.last_commit != q.head
+    {
+        return Err("Repair successor changed or already started; retain existing receipts for recovery".into());
+    }
+    q.repair_child = Some(next.run_id);
+    q.state = "repair_reserved".into();
+    q.next_attempt_at = 0;
+    q.message = "Author repair reserved on the existing branch/worktree/PR".into();
+    let reason = q.message.clone();
+    event(t, q, &reason, Some(json!({"pre_execution_capacity_refusal":refused})));
+    t.quality = Some(q.clone());
+    transfer::save_at(store, t)
+}
 async fn advance_repair(
     app: &tauri::AppHandle,
     t: &mut Transfer,
@@ -901,7 +1034,21 @@ async fn advance_repair(
         }
     }
     if q.state == "repair_reserved" {
+        if now < q.next_attempt_at { return Ok(()); }
         repair_authorized(t, q)?;
+        let registry = crate::agents::registry_dir()?;
+        let runs = repair_registry_rows(&registry)?;
+        if repair_spend_refusal_proven(t, q, rows, &runs).is_some() {
+            if let Err(error) = reserve_after_repair_spend_at(
+                (&transfer::store_dir()?, &registry), t, q, rows, now,
+                |next| crate::swarm_plan::worker_admission_in(&registry, next, None),
+            ) {
+                if !error.starts_with("worker capacity:") { return Err(error); }
+                q.next_attempt_at = now + REPAIR_BACKOFF_MS;
+                persist(t, q, &format!("Author repair queued: {error}"), None)?;
+                return Ok(());
+            }
+        }
         restore_author(t)?;
         let id = q
             .repair_child
@@ -971,7 +1118,21 @@ async fn advance_repair(
                     environment: Some(environment.into()),
                 },
             )
-            .await?;
+            .await;
+            let launched = match launched {
+                Ok(launched) => launched,
+                Err(error) if crate::spend::is_concurrent_refusal(&error) => {
+                    // Persist the precise refusal before considering a retry.
+                    // Only typed native pre-execution proof can reopen it.
+                    q.next_attempt_at = now + REPAIR_BACKOFF_MS;
+                    persist(t, q, &format!("Author repair queued: {error}"), None)?;
+                    if repair_spend_refusal_proven(t, q, &transfer::list()?, &repair_registry_rows(&registry)?).is_none() {
+                        return Err(error);
+                    }
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
             if launched.run_id.as_deref() != Some(id.as_str()) {
                 return Err(
                     "Repair launcher returned another run identity; inspect both receipts".into(),
@@ -1474,6 +1635,14 @@ async fn advance_inner(
     if matches!(q.state.as_str(), "ready" | "merging" | "merged")
         || (q.state == "publishing" && q.report.as_ref().is_some_and(|r| r["verdict"] == "pass")) {
         reconcile_author_outcome(t, q, rows)?;
+    }
+    if q.state == "blocked" && (crate::spend::is_concurrent_refusal(&q.message) || q.message == REVIEW_PAUSED_REASON) {
+        let registry = crate::agents::registry_dir()?;
+        if repair_spend_refusal_proven(t, q, rows, &repair_registry_rows(&registry)?).is_some() {
+            // The existing historical rejection remains in events. The repair
+            // path rechecks current authorization and atomically reserves capacity.
+            q.state = "repair_reserved".into();
+        }
     }
     if q.state == "blocked" && (crate::spend::is_concurrent_refusal(&q.message) || q.message == REVIEW_PAUSED_REASON) {
         let registry = crate::agents::registry_dir()?;
@@ -2609,6 +2778,102 @@ mod repair_loop_tests {
                 ..Default::default()
             }
         }
+    }
+    /// XNAUT-465: replay the actual reservation -> typed spend refusal ->
+    /// restart -> same-PR native admission boundary using persisted stores.
+    #[test]
+    fn repair_capacity_refusal_restarts_without_charging_or_duplicating_work() {
+        let mut f = Fixture::new();
+        let red = f.review("review-capacity", 1);
+        let author = f.parent.run_id.clone();
+        let proof = f.proof();
+        reserve_repair_at(&f.store, &f.registry, &mut f.parent, &mut f.q, &author, &proof, 2000).unwrap();
+        let refused_id = f.q.repair_child.clone().unwrap();
+        let pending = run_control::load_manifest_in(&f.registry, &refused_id).unwrap();
+        let reason = "spend ceiling: 3 agent sessions are already live and the concurrent cap is 2. Wait for one to finish, or raise the cap (spend-ceiling.json).";
+        let refused = run_control::refuse_prelaunch_in(&f.registry, pending,
+            run_control::PrelaunchPhase::SpendAdmission, reason).unwrap();
+        f.q.state = "blocked".into();
+        f.q.message = reason.into();
+        event(&f.parent, &mut f.q, reason, None);
+        f.save(); f.reload();
+        let history = f.q.events.len();
+        let report = f.q.report.clone();
+        let head = f.q.head.clone();
+        let pr = f.parent.pr_url.clone();
+        let rows = vec![f.parent.clone(), red];
+        let runs = repair_registry_rows(&f.registry).unwrap();
+        assert_eq!(repair_spend_refusal_proven(&f.parent, &f.q, &rows, &runs), Some(refused.clone()));
+        for mutation in ["no_type", "wrong_phase", "pid", "output", "branch", "project", "remote", "head", "reciprocal", "next", "duplicate", "no_event", "other_error", "transfer"] {
+            let mut altered = runs.clone(); let mut q = f.q.clone(); let mut receipts = rows.clone();
+            let index = altered.iter().position(|r| r.run_id == refused_id).unwrap();
+            match mutation {
+                "no_type" => altered[index].prelaunch_failure = None,
+                "wrong_phase" => altered[index].prelaunch_failure.as_mut().unwrap().phase = run_control::PrelaunchPhase::RepositoryStaging,
+                "pid" => altered[index].pid = Some(42),
+                "output" => altered[index].output_path = Some("captured".into()),
+                "branch" => altered[index].branch = "other".into(),
+                "project" => altered[index].project = "OTHER".into(),
+                "remote" => altered[index].remote_env = Some("other".into()),
+                "head" => altered[index].last_commit = "b".repeat(40),
+                "reciprocal" => altered.iter_mut().find(|r| r.run_id == author).unwrap().next_run_id = None,
+                "next" => altered[index].next_run_id = Some("unknown".into()),
+                "duplicate" => altered.push(altered[index].clone()),
+                "no_event" => q.events.clear(),
+                "other_error" => q.events.last_mut().unwrap().reason = "provider connection failed".into(),
+                "transfer" => { let mut receipt = f.parent.clone(); receipt.run_id = refused_id.clone(); receipts.push(receipt); },
+                _ => unreachable!(),
+            }
+            assert!(repair_spend_refusal_proven(&f.parent, &q, &receipts, &altered).is_none(), "{mutation}");
+        }
+        // A full global/group cap keeps the historical child and all counters.
+        assert!(reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+            &rows, 3000, |_| Err("worker capacity: full".into())).unwrap_err().starts_with("worker capacity:"));
+        assert_eq!(run_control::load_manifest_in(&f.registry, &refused_id).unwrap(), refused);
+        assert_eq!(f.q.repair_child.as_deref(), Some(refused_id.as_str()));
+        assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(), 2);
+        let rejected_quality = f.q.clone();
+        reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+            &rows, 4000, |_| Ok(())).unwrap();
+        let successor = f.q.repair_child.clone().unwrap();
+        assert_ne!(successor, refused_id);
+        assert_eq!(f.q.author_run.as_deref(), Some(author.as_str()));
+        assert_eq!(f.q.repair_attempts, 0);
+        assert_eq!(f.q.report, report); assert_eq!(f.q.head, head); assert_eq!(f.parent.pr_url, pr);
+        assert_eq!(f.q.events.len(), history + 1);
+        assert_eq!(f.q.events[history].evidence.as_ref().unwrap()["pre_execution_capacity_refusal"]["run_id"], refused_id);
+        // First native crash window: child persisted, refused predecessor not
+        // yet retired/linked. Native replay repairs the pointer, not the ID.
+        run_control::update_in(&f.registry, &refused_id, |r| {
+            r.state = refused.state; r.next_run_id = None;
+            r.retirement = refused.retirement.clone(); r.ticket_returned = refused.ticket_returned;
+        }).unwrap();
+        f.q = rejected_quality.clone(); f.save(); f.reload();
+        reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+            &rows, 4500, |_| panic!("orphan reservation already consumed capacity")).unwrap();
+        assert_eq!(f.q.repair_child.as_deref(), Some(successor.as_str()));
+        assert_eq!(run_control::load_manifest_in(&f.registry, &refused_id).unwrap().next_run_id.as_deref(), Some(successor.as_str()));
+        // Second window: both native records saved, quality not yet saved.
+        f.q = rejected_quality; f.save(); f.reload();
+        reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+            &rows, 5000, |_| panic!("already reserved capacity must not mint another run")).unwrap();
+        assert_eq!(f.q.repair_child.as_deref(), Some(successor.as_str()));
+        assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(), 3);
+        f.reload();
+        let mut launch = RunManifest::requested("author", "fixture", f.work.to_str().unwrap(),
+            Some("TEST-1".into()), None, &[], 6000);
+        launch.project = "TEST".into();
+        run_control::bind_pending_in(&f.registry, &mut launch).unwrap();
+        assert_eq!(launch.run_id, successor);
+        let mut child = Transfer { run_id: successor.clone(), source_sha: head,
+            branch: format!("xnaut/runs/{successor}"), artifacts: format!(".xnaut/runs/{successor}"),
+            pr_url: None, quality: None, ..f.parent.clone() };
+        transfer::inherit_repair_delivery(&mut child, &[f.parent.clone()]).unwrap();
+        assert_eq!(child.pr_url, pr); assert_eq!(child.branch, f.parent.branch);
+        assert_eq!(child.repair_parent.as_deref(), Some(author.as_str()));
+        assert_eq!(run_control::request_in(&f.registry, launch.clone(), || Ok(())).unwrap().run_id, successor);
+        assert!(run_control::request_in(&f.registry, launch, || panic!("duplicate worker")).is_err());
+        assert_eq!(f.q.repair_attempts, 0, "only a returned launch receipt charges an attempt");
     }
     /// Uses real Git branches, real failing/passing shell tests, committed
     /// independent report/log blobs, persisted transfer receipts and the native
