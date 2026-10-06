@@ -472,13 +472,20 @@ fn binding_for(project: Option<&str>, source: &str) -> Result<Option<TicketBindi
     }))
 }
 
-// OS lock is released on interruption/restart; concurrent app processes cannot
-// both infer/publish/decide for the same source fingerprint.
-fn record_lock(fingerprint: &str) -> Result<std::fs::File, String> {
+// Keep the lock for the whole inference/publication/decision attempt. Explicit
+// unlock is required: a forked child or cloned descriptor can outlive this guard
+// and keep the shared open-file description alive after its File is dropped.
+struct RecordLock(std::fs::File);
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+fn record_lock(fingerprint: &str) -> Result<RecordLock, String> {
     let path = record_path(fingerprint)?;
     record_lock_at(&path)
 }
-fn record_lock_at(path: &Path) -> Result<std::fs::File, String> {
+fn record_lock_at(path: &Path) -> Result<RecordLock, String> {
     std::fs::create_dir_all(path.parent().ok_or("Invalid triage path")?)
         .map_err(|e| e.to_string())?;
     let file = std::fs::OpenOptions::new()
@@ -489,7 +496,7 @@ fn record_lock_at(path: &Path) -> Result<std::fs::File, String> {
         .map_err(|e| e.to_string())?;
     file.try_lock()
         .map_err(|_| "Triage for this finding is already in progress".to_string())?;
-    Ok(file)
+    Ok(RecordLock(file))
 }
 
 fn find_record_by_run(run_id: &str) -> Result<TriageRecord, String> {
@@ -2091,6 +2098,34 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(unix)]
+    #[test]
+    fn triage_guard_unlocks_even_when_a_duplicate_descriptor_outlives_the_attempt() {
+        let root = std::env::temp_dir().join(format!("triage-lock-dup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("fixture.json");
+        let original = std::fs::OpenOptions::new().write(true).create(true)
+            .truncate(false).open(path.with_extension("lock")).unwrap();
+        original.try_lock().unwrap();
+        let duplicate = original.try_clone().unwrap();
+        drop(original);
+        assert!(record_lock_at(&path).is_err(), "a raw duplicated descriptor really retains the lock");
+        duplicate.unlock().unwrap();
+        drop(duplicate);
+
+        let guard = record_lock_at(&path).unwrap();
+        let inherited = guard.0.try_clone().unwrap();
+        assert!(record_lock_at(&path).is_err(), "the live attempt remains exclusive");
+        drop(guard);
+        let next = record_lock_at(&path).expect("guard drop explicitly releases the shared lock");
+        assert!(inherited.metadata().is_ok(), "the duplicate is still open during reacquisition");
+        drop(inherited);
+        assert!(record_lock_at(&path).is_err(), "closing an old descriptor cannot release the next attempt");
+        drop(next);
+        drop(record_lock_at(&path).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn incomplete_retry_is_bounded_and_locks_survive_only_live_attempts() {
         let root = std::env::temp_dir().join(format!("triage-lock-464-{}", uuid::Uuid::new_v4()));
