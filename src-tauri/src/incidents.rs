@@ -106,9 +106,101 @@ pub fn prior<'a>(
     found
 }
 
+/// A relationship supported by saved incident evidence, never a duplicate verdict.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CauseCandidate {
+    pub ticket: String,
+    pub run_id: Option<String>,
+    pub reference: String,
+    pub reason: String,
+    pub observed_at: i64,
+    pub reported_cause: Option<String>,
+    pub fix: Option<String>,
+}
+
+/// Match actual failure/cause statements rather than titles. Conflicting explicit
+/// component/category/path/cause fields keep findings separate. Unknown fields
+/// cannot establish a match; a handback cause remains an attributed claim.
+pub fn cause_candidates(
+    incidents: &[Incident],
+    project: &str,
+    report: &str,
+) -> Vec<CauseCandidate> {
+    fn field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+        text.lines().find_map(|line| {
+            line.trim()
+                .split_once(':')
+                .filter(|(k, _)| k.trim().eq_ignore_ascii_case(key))
+                .map(|(_, v)| v.trim())
+                .filter(|v| !v.is_empty())
+        })
+    }
+    fn meaningful_equal(a: &str, b: &str) -> bool {
+        let a = shape(a);
+        let b = shape(b);
+        a.split_whitespace().count() >= MIN_SHAPE_WORDS && a == b
+    }
+    let mut found = Vec::new();
+    for incident in incidents {
+        let Some(number) = incident.ticket.strip_prefix(&format!("{project}-")) else {
+            continue;
+        };
+        if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let historical = format!(
+            "{}\n{}",
+            incident.signal,
+            incident.cause.as_deref().unwrap_or_default()
+        );
+        if ["component","category","path","root cause"].iter().any(|key| {
+            matches!((field(report,key),field(&historical,key)),(Some(a),Some(b)) if !a.eq_ignore_ascii_case(b))
+        }) { continue; }
+        let same_signal = report
+            .lines()
+            .any(|line| meaningful_equal(line, &incident.signal));
+        let same_cause = field(report, "root cause")
+            .zip(
+                incident
+                    .cause
+                    .as_deref()
+                    .map(|cause| field(cause, "root cause").unwrap_or(cause)),
+            )
+            .is_some_and(|(a, b)| meaningful_equal(a, b));
+        if !same_signal && !same_cause {
+            continue;
+        }
+        found.push(CauseCandidate {
+            ticket: incident.ticket.clone(),
+            run_id: incident.run_id.clone(),
+            reference: format!(
+                "incident:{}:{}",
+                incident.ticket,
+                incident.run_id.as_deref().unwrap_or("ticket")
+            ),
+            reason: if same_cause {
+                "Same recorded cause statement; confirm the relationship before grouping"
+            } else {
+                "Same recorded failure shape; root cause is not established"
+            }
+            .into(),
+            observed_at: incident.at,
+            reported_cause: incident.cause.clone(),
+            fix: incident.fix.clone(),
+        });
+    }
+    found.sort_by_key(|row| std::cmp::Reverse(row.observed_at));
+    found.truncate(12);
+    found
+}
+
 /// One line for the owner, or nothing. Attached to an escalation so a repeat
 /// arrives already recognised instead of being investigated again.
-pub fn recognised(incidents: &[Incident], signal: &str, exclude_run: Option<&str>) -> Option<String> {
+pub fn recognised(
+    incidents: &[Incident],
+    signal: &str,
+    exclude_run: Option<&str>,
+) -> Option<String> {
     let prior = prior(incidents, signal, exclude_run);
     let first = prior.first()?;
     // Distinct tickets, in order of recency. `dedup` alone only collapses
@@ -117,7 +209,11 @@ pub fn recognised(incidents: &[Incident], signal: &str, exclude_run: Option<&str
     // carried no ticket has nothing to name, so it is counted, not listed.
     let tickets: Vec<&str> = {
         let mut seen: Vec<&str> = Vec::new();
-        for t in prior.iter().map(|i| i.ticket.trim()).filter(|t| !t.is_empty()) {
+        for t in prior
+            .iter()
+            .map(|i| i.ticket.trim())
+            .filter(|t| !t.is_empty())
+        {
             if !seen.contains(&t) {
                 seen.push(t);
             }
@@ -183,9 +279,9 @@ pub fn from_jury(store: &Path) -> Vec<Incident> {
         if entry.path().extension().is_none_or(|x| x != "json") {
             continue;
         }
-        let Ok(job) =
-            serde_json::from_slice::<crate::jury::Job>(&std::fs::read(entry.path()).unwrap_or_default())
-        else {
+        let Ok(job) = serde_json::from_slice::<crate::jury::Job>(
+            &std::fs::read(entry.path()).unwrap_or_default(),
+        ) else {
             continue;
         };
         if !["owner_required", "reverted", "revoked", "superseded"].contains(&job.state.as_str())
@@ -261,12 +357,53 @@ mod tests {
     }
 
     #[test]
+    fn triage_relates_recorded_causes_without_titles_and_preserves_provenance() {
+        let mut first = incident("APP-1", 100, "connection fails while starting checkout");
+        first.cause = Some("Root cause: refresh listener captures the previous project".into());
+        let mut foreign = first.clone();
+        foreign.ticket = "OTHER-1".into();
+        let found=cause_candidates(&[first,foreign],"APP","Completely different title\nRoot cause: refresh listener captures the previous project");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].ticket, "APP-1");
+        assert!(found[0].reference.contains("run-APP-1-100"));
+        assert!(found[0].reason.contains("confirm"));
+        assert_eq!(found[0].observed_at, 100);
+    }
+    #[test]
+    fn triage_conflicting_and_unknown_causes_stay_separate() {
+        let mut first = incident("APP-1", 100, "refresh loses the active project selection");
+        first.cause=Some("Component: journal\nCategory: scope\nPath: src/journal.rs\nRoot cause: listener captures previous project selection".into());
+        for conflict in [
+            "Component: terminal",
+            "Category: rendering",
+            "Path: src/other.rs",
+            "Root cause: server rejects invalid authentication token",
+        ] {
+            let report = format!("refresh loses the active project selection\n{conflict}");
+            assert!(
+                cause_candidates(&[first.clone()], "APP", &report).is_empty(),
+                "{conflict}"
+            );
+        }
+        assert!(cause_candidates(&[first], "APP", "refresh fails").is_empty());
+        let unknown = incident("APP-2", 1, "same long failure signal remains unknown");
+        let found = cause_candidates(
+            &[unknown],
+            "APP",
+            "same long failure signal remains unknown",
+        );
+        assert!(found[0].reported_cause.is_none());
+        assert!(found[0].reason.contains("not established"));
+    }
+
+    #[test]
     fn one_failure_has_one_shape_however_many_ways_it_is_written() {
         // The same fault from two machines, with different paths and a
         // different run id in the text, has to land on one shape or a repeat
         // reads as new. This is the case that made codex look like four
         // unrelated problems on 2026-09-09.
-        let a = "agent binary not found: codex (install it or edit /Users/zelda/Library/agents.toml)";
+        let a =
+            "agent binary not found: codex (install it or edit /Users/zelda/Library/agents.toml)";
         let b = "agent binary not found: codex (install it or edit /Users/cand0rian/Library/agents.toml)";
         assert_eq!(shape(a), shape(b));
         assert_eq!(shape(a), "agent binary not found codex install it or edit");
@@ -284,11 +421,19 @@ mod tests {
     fn a_repeat_is_recognised_across_tickets_and_never_by_itself() {
         let incidents = vec![
             incident("XNAUT-88", 300, "agent binary not found: codex (edit /a/b)"),
-            incident("XNAUT-310", 200, "agent binary not found: codex (edit /c/d)"),
+            incident(
+                "XNAUT-310",
+                200,
+                "agent binary not found: codex (edit /c/d)",
+            ),
             incident("XNAUT-75", 100, "worktree absent; worktree branch mismatch"),
         ];
 
-        let found = prior(&incidents, "agent binary not found: codex (edit /e/f)", None);
+        let found = prior(
+            &incidents,
+            "agent binary not found: codex (edit /e/f)",
+            None,
+        );
         assert_eq!(found.len(), 2, "both codex failures, not the worktree one");
         assert_eq!(found[0].ticket, "XNAUT-88", "newest first");
 
@@ -313,21 +458,42 @@ mod tests {
         let broad: Vec<Incident> = (0..40)
             .map(|n| incident("XNAUT-1", n, "run 7 failed"))
             .collect();
-        assert_eq!(shape("run 7 failed"), "run failed", "two words is a category");
+        assert_eq!(
+            shape("run 7 failed"),
+            "run failed",
+            "two words is a category"
+        );
         assert!(prior(&broad, "run 9 failed", None).is_empty());
         assert_eq!(recognised(&broad, "run 9 failed", None), None);
 
         // A shape with enough of its own words still recognises.
         let real = vec![
-            incident("XNAUT-2", 1, "agent binary not found: codex, install it or edit agents.toml"),
-            incident("XNAUT-3", 2, "agent binary not found: codex, install it or edit agents.toml"),
+            incident(
+                "XNAUT-2",
+                1,
+                "agent binary not found: codex, install it or edit agents.toml",
+            ),
+            incident(
+                "XNAUT-3",
+                2,
+                "agent binary not found: codex, install it or edit agents.toml",
+            ),
         ];
-        assert_eq!(prior(&real, "agent binary not found: codex, install it or edit agents.toml", None).len(), 2);
+        assert_eq!(
+            prior(
+                &real,
+                "agent binary not found: codex, install it or edit agents.toml",
+                None
+            )
+            .len(),
+            2
+        );
     }
 
     #[test]
     fn the_tickets_named_are_distinct_and_an_untagged_incident_is_only_counted() {
-        let long = "the integration build refused to merge because the worktree had moved underneath it";
+        let long =
+            "the integration build refused to merge because the worktree had moved underneath it";
         let mut all = vec![
             incident("XNAUT-5", 1, long),
             incident("XNAUT-5", 2, long),
@@ -336,10 +502,23 @@ mod tests {
         ];
         all.push(incident("", 5, long));
         let line = recognised(&all, long, None).expect("a real repeat is recognised");
-        assert!(line.starts_with("Seen 5 times before, on "), "all five counted: {line}");
-        assert_eq!(line.matches("XNAUT-5").count(), 1, "one ticket named once: {line}");
-        assert!(line.contains("XNAUT-6"), "and the other ticket is not crowded out: {line}");
-        assert!(!line.contains(", ,") && !line.contains("on ,"), "no empty ticket in the list: {line}");
+        assert!(
+            line.starts_with("Seen 5 times before, on "),
+            "all five counted: {line}"
+        );
+        assert_eq!(
+            line.matches("XNAUT-5").count(),
+            1,
+            "one ticket named once: {line}"
+        );
+        assert!(
+            line.contains("XNAUT-6"),
+            "and the other ticket is not crowded out: {line}"
+        );
+        assert!(
+            !line.contains(", ,") && !line.contains("on ,"),
+            "no empty ticket in the list: {line}"
+        );
 
         // An incident nobody can attribute names nothing, so it says nothing.
         let orphans = vec![incident("", 1, long), incident("", 2, long)];
@@ -354,16 +533,27 @@ mod tests {
         explained.cause = Some("the log tail cut the totals off".into());
         let bare = incident("XNAUT-44", 50, "evidence has no test totals");
 
-        let line = recognised(&[fixed.clone(), explained.clone(), bare.clone()],
-                              "evidence has no test totals", None)
-            .expect("three priors");
+        let line = recognised(
+            &[fixed.clone(), explained.clone(), bare.clone()],
+            "evidence has no test totals",
+            None,
+        )
+        .expect("three priors");
         assert!(line.contains("Seen 3 times before"), "{line}");
         assert!(line.contains("XNAUT-305"), "{line}");
         assert!(line.contains("closed last time by 4e22fae4"), "{line}");
 
         // No fix, but somebody said why.
-        let line = recognised(&[explained, bare.clone()], "evidence has no test totals", None).unwrap();
-        assert!(line.contains("last time: the log tail cut the totals off"), "{line}");
+        let line = recognised(
+            &[explained, bare.clone()],
+            "evidence has no test totals",
+            None,
+        )
+        .unwrap();
+        assert!(
+            line.contains("last time: the log tail cut the totals off"),
+            "{line}"
+        );
 
         // Nobody ever got to the bottom of it, and the line says so rather
         // than implying it was handled.
