@@ -66,7 +66,11 @@ pub fn queue_retries(tickets: Vec<String>) {
 }
 
 fn next_retry() -> Option<String> {
-    RETRY_QUEUE.lock().ok()?.pop()
+    RETRY_QUEUE.lock().ok()?.last().cloned()
+}
+
+fn finish_retry(ticket: &str) {
+    if let Ok(mut queue) = RETRY_QUEUE.lock() { queue.retain(|t|t != ticket); }
 }
 
 /// How often the board is read. Long enough that a busy fleet is not
@@ -316,6 +320,11 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
         |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_in(&registry,r,&live) })?;
     announce_undead(app, &registry)?;
+    if crate::instance::role().dispatches() {
+        let review_app = app.clone();
+        // tick owns a single-flight guard; slow provider bootstrap must not hold the sweep.
+        tauri::async_runtime::spawn(async move { crate::repository_transfer::tick(&review_app).await; });
+    }
     issue_intake_beat(app, announced, &repo, &registry).await;
     core_team_beat(app, &registry).await;
     core_team_wall_clock(app, &registry, &leases).await;
@@ -323,6 +332,13 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     let records = crate::sandbox_verify::sandbox_verify_records()
         .await
         .unwrap_or_default();
+    // Orphan status is durable; reconstruct the queue after any number of restarts.
+    let mut newest = std::collections::HashMap::new();
+    for record in &records {
+        let prior: &mut &crate::sandbox_verify::VerifyRecord = newest.entry(record.ticket_id.clone()).or_insert(record);
+        if record.updated_at > prior.updated_at { *prior = record; }
+    }
+    queue_retries(newest.values().filter(|r|r.status == "orphaned").map(|r|r.ticket_id.clone()).collect());
     let jury_root=registry.join("jury");
     let jury_app=app.clone(); let jury_repo=repo.clone(); let jury_registry=registry.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -336,6 +352,7 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         // escalation, every tick, on tickets closed weeks ago (XNAUT-252,
         // 2026-09-09).
         if crate::jury_signoff::nothing_to_sign(record).is_some() { continue; }
+        if !matches!(crate::repository_review::independent_completion_refusal(&record.ticket_id,&record.commit_sha),Ok(None)) { continue; }
         // Two lanes, one decision (XNAUT-319). The audited arm is the
         // condition this loop carried inline; the swarm arm merges its own
         // green build and opens no jury job.
@@ -366,6 +383,12 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         .map(|p| p.key.clone())
         .collect();
 
+    if let Err(reason) = crate::swarm_plan::refill(app).await {
+        if announced.dispatch_is_news("group-refill".into(),"sweep_group_blocked",&reason) {
+            crate::ledger::record("sweep_group_blocked","nautbot","",&reason);
+        }
+    }
+    let grouped = crate::swarm_plan::managed_tickets(&registry);
     let plan: Vec<Action> = plan_fleet_for(
         &tickets,
         &records,
@@ -376,6 +399,7 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     .into_iter()
     .filter(|a| match a {
         Action::Verify { ticket, .. } | Action::Retry { ticket, .. } => here.contains(project_of(ticket)),
+        Action::Dispatch { ticket, .. } => grouped.as_ref().is_ok_and(|members| !members.contains(ticket)),
         _ => true,
     })
     .collect();
@@ -692,9 +716,25 @@ async fn core_team_wall_clock(
 /// MOMENT IT ASKS (agent_profiles.rs), so N launches racing each other would
 /// each read a count from before the others landed and the concurrent cap would
 /// admit all N. Awaiting them in turn is what makes the ceiling arithmetic true.
+fn verification_admission() -> Result<(),String> {
+    if crate::switches::load().read_only { return Err("read_only kill-switch engaged".into()); }
+    let role = crate::instance::role();
+    if !role.verifies() { return Err(refusal("verify",role)); }
+    if let Some(reason) = crate::housekeeper::launch_floor() { return Err(reason); }
+    let registry = crate::agents::registry_dir()?;
+    crate::spend::would_admit(crate::run_control::live_tickets_in(&registry)?.len())
+}
+
 async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) {
     match action {
         Action::Retry { ticket, project } => {
+            if let Err(why) = verification_admission() {
+                if announced.dispatch_is_news("verify-here".into(),"sweep_refused",&why) {
+                    crate::ledger::record("sweep_refused","nautbot",&ticket,&why);
+                }
+                return;
+            }
+            finish_retry(&ticket);
             crate::ledger::record(
                 "sweep_retry",
                 "nautbot",
@@ -704,6 +744,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             spawn_verify(app, ticket, project, "sweep_retry_failed");
         }
         Action::RetryDropped { ticket } => {
+            finish_retry(&ticket);
             // The ticket is gone from the board (deleted, or another project's).
             // Dropping it is right; saying so is what keeps the queue honest.
             crate::ledger::record(
@@ -723,9 +764,7 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
             // runs must not start on the owner's desk, so the same gate that
             // stops a dispatch stops this. A fleet or sandbox instance picks the
             // ticket up; it stays in `done`/`review` until one does.
-            let role = crate::instance::role();
-            if !role.verifies() {
-                let why = refusal("verify", role);
+            if let Err(why) = verification_admission() {
                 if announced.dispatch_is_news("verify-here".into(), "sweep_refused", &why) {
                     crate::ledger::record("sweep_refused", "nautbot", &ticket, &why);
                 }
@@ -791,11 +830,10 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 return;
             }
             let project = project_of(&ticket).to_string();
-            let (kind, reason) = match crate::dispatch::pm_ticket_dispatch(
+            let (kind, reason) = match crate::dispatch::automatic_dispatch(
                 app.clone(),
                 ticket.clone(),
                 project,
-                None,
             )
             .await
             {
@@ -803,12 +841,10 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                     "sweep_dispatch",
                     format!("launched {} on {}: {title}", result.handle, result.branch),
                 ),
-                // The runtime could not start (binary missing, login expired,
-                // provider down): the ticket is handed back to triage so a
-                // runtime that CAN start takes it. That is the outage failover.
+                // Refusal is not proof that no worker started. Keep the owner
+                // and workspace; native recovery must establish any safe retry.
                 Err(error) => {
-                    hand_back_for_reassignment(app, &ticket, &owner, &error).await;
-                    ("sweep_dispatch_failed", error)
+                    ("sweep_dispatch_refused", format!("{:?}: {}",error.kind,error.reason))
                 }
             };
             if announced.dispatch_is_news(format!("{owner}:{ticket}"), kind, &reason) {
@@ -853,8 +889,8 @@ async fn run_action(app: &AppHandle, announced: &mut Announced, action: Action) 
                 crate::project_management::ticket_list_in(&repo, None)).unwrap_or_default();
             let eligibility = per_ticket.iter().filter(|t| tickets.contains(&t.id)).map(|t| {
                 let owners = assignable_owners_for(&t.model_requirement);
-                format!("- {}: required model {:?}; eligible owners: {}. Assign only from this list; if empty leave unassigned.",
-                    t.id, t.model_requirement, if owners.is_empty() { "none".into() } else { owners.join(", ") })
+                format!("- {}: {}; required model {:?}; eligible owners: {}. Assign only from this list; if empty leave unassigned.",
+                    t.id, t.title, t.model_requirement, if owners.is_empty() { "none".into() } else { owners.join(", ") })
             }).collect::<Vec<_>>().join("\n");
             let message = format!(
                 "Triage: these ready or in_progress tickets have no owner and were touched in the last {FRESH_DAYS} days. For \
@@ -1008,7 +1044,9 @@ fn plan_fleet_for(
 
     if let Some(id) = retry {
         match tickets.iter().find(|t| t.id == id) {
-            Some(ticket) => {
+            Some(ticket) if ["done", "review"].contains(&ticket.status.as_str())
+                && budget > 0 && !busy.contains(&ticket.project)
+                && hold_for(records,&ticket.id,now) == Hold::None => {
                 actions.push(Action::Retry {
                     ticket: ticket.id.clone(),
                     project: ticket.project.clone(),
@@ -1016,9 +1054,8 @@ fn plan_fleet_for(
                 budget = budget.saturating_sub(1);
                 busy.insert(ticket.project.clone());
             }
-            None => actions.push(Action::RetryDropped {
-                ticket: id.to_string(),
-            }),
+            Some(ticket) if ["done", "review"].contains(&ticket.status.as_str()) => {},
+            _ => actions.push(Action::RetryDropped {ticket:id.to_string()}),
         }
     }
 
@@ -1062,8 +1099,8 @@ fn plan_fleet_for(
 
     let unowned: Vec<String> = ready_unowned_urgent(tickets, now)
         .iter()
-        .filter(|t| fleet.allows(&t.id))
-        .map(|t| format!("{}: {}", t.id, t.title))
+        .filter(|t| fleet.allows(&t.id) && !t.approval.owner_only && !t.tags.iter().any(|tag|tag == "no-auto-dispatch"))
+        .map(|t| t.id.clone())
         .collect();
     if !unowned.is_empty() {
         actions.push(Action::Triage { tickets: unowned });
@@ -1072,7 +1109,8 @@ fn plan_fleet_for(
     let mut woken: std::collections::HashSet<String> = std::collections::HashSet::new();
     for ticket in ready_with_owner(tickets)
         .into_iter()
-        .filter(|t| fleet.allows(&t.id) && is_fresh(t, now))
+        .filter(|t| fleet.allows(&t.id) && is_fresh(t, now)
+            && !t.approval.owner_only && !t.tags.iter().any(|tag|tag == "no-auto-dispatch"))
     {
         let owner = ticket.owner.clone().unwrap_or_default();
         if woken.insert(owner.clone()) {
@@ -1132,53 +1170,6 @@ fn verifies_in_flight(
 /// ponytail: the classification is pure and tested; the one line that calls it
 /// is not, because `tick` needs an AppHandle and a control repo. Deleting the
 /// call would not turn a test red.
-/// A dispatch that could not start hands the ticket back: owner cleared, back
-/// to `ready`, the reason on the body. Next triage reassigns it to a runtime
-/// that can run here. This is the model-agnostic failover: the task is not
-/// bound to a harness, so if Anthropic is down the ticket moves to Codex.
-async fn hand_back_for_reassignment(app: &AppHandle, ticket: &str, owner: &str, why: &str) {
-    let project = project_of(ticket).to_string();
-    let state = tauri::Manager::state::<crate::state::AppState>(app);
-    let Ok(tickets) = crate::project_management::pm_ticket_list(state.clone(), Some(project)).await
-    else {
-        return;
-    };
-    let Some(t) = tickets.into_iter().find(|t| t.id == ticket) else {
-        return;
-    };
-    let note = format!(
-        "\n\n---\nDispatch to @{owner} could not start: {why}. Owner cleared; triage reassigns to a runtime that can run here."
-    );
-    let _ = crate::project_management::pm_ticket_update(
-        state,
-        crate::project_management::TicketUpdateRequest {
-            model_requirement: None,
-            caller: None,
-            id: t.id.clone(),
-            expected_revision: t.revision,
-            title: None,
-            ticket_type: None,
-            status: Some("ready".into()),
-            priority: None,
-            owner: None,
-            clear_owner: true,
-            documentation: None,
-            body: Some(format!("{}{note}", t.body)),
-        },
-    )
-    .await;
-}
-
-fn dispatch_kind(delivery: &str) -> &'static str {
-    if matches!(delivery, "launched" | "typed") {
-        "sweep_dispatch"
-    } else {
-        "sweep_refused"
-    }
-}
-
-/// Every ticket awaiting review, oldest first. A list rather than a single
-/// pick, because the caller has to be able to walk past one that is held.
 fn awaiting_review(
     tickets: &[crate::project_management::TicketRecord],
 ) -> Vec<&crate::project_management::TicketRecord> {
@@ -1425,11 +1416,14 @@ fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, no
         return Hold::InFlight;
     }
 
-    // Consecutive failures since the last pass. A ticket that has ever been
-    // verified green starts its count again, so fixing the repo re-opens it.
+    // Attempts belong to an exact commit/check plan, never the lifetime of a ticket.
     let mut failures = 0usize;
     let mut ordered: Vec<&crate::sandbox_verify::VerifyRecord> = mine.clone();
     ordered.sort_by_key(|r| r.updated_at.clone());
+    if let Some(latest) = ordered.last() {
+        let epoch = crate::sandbox_verify::retry_epoch(latest);
+        ordered.retain(|r| crate::sandbox_verify::retry_epoch(r) == epoch);
+    }
     if ordered.last().is_some_and(|r| r.status == "passed" && r.not_evidence) {
         return Hold::NotEvidence;
     }
@@ -1445,7 +1439,7 @@ fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, no
     }
 
     let cooling = now - VERIFY_COOLDOWN;
-    if mine
+    if ordered
         .iter()
         .any(|r| at(r).map(|t| t > cooling).unwrap_or(false))
     {
@@ -1827,7 +1821,10 @@ mod tests {
         assert_eq!(next_retry(), None, "starts empty");
         queue_retries(vec!["XNAUT-1".into(), "XNAUT-2".into(), "XNAUT-1".into()]);
         let first = next_retry().expect("one");
+        assert_eq!(next_retry().as_ref(),Some(&first),"inspection must not drop a deferred retry");
+        finish_retry(&first);
         let second = next_retry().expect("two");
+        finish_retry(&second);
         let mut got = vec![first, second];
         got.sort();
         assert_eq!(got, vec!["XNAUT-1".to_string(), "XNAUT-2".to_string()]);
@@ -2770,7 +2767,7 @@ mod tests {
         let plan = plan_fleet(&tickets, &[], None, at("10:00"));
         let triage = plan.iter().find_map(|a| match a { Action::Triage { tickets } => Some(tickets.clone()), _ => None }).expect("a triage wake");
         assert_eq!(triage.len(), 2, "U-2 is low priority and waits: {triage:?}");
-        assert!(triage[0].starts_with("U-1:") && triage[1].starts_with("U-3:"), "oldest first: {triage:?}");
+        assert!(triage[0] == "U-1" && triage[1] == "U-3", "oldest first: {triage:?}");
         assert!(plan.iter().any(|a| matches!(a, Action::Dispatch { ticket, .. } if ticket == "O-1")), "owned work still dispatches");
         let none = plan_fleet(&[ticket("O-1", "ready", Some("claude"), "2026-09-01T04:00:00Z")], &[], None, at("10:00"));
         assert!(!none.iter().any(|a| matches!(a, Action::Triage { .. })), "nothing to triage, no wake");
@@ -2783,7 +2780,7 @@ mod tests {
                 let mut t = ticket("XNAUT-306", "in_progress", owner, "2026-09-01T09:00:00Z");
                 t.priority = priority.into();
                 let plan = plan_fleet(&[t], &[], None, at("10:00"));
-                assert_eq!(plan, vec![Action::Triage { tickets: vec!["XNAUT-306: t".into()] }]);
+                assert_eq!(plan, vec![Action::Triage { tickets: vec!["XNAUT-306".into()] }]);
             }
         }
     }
@@ -2824,7 +2821,7 @@ mod tests {
                 &(now - chrono::Duration::days(FRESH_DAYS)).to_rfc3339());
             t.priority = "high".into();
             assert_eq!(plan_fleet(&[t.clone()], &[], None, now),
-                vec![Action::Triage { tickets: vec!["XNAUT-306: t".into()] }]);
+                vec![Action::Triage { tickets: vec!["XNAUT-306".into()] }]);
             for updated in [(now - chrono::Duration::days(FRESH_DAYS) - chrono::Duration::seconds(1)).to_rfc3339(), "invalid".into()] {
                 t.updated_at = updated;
                 assert_eq!(plan_fleet(&[t.clone()], &[], None, now),
@@ -2927,7 +2924,7 @@ mod tests {
         assert_eq!(dispatched, vec!["XNAUT-1"], "Engram is not in the fleet, XNAUT-3 is from July: {plan:?}");
         let triage = plan.iter().find_map(|a| match a { Action::Triage { tickets } => Some(tickets.clone()), _ => None }).unwrap();
         assert_eq!(triage.len(), 1);
-        assert!(triage[0].starts_with("XNAUT-2:"), "{triage:?}");
+        assert!(triage[0] == "XNAUT-2", "{triage:?}");
         assert!(plan.iter().any(|a| matches!(a, Action::Verify { ticket, .. } if ticket == "XNAUT-4")), "verification is not scoped by freshness or fleet");
     }
 
@@ -2968,6 +2965,34 @@ mod tests {
             })
         );
     }
+    #[test]
+    fn retry_obeys_capacity_project_occupancy_status_and_exhaustion() {
+        let mut target = ticket("XNAUT-1","review",Some("nautbot"),"2026-09-01T01:00:00Z");
+        let live:Vec<_> = (1..=MAX_VERIFIES_IN_FLIGHT).map(|n| {
+            let mut r=record(&format!("OTHER-{n}"),"running","2026-09-01T09:59:00Z");
+            r.project=format!("OTHER{n}"); r
+        }).collect();
+        let retry = |plan:Vec<Action>| plan.iter().any(|a|matches!(a,Action::Retry{..}));
+        assert!(!retry(plan_fleet(std::slice::from_ref(&target),&live,Some("XNAUT-1"),at("10:00"))));
+        let mut same=live[0].clone();same.project=target.project.clone();
+        assert!(!retry(plan_fleet(std::slice::from_ref(&target),&[same],Some("XNAUT-1"),at("10:00"))));
+        let failures:Vec<_>=(1..=3).map(|n|record("XNAUT-1","failed",&format!("2026-09-01T0{n}:00:00Z"))).collect();
+        assert!(!retry(plan_fleet(std::slice::from_ref(&target),&failures,Some("XNAUT-1"),at("10:00"))));
+        assert!(retry(plan_fleet(std::slice::from_ref(&target),&[],Some("XNAUT-1"),at("10:00"))));
+        target.status="complete".into();
+        assert!(plan_fleet(&[target],&[],Some("XNAUT-1"),at("10:00")).iter().any(|a|matches!(a,Action::RetryDropped{..})));
+    }
+
+    #[test]
+    fn verification_attempts_are_bound_to_commit_and_check_plan() {
+        let mut records:Vec<_>=(1..=3).map(|n| {
+            let mut r=record("XNAUT-1","failed",&format!("2026-09-01T0{n}:00:00Z"));r.commit_sha="old".into();r
+        }).collect();
+        assert_eq!(hold_for(&records,"XNAUT-1",at("10:00")),Hold::GaveUp(3));
+        let mut fresh=record("XNAUT-1","failed","2026-09-01T04:00:00Z");fresh.commit_sha="new".into();records.push(fresh);
+        assert_eq!(hold_for(&records,"XNAUT-1",at("10:00")),Hold::None,"old commit failures cannot exhaust repaired code");
+    }
+
 }
 
 /// The production tick's registry/board boundary, also used by the isolated

@@ -638,6 +638,7 @@ async fn main() {
             // Sandbox verify (XNAUT-19)
             dispatch::pm_ticket_dispatch,
             swarm_plan::swarm_plan_dispatch,
+            swarm_plan::swarm_plan_stop,
             project_management::pm_ticket_tag,
             project_management::pm_ticket_release,
             sandbox_verify::sandbox_verify_start,

@@ -1149,7 +1149,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 crate::swarm_plan::Offer::Swarm => {
                     let count = plan.runs.len();
                     let value = serde_json::to_value(&plan).unwrap_or(Value::Null);
-                    crate::swarm_plan::remember(plan);
+                    if let Err(error) = crate::swarm_plan::remember(plan) { return json!({"ok":false,"error":error}); }
                     json!({
                         "ok": true, "plan": value,
                         "note": format!(

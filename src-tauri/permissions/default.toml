@@ -400,6 +400,7 @@ commands.allow = [
   "ticket_triage_records",
   "pm_ticket_dispatch",
   "swarm_plan_dispatch",
+  "swarm_plan_stop",
   "pm_ticket_tag",
   "pm_ticket_release",
   "sandbox_verify_start",

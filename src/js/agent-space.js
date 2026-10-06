@@ -990,7 +990,7 @@
           try {
             const done = await invoke('swarm_plan_dispatch', { planId });
             const failed = (done.failed || []).length;
-            note = `Dispatched ${(done.started || []).length} of ${(done.started || []).length + failed}`
+            note = `Started ${(done.started || []).length}; queued ${(done.queued || []).length}; blocked ${failed}`
               + (failed ? ` — ${(done.failed || []).map((f) => `${f.ticket}: ${f.reason}`).join('; ')}` : '. Watch them in the Observatory.');
           } catch (error) {
             note = `Not dispatched: ${String(error)}`;

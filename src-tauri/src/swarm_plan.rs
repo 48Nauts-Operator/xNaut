@@ -1,36 +1,9 @@
-//! The swarm NautBot offers (XNAUT-354).
-//!
-//! There were two ways to put agents on a batch of tickets. The Multi-Agent
-//! Manager pane (July) planned a swarm in its own chat and fired `loom_run`
-//! directly: no run registry, no jury, no ledger, its own model dropdown and
-//! its own max-parallel box. NautBot started runs through `dispatch.rs`, which
-//! has all of that. Same intent, and the older one outside every control.
-//!
-//! So the planning moves here and the starting stays in `dispatch.rs`. What
-//! this module is actually for is the gap between the two: a batch is a
-//! decision the owner makes ONCE, and the thing they confirm has to be the
-//! thing that runs. A plan is therefore built, shown, and then CONSUMED —
-//! [`take`] removes it — so a confirm arriving twice, from the card and from
-//! the chat, cannot start the same eight agents twice. The pane had the same
-//! hazard and answered it by nulling a variable; here it is the only way to
-//! read a plan back.
-//!
-//! Every refusal is a NAMED skip rather than a silent drop. The pane asked an
-//! LLM not to invent tickets and mostly got its way; this asks the board, and
-//! says out loud why each ticket it was handed is not in the plan. A swarm
-//! that quietly runs four of the six tickets you named is worse than one that
-//! refuses, because nothing on screen says which two are missing.
-//!
-//! Not a checkbox, deliberately (André, 2026-09-13): a mode set earlier
-//! changes what a later sentence means, so there is no swarm toggle anywhere.
-//! A request that spans more than one ticket produces a plan and a question; a
-//! request naming one ticket goes to `dispatch_ticket` exactly as it did
-//! before, and is never asked about.
+//! Durable approved groups; the existing sweep refills their exact queued membership.
 
 use crate::project_management::TicketRecord;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::path::{Path, PathBuf};
 
 /// A ticket worth putting an agent on. `review`, `done` and `complete` are
 /// somebody else's turn, and a swarm that re-dispatched them would undo work.
@@ -53,7 +26,7 @@ pub const DEFAULT_MAX_PARALLEL: usize = 3;
 pub const HARD_CAP: usize = 64;
 
 /// One ticket, and the run it would become.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlannedRun {
     pub ticket: String,
     pub title: String,
@@ -69,17 +42,20 @@ pub struct PlannedRun {
     /// keeping a second answer.
     pub model: String,
     pub branch: String,
+    pub scope: String,
+    #[serde(default)]
+    pub repository_root: Option<String>,
 }
 
 /// A ticket that was asked for and is not in the plan, and why.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skipped {
     pub ticket: String,
     pub reason: String,
 }
 
 /// A batch of runs, validated, waiting for a yes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SwarmPlan {
     pub id: String,
     pub project: String,
@@ -197,12 +173,11 @@ pub fn plan_from(
             });
             continue;
         }
-        // The cap is checked HERE, after every other reason, so a ticket that
-        // could never have run is named for what is actually wrong with it
-        // rather than for being eleventh in a queue of ten.
-        if runs.len() >= cap {
-            let reason = format!("over the {cap}-run cap on @nautbot's profile");
-            skipped.push(Skipped { ticket: id, reason });
+        if ticket.approval.owner_only || ticket.tags.iter().any(|t| t == "no-auto-dispatch") {
+            skipped.push(Skipped {
+                ticket: id,
+                reason: "owner-only or no-auto-dispatch ticket".into(),
+            });
             continue;
         }
         runs.push(PlannedRun {
@@ -211,6 +186,8 @@ pub fn plan_from(
             title: ticket.title.clone(),
             owner,
             model: model.clone(),
+            scope: scope(ticket),
+            repository_root: None,
         });
     }
 
@@ -259,54 +236,317 @@ pub fn offer(plan: &SwarmPlan) -> Offer {
     }
 }
 
-/// How many plans are kept waiting.
-///
-/// A plan is a question, not a record: the ledger holds what was dispatched.
-/// Bounded so a conversation that proposes twenty swarms and confirms none
-/// cannot grow without end.
-const MAX_PLANS: usize = 16;
-
-fn plans() -> &'static Mutex<Vec<SwarmPlan>> {
-    static PLANS: OnceLock<Mutex<Vec<SwarmPlan>>> = OnceLock::new();
-    PLANS.get_or_init(|| Mutex::new(Vec::new()))
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberState {
+    Queued,
+    Starting,
+    Tracking,
+    Blocked,
+    Verified,
 }
 
-fn held() -> std::sync::MutexGuard<'static, Vec<SwarmPlan>> {
-    plans()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Member {
+    pub ticket: String,
+    pub state: MemberState,
+    pub reason: String,
+    pub run_id: Option<String>,
+    pub started: Option<Started>,
+    #[serde(default)]
+    pub refusal: Option<crate::dispatch::DispatchRefusal>,
+    #[serde(default)]
+    pub dispatched_scope: Option<String>,
 }
 
-/// A plan id nothing else will mint.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupEvent {
+    pub id: String,
+    pub project: String,
+    pub ticket: String,
+    pub actor: String,
+    pub source: String,
+    pub at_ms: i64,
+    pub state: MemberState,
+    pub reason: String,
+    pub run_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Group {
+    pub plan: SwarmPlan,
+    pub approved_at: Option<i64>,
+    #[serde(default)]
+    pub stopped_at: Option<i64>,
+    pub members: Vec<Member>,
+    pub events: Vec<GroupEvent>,
+}
+
+// Full substantive input, including the full body: a dispatch-like heading is
+// not proof that later prose is authorized. Only native dispatch may store the
+// exact scope resulting from its own revision-checked evidence append.
+pub(crate) fn scope(ticket: &TicketRecord) -> String {
+    serde_json::json!({"title":ticket.title,"type":ticket.ticket_type,"body":ticket.body,
+        "documentation":ticket.documentation,"model_requirement":ticket.model_requirement,
+        "tags":ticket.tags})
+    .to_string()
+}
+
 pub fn new_id() -> String {
-    format!("swarm-{}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+    format!("swarm-{}", uuid::Uuid::new_v4().simple())
 }
 
-/// Keep a plan until somebody answers it.
-pub fn remember(plan: SwarmPlan) {
-    let mut store = held();
-    store.retain(|kept| kept.id != plan.id);
-    store.push(plan);
-    let over = store.len().saturating_sub(MAX_PLANS);
-    if over > 0 {
-        store.drain(..over);
+fn path_in(registry: &Path, id: &str) -> Result<PathBuf, String> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err("invalid swarm plan id".into());
+    }
+    Ok(registry.join("swarm-plans").join(format!("{id}.json")))
+}
+
+fn save_in(registry: &Path, group: &Group) -> Result<(), String> {
+    use std::io::Write;
+    let path = path_in(registry, &group.plan.id)?;
+    std::fs::create_dir_all(path.parent().ok_or("missing group directory")?)
+        .map_err(|e| e.to_string())?;
+    let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    file.write_all(&serde_json::to_vec_pretty(group).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    std::fs::rename(tmp, path).map_err(|e| e.to_string())
+}
+
+pub(crate) fn groups_in(registry: &Path, project: Option<&str>) -> Result<Vec<Group>, String> {
+    let dir = registry.join("swarm-plans");
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut groups = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let group: Group = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        if project.is_none_or(|p| p == group.plan.project) {
+            groups.push(group);
+        }
+    }
+    groups.sort_by_key(|g| (g.plan.created_at, g.plan.id.clone()));
+    Ok(groups)
+}
+
+fn remember_in(registry: &Path, plan: SwarmPlan) -> Result<(), String> {
+    let _lease = GroupLease::acquire(registry)?;
+    let path = path_in(registry, &plan.id)?;
+    if path.exists() {
+        return Err("plan id already exists; approval cannot be replaced".into());
+    }
+    let members = plan
+        .runs
+        .iter()
+        .map(|r| Member {
+            ticket: r.ticket.clone(),
+            state: MemberState::Queued,
+            reason: "waiting for approval".into(),
+            run_id: None,
+            started: None,
+            refusal: None,
+            dispatched_scope: None,
+        })
+        .collect();
+    save_in(
+        registry,
+        &Group {
+            plan,
+            approved_at: None,
+            stopped_at: None,
+            members,
+            events: Vec::new(),
+        },
+    )
+}
+
+pub fn remember(plan: SwarmPlan) -> Result<(), String> {
+    remember_in(&crate::agents::registry_dir()?, plan)
+}
+
+fn transition(
+    group: &mut Group,
+    index: usize,
+    state: MemberState,
+    reason: String,
+    run_id: Option<String>,
+    at_ms: i64,
+) {
+    let member = &mut group.members[index];
+    if member.state == state && member.reason == reason && member.run_id == run_id {
+        return;
+    }
+    member.state = state.clone();
+    member.reason = reason.clone();
+    member.run_id = run_id.clone();
+    group.events.push(GroupEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        project: group.plan.project.clone(),
+        ticket: member.ticket.clone(),
+        actor: "nautbot".into(),
+        source: format!("swarm-plans/{}.json", group.plan.id),
+        at_ms,
+        state,
+        reason,
+        run_id,
+    });
+}
+
+fn approve(group: &mut Group, at_ms: i64) {
+    if group.approved_at.is_some() || group.stopped_at.is_some() {
+        return;
+    }
+    group.approved_at = Some(at_ms);
+    for i in 0..group.members.len() {
+        transition(
+            group,
+            i,
+            MemberState::Queued,
+            "approved; waiting for capacity".into(),
+            None,
+            at_ms,
+        );
     }
 }
 
-/// Read a plan back without answering it — what the card renders from.
-pub fn peek(id: &str) -> Option<SwarmPlan> {
-    held().iter().find(|plan| plan.id == id).cloned()
+pub(crate) fn authorized(run: &PlannedRun, ticket: &TicketRecord) -> bool {
+    owner_of(ticket).as_deref() == Some(run.owner.as_str())
+        && scope(ticket) == run.scope
+        && !ticket.approval.owner_only
+        && !ticket.tags.iter().any(|t| t == "no-auto-dispatch")
 }
 
-/// The plan, REMOVED.
-///
-/// Taking is the only way to read a plan for dispatch, so a yes from the card
-/// and a yes in the chat cannot both start the batch. The second one finds
-/// nothing and says so.
-pub fn take(id: &str) -> Option<SwarmPlan> {
-    let mut store = held();
-    let at = store.iter().position(|plan| plan.id == id)?;
-    Some(store.remove(at))
+fn authorized_member(
+    registry: &Path,
+    run: &PlannedRun,
+    member: &Member,
+    ticket: &TicketRecord,
+) -> bool {
+    let mut expected = run.clone();
+    if let Some(scope) = &member.dispatched_scope {
+        expected.scope = scope.clone();
+    }
+    let run = &expected;
+    if authorized(run, ticket) {
+        return true;
+    }
+    if owner_of(ticket).as_deref() != Some("nautbot") {
+        return false;
+    }
+    let mut author_ticket = ticket.clone();
+    author_ticket.owner = Some(run.owner.clone());
+    if !authorized(run, &author_ticket) {
+        return false;
+    }
+    let Some(handback) = &ticket.handback else {
+        return false;
+    };
+    if handback
+        .from
+        .trim()
+        .trim_start_matches('@')
+        .to_ascii_lowercase()
+        != run.owner
+    {
+        return false;
+    }
+    let Some(mut id) = handback.run_id.clone() else {
+        return false;
+    };
+    let mut seen = HashSet::new();
+    while seen.insert(id.clone()) {
+        let Ok(manifest) = crate::run_control::load_manifest_in(registry, &id) else {
+            return false;
+        };
+        if manifest.ticket.as_deref() != Some(run.ticket.as_str())
+            || manifest.agent_handle != run.owner
+        {
+            return false;
+        }
+        if member.run_id.as_deref() == Some(id.as_str())
+            || member.started.as_ref().is_some_and(|s| {
+                manifest.branch == s.branch
+                    && manifest.worktree_path == s.worktree_path
+                    && (manifest.pty_session.as_deref() == Some(s.session_id.as_str())
+                        || manifest.zellij_session.as_deref() == Some(s.session_id.as_str()))
+            })
+        {
+            return true;
+        }
+        let Some(previous) = manifest.previous_run_id else {
+            return false;
+        };
+        id = previous;
+    }
+    false
+}
+
+pub(crate) fn authorizes_ticket_repair(
+    project: &str,
+    ticket: &str,
+    owner: &str,
+) -> Result<bool, String> {
+    let repo = crate::project_management::repo_now()?;
+    let registry = crate::agents::registry_dir()?;
+    let tickets = crate::project_management::ticket_list_in(&repo, Some(project.to_string()))?;
+    let Some(current) = tickets.iter().find(|t| t.id == ticket) else {
+        return Ok(false);
+    };
+    Ok(groups_in(&registry, Some(project))?.iter().any(|g| {
+        g.approved_at.is_some()
+            && g.stopped_at.is_none()
+            && g.plan.runs.iter().zip(&g.members).any(|(r, m)| {
+                r.ticket == ticket
+                    && r.owner == owner
+                    && authorized_member(&registry, r, m, current)
+            })
+    }))
+}
+
+// One filesystem lease across confirms, the sweep, and other app instances. A crashed
+// holder releases the OS lock; persisted Starting entries still require reconciliation.
+struct GroupLease(std::fs::File);
+impl GroupLease {
+    fn acquire(registry: &Path) -> Result<Self, String> {
+        let dir = registry.join("swarm-plans");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(dir.join(".lock"))
+            .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                return Err("group coordinator is already advancing; retry next sweep".into());
+            }
+        }
+        Ok(Self(file))
+    }
+}
+impl Drop for GroupLease {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            unsafe {
+                libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
 }
 
 /// Read the board, the profiles and the registry, and build a plan under
@@ -334,7 +574,7 @@ pub fn build(project: &str, requested: &[String]) -> Result<SwarmPlan, String> {
     .map(|profile| profile.max_parallel as usize)
     .unwrap_or(DEFAULT_MAX_PARALLEL);
 
-    plan_from(
+    let mut plan = plan_from(
         &new_id(),
         project,
         requested,
@@ -345,11 +585,27 @@ pub fn build(project: &str, requested: &[String]) -> Result<SwarmPlan, String> {
         },
         cap,
         crate::run_control::now_ms(),
-    )
+    )?;
+    let projects = crate::project_management::list_projects(&repo)?;
+    let source = projects
+        .iter()
+        .find(|p| p.key == project)
+        .map(crate::project_management::local_source_path)
+        .filter(|path| !path.trim().is_empty())
+        .ok_or("project has no local repository")?;
+    let root = Path::new(&source)
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .to_string();
+    for run in &mut plan.runs {
+        run.repository_root = Some(root.clone());
+    }
+    Ok(plan)
 }
 
 /// One run a confirmed swarm actually started.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Started {
     pub ticket: String,
     pub handle: String,
@@ -360,75 +616,337 @@ pub struct Started {
 
 /// What a confirm did. `failed` is not an error: the runs before it are
 /// already working, and a caller that saw only an error would not know that.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SwarmDispatched {
     pub plan_id: String,
     pub project: String,
     pub started: Vec<Started>,
     pub failed: Vec<Skipped>,
+    pub queued: Vec<String>,
 }
 
-/// Hand every run in a confirmed plan to `dispatch.rs`.
-///
-/// Sequential on purpose. Dispatch returns as soon as the agent is launched,
-/// so the batch is concurrent regardless; running the LAUNCHES in parallel
-/// would only race the worktree creation, which is the one part of this that
-/// touches the same git repository from several places at once.
+fn report(group: &Group) -> SwarmDispatched {
+    SwarmDispatched {
+        plan_id: group.plan.id.clone(),
+        project: group.plan.project.clone(),
+        started: group
+            .members
+            .iter()
+            .filter_map(|m| m.started.clone())
+            .collect(),
+        failed: group
+            .members
+            .iter()
+            .filter(|m| m.state == MemberState::Blocked)
+            .map(|m| Skipped {
+                ticket: m.ticket.clone(),
+                reason: m.reason.clone(),
+            })
+            .collect(),
+        queued: group
+            .members
+            .iter()
+            .filter(|m| m.state == MemberState::Queued)
+            .map(|m| m.ticket.clone())
+            .collect(),
+    }
+}
+
 pub async fn dispatch_plan(
     app: tauri::AppHandle,
     plan_id: &str,
 ) -> Result<SwarmDispatched, String> {
-    let plan = take(plan_id)
-        .ok_or_else(|| format!("no swarm plan {plan_id} is waiting — plan it again"))?;
-    if plan.runs.is_empty() {
-        return Err(format!("swarm plan {plan_id} has no runs in it"));
+    if crate::switches::load().read_only {
+        return Err("the read_only kill-switch is engaged".into());
     }
-    let mut started = Vec::new();
-    let mut failed = Vec::new();
-    for run in &plan.runs {
-        match crate::dispatch::pm_ticket_dispatch(
-            app.clone(),
-            run.ticket.clone(),
-            plan.project.clone(),
-            None,
-        )
-        .await
+    let registry = crate::agents::registry_dir()?;
+    {
+        let _lease = GroupLease::acquire(&registry)?;
+        let path = path_in(&registry, plan_id)?;
+        let mut group: Group =
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        if group.stopped_at.is_some() {
+            return Err("group was stopped; a new exact scope approval is required".into());
+        }
+        approve(&mut group, crate::run_control::now_ms());
+        save_in(&registry, &group)?;
+    }
+    refill(&app).await?;
+    groups_in(&registry, None)?
+        .iter()
+        .find(|g| g.plan.id == plan_id)
+        .map(report)
+        .ok_or_else(|| "plan disappeared".into())
+}
+
+/// Returns every approved membership, including blocked members: ordinary fleet
+/// dispatch must never route around an approved group's refusal or capacity limit.
+pub(crate) fn managed_tickets(registry: &Path) -> Result<HashSet<String>, String> {
+    Ok(groups_in(registry, None)?
+        .iter()
+        .filter(|g| g.approved_at.is_some())
+        .flat_map(|g| g.members.iter().map(|m| m.ticket.clone()))
+        .collect())
+}
+
+fn slot_available(member: &Member, live: usize, cap: usize) -> bool {
+    member.state == MemberState::Queued && live < cap
+}
+
+fn recover_member(
+    group: &mut Group,
+    i: usize,
+    snapshot: &crate::project_continuity::ProjectSnapshot,
+    now: i64,
+) -> bool {
+    let ticket = &group.members[i].ticket;
+    let assignments: Vec<_> = snapshot
+        .assignments
+        .iter()
+        .filter(|a| a.ticket.as_deref() == Some(ticket.as_str()))
+        .collect();
+    if !assignments.is_empty() {
+        let active = assignments
+            .iter()
+            .find(|a| a.run_state.is_some_and(|s| !s.terminal()));
+        let (state, reason) = if active.is_some() {
+            (
+                MemberState::Tracking,
+                "existing assignment; tracking without replacement",
+            )
+        } else if snapshot.tickets.iter().any(|t| {
+            t.id == *ticket && t.state == crate::project_continuity::ContinuityState::Verified
+        }) {
+            (
+                MemberState::Verified,
+                "independent verification evidence recorded",
+            )
+        } else if assignments
+            .iter()
+            .any(|a| a.state == crate::project_continuity::ContinuityState::Blocked)
         {
-            Ok(result) => {
-                crate::ledger::record(
-                    "swarm_dispatch",
-                    crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
-                    &result.ticket_id,
-                    &format!("{plan_id}: @{} on {}", result.handle, result.branch),
+            (
+                MemberState::Blocked,
+                "existing assignment blocked; inspect preserved implementation and review findings",
+            )
+        } else {
+            (
+                MemberState::Tracking,
+                "implementation retained; awaiting review or repair evidence",
+            )
+        };
+        let id = active
+            .copied()
+            .unwrap_or(assignments[assignments.len() - 1])
+            .run_id
+            .clone();
+        transition(group, i, state, reason.into(), Some(id), now);
+        return true;
+    }
+    if group.members[i].state == MemberState::Starting {
+        transition(group,i,MemberState::Blocked,"interrupted dispatch has no conclusive assignment evidence; inspect reservation before retry".into(),None,now);
+        return true;
+    }
+    false
+}
+
+pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
+    if crate::switches::load().read_only || !crate::instance::role().dispatches() {
+        return Ok(());
+    }
+    let registry = crate::agents::registry_dir()?;
+    let _lease = GroupLease::acquire(&registry)?;
+    let repo = crate::project_management::repo_now()?;
+    let tickets = crate::project_management::ticket_list_in(&repo, None)?;
+    let projects = crate::project_management::list_projects(&repo)?;
+    for mut group in groups_in(&registry, None)?
+        .into_iter()
+        .filter(|g| g.approved_at.is_some() && g.stopped_at.is_none())
+    {
+        let snapshot = crate::project_continuity::snapshot(&group.plan.project)?;
+        for i in 0..group.members.len() {
+            let run = group.plan.runs[i].clone();
+            let now = crate::run_control::now_ms();
+            let current = tickets
+                .iter()
+                .find(|t| t.id == run.ticket && t.project == group.plan.project);
+            let project_allowed = projects.iter().any(|p| {
+                p.key == group.plan.project
+                    && !p.owner_only
+                    && Path::new(crate::project_management::local_source_path(p).trim())
+                        .canonicalize()
+                        .ok()
+                        .is_some_and(|root| run.repository_root.as_deref() == root.to_str())
+            });
+            if !project_allowed
+                || current.is_none_or(|t| !authorized_member(&registry, &run, &group.members[i], t))
+            {
+                let id = group.members[i].run_id.clone();
+                transition(
+                    &mut group,
+                    i,
+                    MemberState::Blocked,
+                    "approved owner, scope or project policy changed".into(),
+                    id,
+                    now,
                 );
-                started.push(Started {
-                    ticket: result.ticket_id,
-                    handle: result.handle,
-                    branch: result.branch,
-                    worktree_path: result.worktree_path,
-                    session_id: result.session_id,
-                });
+                save_in(&registry, &group)?;
+                continue;
             }
-            Err(error) => {
-                crate::ledger::record(
-                    "swarm_dispatch_failed",
-                    crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,
-                    &run.ticket,
-                    &format!("{plan_id}: {error}"),
+            if recover_member(&mut group, i, &snapshot, now) {
+                save_in(&registry, &group)?;
+                continue;
+            }
+            if group.members[i].state != MemberState::Queued {
+                continue;
+            }
+            if current.is_none_or(|t| !is_open(&t.status)) {
+                transition(
+                    &mut group,
+                    i,
+                    MemberState::Blocked,
+                    "ticket left the approved open queue; inspect current evidence".into(),
+                    None,
+                    now,
                 );
-                failed.push(Skipped {
-                    ticket: run.ticket.clone(),
-                    reason: error,
-                });
+                save_in(&registry, &group)?;
+                continue;
             }
+            let live = crate::run_control::live_tickets_in(&registry)?;
+            let profile_cap = crate::agent_profiles::agent_profile_get(
+                crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.into(),
+            )
+            .map(|p| p.max_parallel as usize)
+            .unwrap_or(DEFAULT_MAX_PARALLEL);
+            if !slot_available(
+                &group.members[i],
+                live.len(),
+                group.plan.max_parallel.min(profile_cap.clamp(1, HARD_CAP)),
+            ) {
+                transition(
+                    &mut group,
+                    i,
+                    MemberState::Queued,
+                    "approved; waiting for capacity".into(),
+                    None,
+                    now,
+                );
+                save_in(&registry, &group)?;
+                continue;
+            }
+            if let Err(refusal) =
+                crate::dispatch::automatic_admission(&run.ticket, &group.plan.project)
+            {
+                let state = if refusal.retryable() {
+                    MemberState::Queued
+                } else {
+                    MemberState::Blocked
+                };
+                group.members[i].refusal = Some(refusal.clone());
+                transition(&mut group, i, state, refusal.reason, None, now);
+                save_in(&registry, &group)?;
+                continue;
+            }
+            if !crate::agent_profiles::agent_profile_get(run.owner.clone())
+                .is_ok_and(|p| p.model == run.model)
+            {
+                transition(
+                    &mut group,
+                    i,
+                    MemberState::Blocked,
+                    "approved owner profile/model changed".into(),
+                    None,
+                    now,
+                );
+                save_in(&registry, &group)?;
+                continue;
+            }
+            group.members[i].refusal = None;
+            transition(
+                &mut group,
+                i,
+                MemberState::Starting,
+                "dispatch reserved by approved group".into(),
+                None,
+                now,
+            );
+            save_in(&registry, &group)?;
+            match crate::dispatch::dispatch_scoped(
+                app.clone(),
+                run.ticket.clone(),
+                group.plan.project.clone(),
+                None,
+                Some(&run),
+            )
+            .await
+            {
+                Ok(r) => {
+                    group.members[i].dispatched_scope = Some(r.ticket_scope.clone());
+                    group.members[i].started = Some(Started {
+                        ticket: r.ticket_id,
+                        handle: r.handle,
+                        branch: r.branch,
+                        worktree_path: r.worktree_path,
+                        session_id: r.session_id,
+                    });
+                    transition(
+                        &mut group,
+                        i,
+                        MemberState::Tracking,
+                        "native dispatch launched; awaiting evidence".into(),
+                        r.run_id,
+                        crate::run_control::now_ms(),
+                    );
+                }
+                Err(reason) => {
+                    group.members[i].refusal =
+                        Some(crate::dispatch::DispatchRefusal::uncertain(reason.clone()));
+                    transition(
+                        &mut group,
+                        i,
+                        MemberState::Blocked,
+                        format!("dispatch outcome requires reconciliation: {reason}"),
+                        None,
+                        crate::run_control::now_ms(),
+                    )
+                }
+            }
+            save_in(&registry, &group)?;
         }
     }
-    Ok(SwarmDispatched {
-        plan_id: plan.id,
-        project: plan.project,
-        started,
-        failed,
-    })
+    Ok(())
+}
+
+/// Stops future refill/repair authorization, retaining workers and all evidence.
+#[tauri::command]
+pub fn swarm_plan_stop(plan_id: String) -> Result<Group, String> {
+    let registry = crate::agents::registry_dir()?;
+    let _lease = GroupLease::acquire(&registry)?;
+    let path = path_in(&registry, plan_id.trim())?;
+    let mut group: Group = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    stop(&mut group, crate::run_control::now_ms());
+    save_in(&registry, &group)?;
+    Ok(group)
+}
+
+fn stop(group: &mut Group, now: i64) {
+    if group.stopped_at.is_some() {
+        return;
+    }
+    group.stopped_at = Some(now);
+    for i in 0..group.members.len() {
+        let id = group.members[i].run_id.clone();
+        transition(
+            group,
+            i,
+            MemberState::Blocked,
+            "owner stopped this group; existing workers and evidence retained".into(),
+            id,
+            now,
+        );
+    }
 }
 
 /// Confirm a swarm plan from the card in the chat thread.
@@ -562,19 +1080,15 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_bounds_the_plan_and_names_what_it_dropped() {
+    fn the_cap_limits_concurrency_without_dropping_queue_members() {
         let tickets: Vec<TicketRecord> = (1..=5)
             .map(|n| ticket(&format!("XNAUT-{n}"), "XNAUT", "ready", Some("claude")))
             .collect();
         let (models, live) = (models(), HashSet::new());
         let plan = plan_from("p1", "XNAUT", &[], &board(&tickets, &models, &live), 3, 0).unwrap();
-        assert_eq!(plan.runs.len(), 3);
+        assert_eq!(plan.runs.len(), 5);
         assert_eq!(plan.max_parallel, 3);
-        assert_eq!(plan.skipped.len(), 2);
-        assert_eq!(
-            reason_for(&plan, "XNAUT-4"),
-            "over the 3-run cap on @nautbot's profile"
-        );
+        assert!(plan.skipped.is_empty());
 
         // A profile set to nonsense is clamped, never obeyed. Thirty concurrent
         // agents must stay reachable (XNAUT-185), so the ceiling is above it.
@@ -659,11 +1173,8 @@ mod tests {
         // A cap of one is NOT a reason to skip the question — it is a swarm
         // the owner has throttled, and the tickets it dropped need saying.
         let throttled = plan_from("p3", "XNAUT", &[], &board, 1, 0).unwrap();
-        assert_eq!(offer(&throttled), Offer::Single("XNAUT-1".into()));
-        assert_eq!(
-            reason_for(&throttled, "XNAUT-3"),
-            "over the 1-run cap on @nautbot's profile"
-        );
+        assert_eq!(offer(&throttled), Offer::Swarm);
+        assert_eq!(throttled.runs.len(), 2);
 
         assert_eq!(
             offer(&plan_from("p4", "XNAUT", &[], &board, 10, 0).unwrap()),
@@ -673,39 +1184,249 @@ mod tests {
         assert_eq!(offer(&none), Offer::Nothing);
     }
 
-    #[test]
-    fn a_plan_is_consumed_by_the_first_yes() {
-        // The card and the chat can both say yes. Only one batch may start.
-        let plan = SwarmPlan {
-            id: "swarm-take-me".into(),
-            project: "XNAUT".into(),
-            runs: vec![],
-            skipped: vec![],
-            max_parallel: 3,
-            created_at: 0,
-        };
-        remember(plan.clone());
-        assert_eq!(peek("swarm-take-me").as_ref(), Some(&plan));
-        assert_eq!(take("swarm-take-me").as_ref(), Some(&plan));
-        assert_eq!(take("swarm-take-me"), None, "the second yes found a plan");
-        assert_eq!(peek("swarm-take-me"), None);
+    fn scratch() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xnaut-group-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
-        // Remembering the same id twice keeps one, and the store is bounded.
-        for n in 0..(MAX_PLANS + 4) {
-            remember(SwarmPlan {
-                id: format!("swarm-bound-{n}"),
-                ..plan.clone()
-            });
-        }
-        assert!(plans().lock().unwrap().len() <= MAX_PLANS);
+    #[test]
+    fn approved_queue_survives_restart_and_duplicate_confirmation() {
+        let dir = scratch();
+        let tickets: Vec<_> = (1..=3)
+            .map(|n| ticket(&format!("XNAUT-{n}"), "XNAUT", "ready", Some("claude")))
+            .collect();
+        let plan = plan_from(
+            "durable",
+            "XNAUT",
+            &[],
+            &board(&tickets, &models(), &HashSet::new()),
+            2,
+            7,
+        )
+        .unwrap();
+        remember_in(&dir, plan.clone()).unwrap();
         assert!(
-            peek("swarm-bound-0").is_none(),
-            "the oldest plan should have been evicted"
+            remember_in(&dir, plan).is_err(),
+            "same id cannot replace an existing approval"
         );
-        for n in 0..(MAX_PLANS + 4) {
-            take(&format!("swarm-bound-{n}"));
+        let mut group = groups_in(&dir, Some("XNAUT")).unwrap().remove(0);
+        assert_eq!(group.members.len(), 3);
+        assert!(group.approved_at.is_none());
+        approve(&mut group, 10);
+        save_in(&dir, &group).unwrap();
+        let mut restarted = groups_in(&dir, None).unwrap().remove(0);
+        let event_ids: Vec<_> = restarted.events.iter().map(|e| e.id.clone()).collect();
+        approve(&mut restarted, 20);
+        save_in(&dir, &restarted).unwrap();
+        assert_eq!(restarted.approved_at, Some(10));
+        assert_eq!(
+            restarted
+                .events
+                .iter()
+                .map(|e| e.id.clone())
+                .collect::<Vec<_>>(),
+            event_ids
+        );
+        assert!(restarted.events.iter().all(|e| e.at_ms == 10));
+        assert_eq!(report(&restarted).queued.len(), 3);
+        assert!(groups_in(&dir, Some("OTHER")).unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn scope_owner_and_owner_only_changes_revoke_group_authorization() {
+        let original = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
+        let plan = plan_from(
+            "scope",
+            "XNAUT",
+            &[],
+            &board(std::slice::from_ref(&original), &models(), &HashSet::new()),
+            2,
+            0,
+        )
+        .unwrap();
+        let run = &plan.runs[0];
+        assert!(authorized(run, &original));
+        let mut changed = original.clone();
+        changed.owner = Some("codex".into());
+        assert!(!authorized(run, &changed));
+        changed = original.clone();
+        changed.body = "new task scope".into();
+        assert!(!authorized(run, &changed));
+        changed = original.clone();
+        changed.approval.owner_only = true;
+        assert!(!authorized(run, &changed));
+        changed = original.clone();
+        changed
+            .body
+            .push_str("\n\n## Dispatched today\nworker evidence");
+        assert!(
+            !authorized(run, &changed),
+            "even dispatch-looking suffixes require native scope evidence"
+        );
+        changed
+            .body
+            .push_str("\nNew owner instructions: change another project");
+        assert!(!authorized(run, &changed));
+    }
+
+    #[test]
+    fn interrupted_dispatch_blocks_without_evidence_and_recovers_existing_assignment() {
+        let dir = scratch();
+        let ticket = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
+        let plan = plan_from(
+            "recover",
+            "XNAUT",
+            &[],
+            &board(&[ticket], &models(), &HashSet::new()),
+            2,
+            0,
+        )
+        .unwrap();
+        remember_in(&dir, plan).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        approve(&mut group, 1);
+        transition(
+            &mut group,
+            0,
+            MemberState::Starting,
+            "reserved".into(),
+            None,
+            2,
+        );
+        save_in(&dir, &group).unwrap();
+        let mut restarted = groups_in(&dir, None).unwrap().remove(0);
+        let mut snapshot: crate::project_continuity::ProjectSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "project":"XNAUT","observed_at":3,"tickets":[],"assignments":[],"diagnostics":[]
+            }))
+            .unwrap();
+        assert!(recover_member(&mut restarted, 0, &snapshot, 3));
+        assert_eq!(restarted.members[0].state, MemberState::Blocked);
+        crate::project_continuity::add_launch_receipt(
+            &mut snapshot,
+            &serde_json::json!({
+                "ticket":"XNAUT-1","project":"XNAUT","handle":"claude","branch":"agent/claude/xnaut-1",
+                "worktree_path":"/existing","launch":{"run_id":"original-run"}
+            }),
+            "test receipt",
+        );
+        assert!(recover_member(&mut restarted, 0, &snapshot, 4));
+        assert_eq!(restarted.members[0].run_id.as_deref(), Some("original-run"));
+        assert_ne!(
+            restarted.members[0].state,
+            MemberState::Queued,
+            "existing work cannot be relaunched"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn coordinator_lock_excludes_overlapping_refills_and_releases_on_drop() {
+        let dir = scratch();
+        let first = GroupLease::acquire(&dir).unwrap();
+        assert!(GroupLease::acquire(&dir).is_err());
+        drop(first);
+        assert!(GroupLease::acquire(&dir).is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn two_active_workers_leave_third_queued_then_refill_one_slot() {
+        let dir = scratch();
+        let tickets: Vec<_> = (1..=3)
+            .map(|n| ticket(&format!("XNAUT-{n}"), "XNAUT", "ready", Some("claude")))
+            .collect();
+        let plan = plan_from(
+            "capacity",
+            "XNAUT",
+            &[],
+            &board(&tickets, &models(), &HashSet::new()),
+            2,
+            0,
+        )
+        .unwrap();
+        remember_in(&dir, plan).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        approve(&mut group, 1);
+        for i in 0..2 {
+            transition(
+                &mut group,
+                i,
+                MemberState::Tracking,
+                "native worker".into(),
+                Some(format!("run-{i}")),
+                2,
+            );
         }
-        assert_eq!(new_id().len(), "swarm-".len() + 8);
-        assert_ne!(new_id(), new_id());
+        save_in(&dir, &group).unwrap();
+        let restarted = groups_in(&dir, None).unwrap().remove(0);
+        assert!(!slot_available(
+            &restarted.members[2],
+            2,
+            restarted.plan.max_parallel
+        ));
+        assert!(slot_available(
+            &restarted.members[2],
+            1,
+            restarted.plan.max_parallel
+        ));
+        assert!(
+            !slot_available(&restarted.members[0], 1, restarted.plan.max_parallel),
+            "completed slot does not redispatch tracked work"
+        );
+        assert_eq!(report(&restarted).queued, vec!["XNAUT-3"]);
+        stop(&mut group, 3);
+        let events = group.events.len();
+        stop(&mut group, 4);
+        approve(&mut group, 5);
+        assert_eq!(group.stopped_at, Some(3));
+        assert_eq!(group.events.len(), events);
+        assert!(!slot_available(&group.members[2], 0, 2));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_scope_receipt_accepts_only_its_exact_body_not_later_appended_instructions() {
+        let dir = scratch();
+        let original = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
+        let plan = plan_from(
+            "receipt",
+            "XNAUT",
+            &[],
+            &board(std::slice::from_ref(&original), &models(), &HashSet::new()),
+            2,
+            0,
+        )
+        .unwrap();
+        remember_in(&dir, plan).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        let mut dispatched = original.clone();
+        dispatched
+            .body
+            .push_str("\n\n## Dispatched today\nNative receipt");
+        assert!(!authorized_member(
+            &dir,
+            &group.plan.runs[0],
+            &group.members[0],
+            &dispatched
+        ));
+        group.members[0].dispatched_scope = Some(scope(&dispatched));
+        assert!(authorized_member(
+            &dir,
+            &group.plan.runs[0],
+            &group.members[0],
+            &dispatched
+        ));
+        dispatched
+            .body
+            .push_str("\nAlso change the billing service");
+        assert!(!authorized_member(
+            &dir,
+            &group.plan.runs[0],
+            &group.members[0],
+            &dispatched
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -11,7 +11,7 @@
 //! the suite, writes the bundle and moves the ticket, exactly as the loop was
 //! run by hand six times on 2026-08-14. The prompt below is what tells it to.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::Manager;
 
@@ -22,7 +22,106 @@ pub struct DispatchResult {
     pub branch: String,
     pub worktree_path: String,
     pub session_id: String,
+    pub run_id: Option<String>,
     pub environment: String,
+    #[serde(skip)]
+    pub(crate) ticket_scope: String,
+}
+
+/// Automatic callers preserve ownership on every refusal. Only a capacity gate
+/// proven before native launch is retryable; an unknown launch error is uncertain.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalKind {
+    Policy,
+    Capacity,
+    ExistingAssignment,
+    Uncertain,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DispatchRefusal {
+    pub kind: RefusalKind,
+    pub reason: String,
+}
+impl DispatchRefusal {
+    pub fn retryable(&self) -> bool {
+        self.kind == RefusalKind::Capacity
+    }
+    pub fn uncertain(reason: String) -> Self {
+        Self {
+            kind: RefusalKind::Uncertain,
+            reason,
+        }
+    }
+}
+
+pub(crate) fn automatic_admission(ticket: &str, project: &str) -> Result<(), DispatchRefusal> {
+    let refuse = |kind, reason| DispatchRefusal { kind, reason };
+    if crate::switches::load().read_only || !crate::instance::role().dispatches() {
+        return Err(refuse(
+            RefusalKind::Policy,
+            "read_only or instance role prohibits automatic dispatch".into(),
+        ));
+    }
+    if let Some(reason) = crate::housekeeper::launch_floor() {
+        return Err(refuse(RefusalKind::Capacity, reason));
+    }
+    let registry = crate::agents::registry_dir().map_err(DispatchRefusal::uncertain)?;
+    let repo = crate::project_management::repo_now().map_err(DispatchRefusal::uncertain)?;
+    let tickets = crate::project_management::ticket_list_in(&repo, Some(project.to_string()))
+        .map_err(DispatchRefusal::uncertain)?;
+    let current = tickets
+        .iter()
+        .find(|t| t.id == ticket)
+        .ok_or_else(|| refuse(RefusalKind::Policy, "ticket missing from project".into()))?;
+    let projects =
+        crate::project_management::list_projects(&repo).map_err(DispatchRefusal::uncertain)?;
+    if current.approval.owner_only
+        || current.tags.iter().any(|t| t == "no-auto-dispatch")
+        || projects
+            .iter()
+            .find(|p| p.key == project)
+            .is_none_or(|p| p.owner_only)
+    {
+        return Err(refuse(
+            RefusalKind::Policy,
+            "owner-only or no-auto-dispatch policy".into(),
+        ));
+    }
+    let snapshot =
+        crate::project_continuity::snapshot(project).map_err(DispatchRefusal::uncertain)?;
+    let continuation = crate::run_control::continuation_in(&registry, ticket)
+        .map_err(DispatchRefusal::uncertain)?;
+    crate::agent_work::recovery_guard(
+        &serde_json::to_value(snapshot).map_err(|e| DispatchRefusal::uncertain(e.to_string()))?,
+        ticket,
+        continuation.as_ref(),
+    )
+    .map_err(|reason| refuse(RefusalKind::ExistingAssignment, reason))?;
+    let live =
+        crate::run_control::live_tickets_in(&registry).map_err(DispatchRefusal::uncertain)?;
+    crate::spend::would_admit(live.len()).map_err(|reason| refuse(RefusalKind::Capacity, reason))
+}
+
+pub(crate) async fn automatic_dispatch(
+    app: tauri::AppHandle,
+    ticket: String,
+    project: String,
+) -> Result<DispatchResult, DispatchRefusal> {
+    automatic_admission(&ticket, &project)?;
+    let repo = crate::project_management::repo_now().map_err(DispatchRefusal::uncertain)?;
+    let current = crate::project_management::ticket_list_in(&repo, Some(project.clone()))
+        .map_err(DispatchRefusal::uncertain)?
+        .into_iter()
+        .find(|t| t.id == ticket)
+        .ok_or_else(|| DispatchRefusal::uncertain("ticket disappeared".into()))?;
+    crate::ticket_triage::dispatch_admission(&current).map_err(|reason| DispatchRefusal {
+        kind: RefusalKind::Policy,
+        reason,
+    })?;
+    pm_ticket_dispatch(app, ticket, project, None)
+        .await
+        .map_err(DispatchRefusal::uncertain)
 }
 
 /// Every linked vault doc, inlined. An unreadable or non-`work:` reference is
@@ -203,6 +302,16 @@ pub async fn pm_ticket_dispatch(
     project: String,
     environment: Option<String>,
 ) -> Result<DispatchResult, String> {
+    dispatch_scoped(app, ticket_id, project, environment, None).await
+}
+
+pub(crate) async fn dispatch_scoped(
+    app: tauri::AppHandle,
+    ticket_id: String,
+    project: String,
+    environment: Option<String>,
+    approved: Option<&crate::swarm_plan::PlannedRun>,
+) -> Result<DispatchResult, String> {
     let tickets = crate::project_management::pm_ticket_list(
         app.state::<crate::state::AppState>(),
         Some(project.clone()),
@@ -220,6 +329,11 @@ pub async fn pm_ticket_dispatch(
         .filter(|owner| !owner.is_empty())
         .ok_or("assign an owner before dispatching this ticket")?;
     let profile = crate::agent_profiles::agent_profile_get(handle.clone())?;
+    if approved.is_some_and(|run| {
+        !crate::swarm_plan::authorized(run, &ticket) || run.model != profile.model
+    }) {
+        return Err("approved group scope, owner or model changed before native dispatch".into());
+    }
     use crate::sandbox::launch_env::LaunchEnv;
     let requested = environment.as_deref().map(|key| LaunchEnv::from_key(key)
         .ok_or_else(|| format!("Unknown execution environment: {key}. Choose local, exe-dev or gitvm."))).transpose()?;
@@ -251,6 +365,67 @@ pub async fn pm_ticket_dispatch(
     }
 
     let root = PathBuf::from(&repo).canonicalize().map_err(|e| e.to_string())?;
+    if approved.is_some_and(|run| {
+        !crate::swarm_plan::authorized(run, &ticket) || run.model != profile.model
+    }) {
+        return Err("approved group scope, owner or model changed before native dispatch".into());
+    }
+    use crate::sandbox::launch_env::LaunchEnv;
+    let requested = environment
+        .as_deref()
+        .map(|key| {
+            LaunchEnv::from_key(key).ok_or_else(|| {
+                format!("Unknown execution environment: {key}. Choose local, exe-dev or gitvm.")
+            })
+        })
+        .transpose()?;
+    let sandboxes = crate::settings::load_or_default().sandboxes;
+    let destination = crate::sandbox::launch_env::resolve(
+        requested.or_else(|| profile.execution.pinned_environment()),
+        &sandboxes,
+    );
+    destination.route(&sandboxes)?;
+
+    if !crate::run_control::runtime_meets_in(
+        &crate::agents::registry_dir()?,
+        &profile.runtime_id,
+        &profile.model,
+        &ticket.model_requirement,
+    )? {
+        return Err(format!(
+            "@{handle} model {} does not meet ticket requirement {}",
+            profile.model, ticket.model_requirement
+        ));
+    }
+    let continuation =
+        crate::run_control::continuation_in(&crate::agents::registry_dir()?, &ticket.id)?;
+    if let Some(live) =
+        crate::run_control::live_run_for_ticket_in(&crate::agents::registry_dir()?, &ticket.id)?
+    {
+        return Err(format!(
+            "{} already has a live run: {} (@{}, {:?}). Retire it before dispatching again.",
+            ticket.id, live.run_id, live.agent_handle, live.state
+        ));
+    }
+
+    let projects =
+        crate::project_management::pm_project_list(app.state::<crate::state::AppState>()).await?;
+    let repo = projects
+        .iter()
+        .find(|item| item.key == project)
+        .map(crate::project_management::local_source_path)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| format!("project {project} has no local repo path set"))?;
+    if !PathBuf::from(&repo).is_dir() {
+        return Err(format!("repo path does not exist: {repo}"));
+    }
+
+    let root = PathBuf::from(&repo)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if approved.is_some_and(|run| run.repository_root.as_deref() != root.to_str()) {
+        return Err("approved project repository changed; renew group approval".into());
+    }
     let recovered = serde_json::to_value(crate::project_continuity::snapshot(&project)?)
         .map_err(|e| e.to_string())?;
     if let Some(run) = &continuation {
@@ -376,7 +551,7 @@ pub async fn pm_ticket_dispatch(
         session = launched.session_id,
         environment = destination.key(),
     );
-    crate::project_management::pm_ticket_update(
+    let dispatched_ticket = crate::project_management::pm_ticket_update(
         app.state::<crate::state::AppState>(),
         crate::project_management::TicketUpdateRequest {
             model_requirement: None,
@@ -398,10 +573,12 @@ pub async fn pm_ticket_dispatch(
     .await?;
 
     Ok(DispatchResult {
+        ticket_scope: crate::swarm_plan::scope(&dispatched_ticket),
         ticket_id: ticket.id,
         handle,
         branch,
         worktree_path,
+        run_id: launched.run_id,
         session_id: launched.session_id,
         environment: destination.key().into(),
     })
