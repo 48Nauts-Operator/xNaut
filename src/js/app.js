@@ -4360,7 +4360,9 @@ function renderTabs() {
 }
 
 window.xnautSwitchTab = (id) => switchTab(id); // browser-pane.js focuses an existing browser tab (XNAUT-149)
+let tabSwitchGeneration = 0;
 async function switchTab(tabId) {
+  const generation = ++tabSwitchGeneration;
   activeTabId = tabId;
   // Remember the active tab per workspace so re-selecting a project restores it.
   const _st = tabs.find(t => t.id === tabId);
@@ -4420,7 +4422,16 @@ async function switchTab(tabId) {
       else if (tab.isBrowser && typeof window.xnautCreateBrowserPane === 'function') {
         try {
           const entry = await window.xnautCreateBrowserPane(tabId, terminalContainer, tab.initialBrowserUrl);
-          tab.terminals.push(entry);
+          // Switching/closing a tab detaches its pending pane. The factory then
+          // destroys the unregistered child and returns null; leave this tab
+          // empty so a later visit can create it again (XNAUT-467).
+          if (entry) {
+            if (!tabs.includes(tab) || generation !== tabSwitchGeneration || activeTabId !== tabId) {
+              await window.xnautDestroyBrowserPane(entry.label);
+            } else {
+              tab.terminals.push(entry);
+            }
+          }
         } catch (e) {
           console.error('Failed to create browser pane:', e);
         }
@@ -4451,7 +4462,10 @@ async function switchTab(tabId) {
     }
   }
 
-  tab?.terminals.forEach(entry => entry.onActivate?.());
+  // An awaited factory from an older switch must never announce that old tab
+  // as active after a newer switch (including switching away and back).
+  if (generation !== tabSwitchGeneration || activeTabId !== tabId || !tabs.includes(tab)) return;
+  tab.terminals.forEach(entry => entry.onActivate?.());
   renderTabs();
   // Phase 6: let browser-pane.js know which webviews to show/hide.
   if (typeof window.xnautOnTabSwitched === 'function') {
