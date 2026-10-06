@@ -1044,6 +1044,119 @@ fn recover_member(
     false
 }
 
+/// Native services are kept at this seam so restart/error-isolation tests drive
+/// the same persisted refill loop without starting a Tauri app or real worker.
+trait RefillBackend: Sync {
+    fn reconcile(&self, project: &str, ticket: &str) -> Result<(), String>;
+    fn snapshot(&self, project: &str)
+        -> Result<crate::project_continuity::ProjectSnapshot, String>;
+    fn pins(&self, run: &PlannedRun, project: &str) -> Result<bool, String>;
+    fn capacity(&self, registry: &Path, group: &Group, index: usize) -> Result<bool, String>;
+    fn admission(
+        &self,
+        run: &PlannedRun,
+        project: &str,
+    ) -> Result<(), crate::dispatch::DispatchRefusal>;
+    fn dispatch(
+        &self,
+        run: PlannedRun,
+        project: String,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<crate::dispatch::DispatchResult, String>>
+                + Send
+                + '_,
+        >,
+    >;
+}
+
+struct NativeRefill<'a>(&'a tauri::AppHandle);
+impl RefillBackend for NativeRefill<'_> {
+    fn reconcile(&self, project: &str, ticket: &str) -> Result<(), String> {
+        crate::agent_work::reconcile_prelaunch(project, ticket).map(|_| ())
+    }
+    fn snapshot(
+        &self,
+        project: &str,
+    ) -> Result<crate::project_continuity::ProjectSnapshot, String> {
+        crate::project_continuity::snapshot(project)
+    }
+    fn pins(&self, run: &PlannedRun, project: &str) -> Result<bool, String> {
+        current_pins(run, project)
+    }
+    fn capacity(&self, registry: &Path, group: &Group, index: usize) -> Result<bool, String> {
+        let profile_cap = crate::agent_profiles::agent_profile_get(
+            crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.into(),
+        )
+        .map(|p| p.max_parallel as usize)
+        .unwrap_or(DEFAULT_MAX_PARALLEL);
+        Ok(slot_available(
+            &group.members[index],
+            WorkerGroupScope::new(group, &crate::repository_transfer::list()?).count(registry)?,
+            group.plan.max_parallel.min(profile_cap.clamp(1, HARD_CAP)),
+        ))
+    }
+    fn admission(
+        &self,
+        run: &PlannedRun,
+        project: &str,
+    ) -> Result<(), crate::dispatch::DispatchRefusal> {
+        crate::dispatch::automatic_admission(&run.ticket, project)?;
+        let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())
+            .map_err(crate::dispatch::DispatchRefusal::uncertain)?;
+        if profile.model != run.model {
+            return Err(crate::dispatch::DispatchRefusal {
+                kind: crate::dispatch::RefusalKind::Policy,
+                reason: "approved owner profile/model changed".into(),
+            });
+        }
+        Ok(())
+    }
+    fn dispatch(
+        &self,
+        run: PlannedRun,
+        project: String,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<crate::dispatch::DispatchResult, String>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            crate::dispatch::dispatch_scoped(
+                self.0.clone(),
+                run.ticket.clone(),
+                project,
+                None,
+                Some(&run),
+            )
+            .await
+        })
+    }
+}
+
+fn block_local(
+    registry: &Path,
+    group: &mut Group,
+    index: usize,
+    reason: String,
+) -> Result<(), String> {
+    let reason = crate::project_wiki::redact(&reason);
+    let id = group.members[index].run_id.clone();
+    group.members[index].refusal =
+        Some(crate::dispatch::DispatchRefusal::uncertain(reason.clone()));
+    transition(
+        group,
+        index,
+        MemberState::Blocked,
+        reason,
+        id,
+        crate::run_control::now_ms(),
+    );
+    save_in(registry, group)
+}
+
 pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
     if crate::switches::load().read_only || !crate::instance::role().dispatches() {
         return Ok(());
@@ -1052,43 +1165,88 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
     let _lease = GroupLease::acquire(&registry)?;
     let repo = crate::project_management::repo_now()?;
     let tickets = crate::project_management::ticket_list_in(&repo, None)?;
-    let projects = crate::project_management::list_projects(&repo)?;
-    for mut group in groups_in(&registry, None)?
+    crate::project_management::list_projects(&repo)?; // shared PM integrity, before any dispatch
+    refill_in(&registry, &tickets, &NativeRefill(app)).await
+}
+
+async fn refill_in(
+    registry: &Path,
+    tickets: &[TicketRecord],
+    backend: &impl RefillBackend,
+) -> Result<(), String> {
+    // Corrupt shared run/group registries remain global failures. Do not hide
+    // them as a missing member profile and launch around uncertain occupancy.
+    crate::run_control::worker_count_in(registry)?;
+    let groups = groups_in(registry, None)?;
+    if groups.iter().any(|g| {
+        g.plan.runs.len() != g.members.len()
+            || g.plan
+                .runs
+                .iter()
+                .zip(&g.members)
+                .any(|(r, m)| r.ticket != m.ticket)
+    }) {
+        return Err("Group registry membership is inconsistent; refill refused".into());
+    }
+    for mut group in groups
         .into_iter()
         .filter(|g| g.approved_at.is_some() && g.stopped_at.is_none())
     {
-        for member in &group.members {
-            crate::agent_work::reconcile_prelaunch(&group.plan.project, &member.ticket)?;
-        }
-        let snapshot = crate::project_continuity::snapshot(&group.plan.project)?;
+        let mut unavailable = vec![false; group.members.len()];
         for i in 0..group.members.len() {
+            if let Err(error) = backend.reconcile(&group.plan.project, &group.members[i].ticket) {
+                let reason = format!(
+                    "Prelaunch recovery unavailable for {}: {error}",
+                    group.members[i].ticket
+                );
+                block_local(registry, &mut group, i, reason)?;
+                unavailable[i] = true;
+            }
+        }
+        if unavailable.iter().all(|blocked| *blocked) {
+            continue;
+        }
+        let snapshot = match backend.snapshot(&group.plan.project) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                for i in 0..group.members.len() {
+                    if !unavailable[i] {
+                        let reason = format!(
+                            "Project recovery unavailable for {}: {error}",
+                            group.plan.project
+                        );
+                        block_local(registry, &mut group, i, reason)?;
+                    }
+                }
+                continue;
+            }
+        };
+        for i in 0..group.members.len() {
+            if unavailable[i] {
+                continue;
+            }
             let run = group.plan.runs[i].clone();
             let now = crate::run_control::now_ms();
             let current = tickets
                 .iter()
                 .find(|t| t.id == run.ticket && t.project == group.plan.project);
-            let project_allowed = projects.iter().any(|p| {
-                p.key == group.plan.project
-                    && !p.owner_only
-                    && Path::new(crate::project_management::local_source_path(p).trim())
-                        .canonicalize()
-                        .ok()
-                        .is_some_and(|root| run.repository_root.as_deref() == root.to_str())
-            });
-            if !project_allowed
-                || !current_pins(&run, &group.plan.project)?
-                || current.is_none_or(|t| !authorized_member(&registry, &run, &group.members[i], t))
+            let pins = match backend.pins(&run, &group.plan.project) {
+                Ok(pins) => pins,
+                Err(error) => {
+                    block_local(registry, &mut group, i,
+                        format!("Approved profile or project configuration unavailable for @{} ({}): {error}", run.owner, run.ticket))?;
+                    continue;
+                }
+            };
+            if !pins
+                || current.is_none_or(|t| !authorized_member(registry, &run, &group.members[i], t))
             {
-                let id = group.members[i].run_id.clone();
-                transition(
+                block_local(
+                    registry,
                     &mut group,
                     i,
-                    MemberState::Blocked,
                     "approved owner, scope or project policy changed".into(),
-                    id,
-                    now,
-                );
-                save_in(&registry, &group)?;
+                )?;
                 continue;
             }
             if recover_member(&registry, &mut group, i, &snapshot, now) {
@@ -1110,17 +1268,7 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
                 save_in(&registry, &group)?;
                 continue;
             }
-            let profile_cap = crate::agent_profiles::agent_profile_get(
-                crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.into(),
-            )
-            .map(|p| p.max_parallel as usize)
-            .unwrap_or(DEFAULT_MAX_PARALLEL);
-            if !slot_available(
-                &group.members[i],
-                WorkerGroupScope::new(&group, &crate::repository_transfer::list()?)
-                    .count(&registry)?,
-                group.plan.max_parallel.min(profile_cap.clamp(1, HARD_CAP)),
-            ) {
+            if !backend.capacity(registry, &group, i)? {
                 transition(
                     &mut group,
                     i,
@@ -1132,9 +1280,7 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
                 save_in(&registry, &group)?;
                 continue;
             }
-            if let Err(refusal) =
-                crate::dispatch::automatic_admission(&run.ticket, &group.plan.project)
-            {
+            if let Err(refusal) = backend.admission(&run, &group.plan.project) {
                 let state = if refusal.retryable() {
                     MemberState::Queued
                 } else {
@@ -1142,20 +1288,6 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
                 };
                 group.members[i].refusal = Some(refusal.clone());
                 transition(&mut group, i, state, refusal.reason, None, now);
-                save_in(&registry, &group)?;
-                continue;
-            }
-            if !crate::agent_profiles::agent_profile_get(run.owner.clone())
-                .is_ok_and(|p| p.model == run.model)
-            {
-                transition(
-                    &mut group,
-                    i,
-                    MemberState::Blocked,
-                    "approved owner profile/model changed".into(),
-                    None,
-                    now,
-                );
                 save_in(&registry, &group)?;
                 continue;
             }
@@ -1169,14 +1301,9 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
                 now,
             );
             save_in(&registry, &group)?;
-            match crate::dispatch::dispatch_scoped(
-                app.clone(),
-                run.ticket.clone(),
-                group.plan.project.clone(),
-                None,
-                Some(&run),
-            )
-            .await
+            match backend
+                .dispatch(run.clone(), group.plan.project.clone())
+                .await
             {
                 Ok(r) => {
                     group.members[i].dispatched_scope = Some(r.ticket_scope.clone());
@@ -1801,6 +1928,246 @@ mod tests {
             "existing work cannot be relaunched"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    struct RefillFixture {
+        registry: PathBuf,
+        tickets: Vec<TicketRecord>,
+        fail_reconcile: Option<String>,
+        fail_snapshot: Option<String>,
+        launched: std::sync::Mutex<Vec<String>>,
+    }
+    impl RefillFixture {
+        fn new() -> Self {
+            let registry = scratch();
+            let tickets = vec![
+                ticket("FIRST-1", "FIRST", "ready", Some("claude")),
+                ticket("FIRST-2", "FIRST", "ready", Some("codex")),
+                ticket("SECOND-1", "SECOND", "ready", Some("codex")),
+            ];
+            for (index, project) in ["FIRST", "SECOND"].iter().enumerate() {
+                let plan = plan_from(
+                    &format!("group-{index}"),
+                    project,
+                    &[],
+                    &board(&tickets, &models(), &HashSet::new()),
+                    2,
+                    index as i64,
+                )
+                .unwrap();
+                remember_in(&registry, plan).unwrap();
+            }
+            for mut group in groups_in(&registry, None).unwrap() {
+                approve(&mut group, 10);
+                save_in(&registry, &group).unwrap();
+            }
+            std::fs::create_dir_all(registry.join("profiles")).unwrap();
+            for (owner, model) in models() {
+                std::fs::write(
+                    registry.join("profiles").join(format!("{owner}.json")),
+                    serde_json::to_vec(&serde_json::json!({"model":model})).unwrap(),
+                )
+                .unwrap();
+            }
+            Self {
+                registry,
+                tickets,
+                fail_reconcile: None,
+                fail_snapshot: None,
+                launched: std::sync::Mutex::new(vec![]),
+            }
+        }
+    }
+    impl Drop for RefillFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.registry);
+        }
+    }
+    impl RefillBackend for RefillFixture {
+        fn reconcile(&self, _project: &str, ticket: &str) -> Result<(), String> {
+            if self.fail_reconcile.as_deref() == Some(ticket) {
+                Err("exact pending launch receipt is unreadable".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn snapshot(
+            &self,
+            project: &str,
+        ) -> Result<crate::project_continuity::ProjectSnapshot, String> {
+            if self.fail_snapshot.as_deref() == Some(project) {
+                return Err("project recovery source unavailable".into());
+            }
+            let runs = crate::run_control::list_ids_in(&self.registry)?
+                .iter()
+                .map(|id| crate::run_control::load_manifest_in(&self.registry, id))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(crate::project_continuity::reconcile(
+                project,
+                &self.tickets,
+                &runs,
+                &[],
+                crate::run_control::now_ms(),
+            ))
+        }
+        fn pins(&self, run: &PlannedRun, _project: &str) -> Result<bool, String> {
+            let bytes = std::fs::read(
+                self.registry
+                    .join("profiles")
+                    .join(format!("{}.json", run.owner)),
+            )
+            .map_err(|_| format!("agent profile @{} is missing", run.owner))?;
+            let profile: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            Ok(profile["model"] == run.model)
+        }
+        fn capacity(&self, registry: &Path, group: &Group, index: usize) -> Result<bool, String> {
+            Ok(slot_available(
+                &group.members[index],
+                WorkerGroupScope::new(group, &[]).count(registry)?,
+                group.plan.max_parallel,
+            ))
+        }
+        fn admission(
+            &self,
+            _run: &PlannedRun,
+            _project: &str,
+        ) -> Result<(), crate::dispatch::DispatchRefusal> {
+            Ok(())
+        }
+        fn dispatch(
+            &self,
+            run: PlannedRun,
+            project: String,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<crate::dispatch::DispatchResult, String>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async move {
+                let worktree = self
+                    .registry
+                    .join(format!("work-{}", run.ticket))
+                    .to_string_lossy()
+                    .into_owned();
+                let mut manifest = crate::run_control::RunManifest::requested(
+                    &run.owner,
+                    "fixture",
+                    &worktree,
+                    Some(run.ticket.clone()),
+                    Some(run.model.clone()),
+                    &[],
+                    crate::run_control::now_ms(),
+                );
+                manifest.branch = run.branch.clone();
+                manifest.project = project;
+                let own = manifest.run_id.clone();
+                let registered = crate::run_control::request_in(&self.registry, manifest, || {
+                    crate::run_control::worker_capacity_in(&self.registry, 8, &own, None)
+                })?;
+                self.launched.lock().unwrap().push(run.ticket.clone());
+                Ok(crate::dispatch::DispatchResult {
+                    ticket_id: run.ticket,
+                    handle: run.owner,
+                    branch: run.branch,
+                    worktree_path: worktree,
+                    session_id: format!("fixture-{}", registered.run_id),
+                    run_id: Some(registered.run_id),
+                    environment: "fixture".into(),
+                    ticket_scope: run.scope,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn refill_isolates_missing_profile_and_recovery_failures_across_restart() {
+        for failure in ["profile", "prelaunch", "snapshot"] {
+            let mut fixture = RefillFixture::new();
+            let reason = match failure {
+                "profile" => {
+                    std::fs::remove_file(fixture.registry.join("profiles/claude.json")).unwrap();
+                    "agent profile @claude is missing"
+                }
+                "prelaunch" => {
+                    fixture.fail_reconcile = Some("FIRST-1".into());
+                    "exact pending launch receipt is unreadable"
+                }
+                _ => {
+                    fixture.fail_snapshot = Some("FIRST".into());
+                    "project recovery source unavailable"
+                }
+            };
+            refill_in(&fixture.registry, &fixture.tickets, &fixture)
+                .await
+                .unwrap();
+            let first = groups_in(&fixture.registry, None).unwrap();
+            assert_eq!(first[0].members[0].state, MemberState::Blocked);
+            assert!(first[0].members[0].reason.contains(reason));
+            assert_eq!(first[1].members[0].state, MemberState::Tracking);
+            assert!(first[1].members[0].run_id.is_some());
+            if failure != "snapshot" {
+                assert_eq!(
+                    first[0].members[1].state,
+                    MemberState::Tracking,
+                    "an independent member of the same group still dispatches"
+                );
+            }
+            let blocked_events = first[0]
+                .events
+                .iter()
+                .filter(|e| e.ticket == "FIRST-1")
+                .count();
+            for _ in 0..2 {
+                // Reloading is performed inside the production loop each pass.
+                refill_in(&fixture.registry, &fixture.tickets, &fixture)
+                    .await
+                    .unwrap();
+            }
+            let reopened = groups_in(&fixture.registry, None).unwrap();
+            assert_eq!(reopened[0].members[0].reason, first[0].members[0].reason);
+            assert_eq!(
+                reopened[0]
+                    .events
+                    .iter()
+                    .filter(|e| e.ticket == "FIRST-1")
+                    .count(),
+                blocked_events
+            );
+            assert_eq!(reopened[1].members[0].run_id, first[1].members[0].run_id);
+            let launched = fixture.launched.lock().unwrap();
+            assert_eq!(
+                launched
+                    .iter()
+                    .filter(|id| id.as_str() == "SECOND-1")
+                    .count(),
+                1
+            );
+            assert!(!launched.contains(&"FIRST-1".into()));
+            assert_eq!(
+                crate::run_control::list_ids_in(&fixture.registry)
+                    .unwrap()
+                    .len(),
+                launched.len()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refill_keeps_shared_native_registry_corruption_fail_closed() {
+        let fixture = RefillFixture::new();
+        std::fs::write(fixture.registry.join("corrupt.run.json"), b"{broken").unwrap();
+        assert!(refill_in(&fixture.registry, &fixture.tickets, &fixture)
+            .await
+            .is_err());
+        assert!(fixture.launched.lock().unwrap().is_empty());
+        assert!(groups_in(&fixture.registry, None)
+            .unwrap()
+            .iter()
+            .flat_map(|group| &group.members)
+            .all(|member| member.state == MemberState::Queued));
     }
 
     #[test]
