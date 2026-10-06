@@ -597,7 +597,7 @@ pub fn load_or_default() -> Settings {
             Settings::default()
         },
     };
-    if migrate_legacy_nautgate_settings(&mut settings) {
+    if !crate::loop_acceptance::ENABLED && migrate_legacy_nautgate_settings(&mut settings) {
         if let Err(error) = save(&settings) {
             eprintln!("[settings] could not persist legacy NautGate migration: {error}");
         }
