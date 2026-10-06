@@ -488,7 +488,7 @@
       // One renderer for every code surface in the app (code-render.js): the
       // Code tab, this viewer and the diff all share a face, a size and a
       // gutter, rather than three copies that drift apart.
-      cvBody.innerHTML = window.xnautRenderCode(content, path);
+      cvBody.innerHTML = window.xnautRenderCode(content, absPath);
     }
 
     // A single file's diff in the center, colorized line by line. Reuses the raw

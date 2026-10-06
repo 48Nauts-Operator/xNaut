@@ -30,6 +30,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { unattributedTests } from './rust-test-attribution.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const results = [];
@@ -180,16 +181,7 @@ function disabledTests() {
   const orphans = [];
   for (const file of files) {
     const body = read(join('src-tauri/src', file));
-    const idx = body.indexOf('#[cfg(test)]');
-    if (idx < 0) continue;
-    const block = body.slice(idx);
-    // A test fn takes no arguments and returns nothing; helpers take args.
-    const re = /(^|\n)(\s*)fn (\w+)\(\)\s*\{/g;
-    let m;
-    while ((m = re.exec(block))) {
-      const before = block.slice(Math.max(0, m.index - 220), m.index);
-      if (!/#\[(test|tokio::test|rstest)/.test(before)) orphans.push(`${file}::${m[3]}`);
-    }
+    orphans.push(...unattributedTests(body).map((name) => `${file}::${name}`));
   }
   if (orphans.length === 0) add('Every test fn is attributed', 'pass', `${files.length} modules`);
   else add('Every test fn is attributed', 'fail',

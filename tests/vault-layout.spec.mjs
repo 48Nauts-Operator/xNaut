@@ -50,4 +50,21 @@ test('Vault replaces the master menu and uses the next pane for its navigator', 
   await page.locator('.vp-code-file').click();
   await expect(page.locator('.vp-cv-body')).toBeVisible();
   await expect(page.locator('.vp-cv-path')).toHaveText('src/example.js');
+  // Exercise the file viewer reached from a real diff, including the path
+  // given to syntax highlighting. A bare undefined `path` used to reject here.
+  await page.evaluate(() => {
+    window.__xnautStub.read_file = 'const renderedFromVault = 42;';
+    const render = window.xnautRenderCode;
+    window.__vaultRenderedFiles = [];
+    window.xnautRenderCode = (source, filename) => {
+      window.__vaultRenderedFiles.push({ source, filename });
+      return render(source, filename);
+    };
+  });
+  await page.getByRole('button', { name: 'Open file', exact: true }).click();
+  await expect(page.locator('.vp-cv-body')).toContainText('renderedFromVault');
+  const rendered = await page.evaluate(() => window.__vaultRenderedFiles);
+  expect(rendered).toHaveLength(1);
+  expect(rendered[0].filename).toMatch(/\/src\/example\.js$/);
+  expect(rendered[0].source).toBe('const renderedFromVault = 42;');
 });

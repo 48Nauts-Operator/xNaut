@@ -756,7 +756,19 @@ mod tests {
         );
     }
 
+    #[test]
     fn a_call_that_cannot_be_recorded_is_refused() {
+        // This case changes evidence policy as well as its destination. Run it
+        // alone so another parallel test cannot briefly inherit optional proof.
+        const CHILD: &str = "XNAUT_VETO_FAIL_CLOSED_TEST_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "veto::tests::a_call_that_cannot_be_recorded_is_refused", "--nocapture"])
+                .env(CHILD, "1").env_remove("XNAUT_EVIDENCE_OPTIONAL")
+                .status().unwrap();
+            assert!(status.success(), "isolated evidence refusal regression failed");
+            return;
+        }
         // The fail-closed seam, and the one behaviour in this file that is the
         // opposite of every other. A file where the evidence directory should
         // be is the cheapest way to make every write fail.
