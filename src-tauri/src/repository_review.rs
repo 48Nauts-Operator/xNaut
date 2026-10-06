@@ -561,7 +561,8 @@ fn restore_author(t: &Transfer) -> Result<(), String> {
     Ok(())
 }
 fn repair_prompt(t: &Transfer, q: &Review) -> String {
-    format!("CONTINUE THE EXISTING TICKET AND PR\nTicket: {}. Parent delivery: {}. Existing PR: {}. Reviewed head: {}.\nRepair only the independent findings below in the preserved branch and worktree; do not start another implementation or PR. Read the task report and previous handbacks. Preserve earlier commits and artifacts. Commit the fix, rerun required project checks, and publish a new structured handback. The author cannot declare independent verification or authorize merge/release.\nFindings:\n{}\nRequired commands:\n{}",t.ticket.as_deref().unwrap_or(""),t.run_id,t.pr_url.as_deref().unwrap_or(""),q.head,serde_json::to_string_pretty(&q.report).unwrap_or_default(),serde_json::to_string(&q.required_checks).unwrap_or_default())
+    let delivery = crate::dispatch::project_author_guidance(&t.project);
+    format!("CONTINUE THE EXISTING TICKET AND PR\nTicket: {}. Parent delivery: {}. Existing PR: {}. Reviewed head: {}.\nRepair only the independent findings below in the preserved branch and worktree; do not start another implementation or PR. Read the task report and previous handbacks. Preserve earlier commits and artifacts. Commit the fix, rerun required project checks, and publish a new structured handback. The author cannot declare independent verification or authorize merge/release.\nProject delivery contract: {delivery}\nFindings:\n{}\nRequired commands:\n{}",t.ticket.as_deref().unwrap_or(""),t.run_id,t.pr_url.as_deref().unwrap_or(""),q.head,serde_json::to_string_pretty(&q.report).unwrap_or_default(),serde_json::to_string(&q.required_checks).unwrap_or_default())
 }
 fn author_for<'a>(
     t: &'a Transfer,
@@ -2231,6 +2232,21 @@ mod tests {
             &[child]
         )
         .is_empty());
+    }
+
+    #[test]
+    fn repair_prompt_scopes_delivery_to_the_actual_project() {
+        let t: Transfer = serde_json::from_value(json!({"run_id":"parent","project":"PYTHON","ticket":"PYTHON-1","handle":"author","local_path":"/fixture","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/parent","state":"review","error":null})).unwrap();
+        let q = Review { required_checks: vec![RequiredCheck { name:"test".into(), command:"python3 -m unittest -v".into() }], report:Some(json!({"findings":[{"detail":"Fix integer half-up rounding"}]})), ..Default::default() };
+        let prompt = repair_prompt(&t, &q);
+        assert!(prompt.contains("python3 -m unittest -v"));
+        assert!(prompt.contains("Fix integer half-up rounding"));
+        assert!(prompt.contains("Historical generated completion examples from other projects do not add requirements"));
+        assert!(prompt.contains("Preserve prior handbacks"));
+        assert!(!prompt.contains("cargo test"));
+        assert!(!prompt.contains("playwright test"));
+        let mut xnaut = t; xnaut.project = "XNAUT".into();
+        assert!(repair_prompt(&xnaut, &q).contains("original xNAUT ticket's suite, totals bundle, design-document"));
     }
 
     #[test]

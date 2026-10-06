@@ -202,9 +202,36 @@ fn verification_contract(ticket: &crate::project_management::TicketRecord) -> (S
     } else {
         (
             "Use the project's verification plan at the checked-out revision: explicit `.xnaut/verify.json` takes precedence; when absent, the native verifier supports Node auto-detection from `package.json`. Run the resolved required commands and the ticket's acceptance checks. Zero failures. Preserve command, exit code, and log evidence. Missing tools or configuration are explicit verification gaps; never substitute another project's suites or invent passing totals.".into(),
-            format!("`.xnaut/bundles/{}.md` records what changed, the actual project checks and their results, how to verify by hand, and any unresolved requirements. Follow the supplied remote delivery contract for artifact location and handback when running in a sandbox.", ticket.id),
+            "Record what changed, the actual project checks and their results, how to verify by hand, and any unresolved requirements. Follow this run's supplied delivery contract for artifact location and structured handback.".into(),
         )
     }
+}
+
+/// Shared by initial dispatch and same-task repair. A historical generated
+/// prompt is not authority to add another project's delivery obligations.
+pub(crate) fn project_author_guidance(project: &str) -> &'static str {
+    if project.eq_ignore_ascii_case("XNAUT") {
+        "Preserve the original xNAUT ticket's suite, totals bundle, design-document and authorized PM handoff requirements."
+    } else {
+        "Use this project's checked-in verification plan and the ticket's explicit acceptance and documentation requirements. Historical generated completion examples from other projects do not add requirements. For a repository-delivered remote run, publish the structured handback and evidence under the supplied run artifact directory; the desktop imports the ticket handoff. Do not invent a separate totals bundle, create a work-vault document, or call desktop ticket endpoints unless the actual ticket/project contract explicitly requires and authorizes it. Preserve prior handbacks and explain any corrected interpretation in the new handback; never erase historical claims."
+    }
+}
+
+fn delivery_contract(ticket: &crate::project_management::TicketRecord) -> String {
+    if !ticket.project.eq_ignore_ascii_case("XNAUT") {
+        return format!("- {}\n- Commit the authorized work and file its structured handback using the supplied delivery contract. Report unfinished requirements explicitly; do not claim independent verification, merge or release authority.\n", project_author_guidance(&ticket.project));
+    }
+    format!("- The ticket's design document in the work vault{doc_targets} carries a dated \
+           `## Shipped {id}` section: what was done, how, the files, the key code in snippets \
+           of at most 30 lines, the totals, and what is deliberately not done. Use \
+           `xnaut_read_document` then `xnaut_update_document` (project `{project}`). No linked \
+           document: create `Development/features/YYYY-MM-DD_{id}.md` with the frontmatter \
+           `Author` and `Last modified`, and add it to the ticket's documentation. Sign-off \
+           reads it.\n\
+         - Everything is committed, and you move {id} to `done` with the bundle path and a \
+           summary appended to its body. `done` hands it to NautBot, who tests it. \
+           `complete` is NautBot's word; never set it.\n",
+        id=ticket.id, project=ticket.project, doc_targets=doc_targets(&ticket.documentation))
 }
 
 fn dispatch_prompt(
@@ -213,6 +240,12 @@ fn dispatch_prompt(
     poc_minutes: u64,
 ) -> String {
     let (verification, bundle) = verification_contract(ticket);
+    let delivery = delivery_contract(ticket);
+    let blocked = if ticket.project.eq_ignore_ascii_case("XNAUT") {
+        "Blocked means one line on the ticket saying what, before you stop. Silence reads as abandoned."
+    } else {
+        "If blocked, name the missing prerequisite and unfinished work in the structured handback using this run's delivery contract. Publication of that report does not complete the implementation."
+    };
     // Two agents on tron (XNAUT-303 and 255) spent their run trying to ssh to
     // tron, and reported the rig unreachable. Tell them where they stand.
     let host = match crate::run_control::hostname() {
@@ -237,26 +270,14 @@ fn dispatch_prompt(
          - No TODOs. No partial implementations. Nothing left in the code for somebody else \
            to finish.\n\
          - {bundle}\n\
-         - The ticket's design document in the work vault{doc_targets} carries a dated \
-           `## Shipped {id}` section: what was done, how, the files, the key code in snippets \
-           of at most 30 lines, the totals, and what is deliberately not done. Use \
-           `xnaut_read_document` then `xnaut_update_document` (project `{project}`). No linked \
-           document: create `Development/features/YYYY-MM-DD_{id}.md` with the frontmatter \
-           `Author` and `Last modified`, and add it to the ticket's documentation. Sign-off \
-           reads it.\n\
-         - Everything is committed, and you move {id} to `done` with the bundle path and a \
-           summary appended to its body. `done` hands it to NautBot, who tests it. \
-           `complete` is NautBot's word; never set it.\n\n\
-         Blocked means one line on the ticket saying what, before you stop. Silence reads \
-         as abandoned.\n",
+         {delivery}\n\
+         {blocked}\n",
         id = ticket.id,
         priority = ticket.priority,
         kind = ticket.ticket_type,
         title = ticket.title,
         body = ticket.body,
-        project = ticket.project,
         docs = if docs.trim().is_empty() { "\nNone linked.\n" } else { docs },
-        doc_targets = doc_targets(&ticket.documentation),
         recall = recall_for(ticket),
         poc = crate::core_team::poc_brief_for(ticket, poc_minutes),
     )
@@ -610,11 +631,31 @@ mod tests {
         assert!(prompt.contains("`.xnaut/verify.json`"));
         assert!(prompt.contains("command, exit code, and log evidence"));
         assert!(prompt.contains("when absent, the native verifier supports Node auto-detection from `package.json`"));
-        assert!(prompt.contains(".xnaut/bundles/MUSIC-1.md"));
+        assert!(prompt.contains("supplied run artifact directory"));
+        assert!(prompt.contains("Publication of that report does not complete the implementation"));
+        assert!(prompt.contains("ticket's explicit acceptance and documentation requirements"));
+        assert!(!prompt.contains(".xnaut/bundles/MUSIC-1.md"));
+        assert!(!prompt.contains("## Shipped MUSIC-1"));
+        assert!(!prompt.contains("move MUSIC-1 to `done`"));
         for unrelated in ["cargo test", "playwright test", "XNAUT_TEST_TOTALS"] {
             assert!(!prompt.contains(unrelated), "foreign project inherited {unrelated}");
         }
         assert!(prompt.contains("Missing tools or configuration are explicit verification gaps"));
+    }
+
+    #[test]
+    fn foreign_author_contract_keeps_explicit_task_requirements_on_continuation() {
+        let mut foreign = ticket();
+        foreign.id = "PYTHON-1".into();
+        foreign.project = "PYTHON".into();
+        foreign.body = "Run python3 -m unittest -v. Update docs/import.md. Do not invent the missing external contract.".into();
+        let prompt = continuation_prompt(&foreign, "Keep the approved external contract.", "agent/python/import", true, 90);
+        assert!(prompt.contains(&foreign.body));
+        assert!(prompt.contains("Keep the approved external contract."));
+        assert!(prompt.contains("CONTINUING PYTHON-1"));
+        assert!(prompt.contains("Preserve prior handbacks"));
+        assert!(!prompt.contains("## Shipped PYTHON-1"));
+        assert!(!prompt.contains("XNAUT_TEST_TOTALS"));
     }
 
     #[test]
