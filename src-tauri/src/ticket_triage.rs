@@ -146,9 +146,19 @@ pub struct TriageEvent {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvidenceFile {
+    pub path: String,
+    pub digest: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriageRecord {
     pub fingerprint: String,
+    #[serde(default)]
+    pub source_fingerprint: String,
+    #[serde(default)]
+    pub evidence_files: Vec<EvidenceFile>,
     #[serde(default)]
     pub source_id: String,
     #[serde(default)]
@@ -276,6 +286,92 @@ fn remember_event(record: &mut TriageRecord) {
     });
 }
 
+fn file_stamp(path: &Path) -> Result<EvidenceFile, String> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("Triage evidence unavailable: {e}"))?;
+    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    if size > 2 * 1024 * 1024 {
+        return Err("Triage evidence file exceeds the 2 MiB read budget".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err("Triage evidence file changed beyond the read budget".into());
+    }
+    Ok(EvidenceFile {
+        path: path.to_string_lossy().into(),
+        digest: format!("{:x}", Sha256::digest(bytes)),
+    })
+}
+fn observe_files(files: &[EvidenceFile]) -> Result<Vec<EvidenceFile>, String> {
+    files
+        .iter()
+        .map(|f| file_stamp(Path::new(&f.path)))
+        .collect()
+}
+fn capture_evidence_files(
+    evidence: &[TriageEvidence],
+    context: &TriageContext,
+    repo: Option<&str>,
+    vault: Option<&str>,
+) -> Result<Vec<EvidenceFile>, String> {
+    let mut files = Vec::new();
+    for evidence in evidence {
+        let location = match evidence.source.as_str() {
+            "repository" => context
+                .repository_matches
+                .iter()
+                .find(|m| evidence.reference == format!("{}:{}", m.path, m.line))
+                .map(|m| (repo, m.path.as_str())),
+            "vault" => context
+                .vault_matches
+                .iter()
+                .find(|m| m.path == evidence.reference)
+                .map(|m| (vault, m.path.as_str())),
+            _ => None,
+        };
+        if let Some((base, path)) = location {
+            let base = Path::new(base.ok_or("Evidence root unavailable")?)
+                .canonicalize()
+                .map_err(|e| e.to_string())?;
+            let path = if Path::new(path).is_absolute() {
+                PathBuf::from(path)
+            } else {
+                base.join(path)
+            };
+            let path = path.canonicalize().map_err(|e| e.to_string())?;
+            if !path.starts_with(&base) {
+                return Err("Evidence file escapes this project's authorized root".into());
+            }
+            let file = file_stamp(&path)?;
+            if !files.iter().any(|f: &EvidenceFile| f.path == file.path) {
+                files.push(file);
+            }
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+/// A changed proof starts a fresh source generation and preserves the previous
+/// decision. Unchanged proof reuses it without asking the owner again.
+fn generation_for(base: &str, records: &[TriageRecord]) -> Result<String, String> {
+    let previous = records
+        .iter()
+        .filter(|r| r.source_fingerprint == base || r.fingerprint == base)
+        .max_by(|a, b| a.created_at.cmp(&b.created_at));
+    let Some(record) = previous else {
+        return Ok(base.into());
+    };
+    let current = observe_files(&record.evidence_files)?;
+    if current == record.evidence_files {
+        return Ok(record.fingerprint.clone());
+    }
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&(base, current)).map_err(|e| e.to_string())?)
+    ))
+}
+
 fn scope_hash(ticket: &crate::project_management::TicketRecord) -> String {
     format!(
         "{:x}",
@@ -330,6 +426,9 @@ fn admission_from_records(
         return Err(
             "Finding scope changed after triage; inspect the new evidence before dispatch".into(),
         );
+    }
+    if observe_files(&record.evidence_files)? != record.evidence_files {
+        return Err("Triage evidence changed; rerun triage before automatic dispatch".into());
     }
     if record.status != "approved"
         || !record
@@ -1222,7 +1321,7 @@ pub async fn ticket_triage_run(
         host.kind, host.owner, request.repo, issue.number
     );
     let binding = binding_for(project.as_deref(), &source_id)?;
-    let fingerprint = format!(
+    let source_fingerprint = format!(
         "{:x}",
         Sha256::digest(
             format!(
@@ -1243,6 +1342,7 @@ pub async fn ticket_triage_run(
         request.repo_path.as_deref(),
         request.vault_path.as_deref(),
     )?;
+    let fingerprint = generation_for(&source_fingerprint, &ticket_triage_records()?)?;
     let _lock = record_lock(&fingerprint)?;
     let mut previous = read_record(&fingerprint)?;
     if let Some(record) = previous.as_mut() {
@@ -1299,6 +1399,11 @@ pub async fn ticket_triage_run(
     let now = chrono::Utc::now().to_rfc3339();
     let mut record = TriageRecord {
         fingerprint,
+        source_fingerprint,
+        evidence_files: previous
+            .as_ref()
+            .map(|r| r.evidence_files.clone())
+            .unwrap_or_default(),
         source_id,
         binding,
         analysis: None,
@@ -1379,6 +1484,28 @@ pub async fn ticket_triage_run(
         },
     )?;
 
+    // Freeze the local context before the model call. A file edited while the
+    // model runs must not acquire a fresh stamp for an old conclusion.
+    let context_evidence: Vec<TriageEvidence> = context
+        .repository_matches
+        .iter()
+        .map(|m| TriageEvidence {
+            source: "repository".into(),
+            reference: format!("{}:{}", m.path, m.line),
+            summary: String::new(),
+        })
+        .chain(context.vault_matches.iter().map(|m| TriageEvidence {
+            source: "vault".into(),
+            reference: m.path.clone(),
+            summary: String::new(),
+        }))
+        .collect();
+    let context_files = capture_evidence_files(
+        &context_evidence,
+        &context,
+        repo_path.as_deref(),
+        vault_path.as_deref(),
+    )?;
     run = loops::loops_run_claim_node(app.clone(), run.id.clone(), "analyze".into())?;
     let (content, input_tokens, output_tokens) =
         if let Some(analysis) = previous.as_ref().and_then(|r| r.analysis.as_ref()) {
@@ -1464,6 +1591,22 @@ pub async fn ticket_triage_run(
         },
     )?;
 
+    record.evidence_files = capture_evidence_files(
+        &analysis.evidence,
+        &context,
+        repo_path.as_deref(),
+        vault_path.as_deref(),
+    )?;
+    if record
+        .evidence_files
+        .iter()
+        .any(|file| !context_files.contains(file))
+    {
+        record.status = "failed".into();
+        record.updated_at = chrono::Utc::now().to_rfc3339();
+        write_record(&mut record)?;
+        return Err("Triage evidence changed during analysis; retry with current context".into());
+    }
     record.analysis = Some(analysis.clone());
     record.classification = analysis.classification.clone();
     record.confidence = analysis.confidence;
@@ -1808,6 +1951,75 @@ mod tests {
         admission_from_records(&ordinary, &[]).unwrap();
     }
     #[test]
+    fn evidence_changes_require_new_generation_and_preserve_old_decision() {
+        let root = std::env::temp_dir().join(format!("triage-proof-464-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("proof.rs");
+        std::fs::write(&path, "original evidence").unwrap();
+        let mut record = record_fixture();
+        record.source_fingerprint = "source".into();
+        record.evidence_files = vec![file_stamp(&path).unwrap()];
+        record.status = "approved".into();
+        record.analysis = Some(analysis_fixture());
+        record.decision = Some(TriageDecision {
+            actor: "owner".into(),
+            approved: true,
+            at: record.updated_at.clone(),
+            comment: "Approved original evidence".into(),
+        });
+        admission_from_records(&ticket_fixture(), &[record.clone()]).unwrap();
+        assert_eq!(
+            generation_for("source", &[record.clone()]).unwrap(),
+            record.fingerprint
+        );
+        std::fs::write(&path, "changed evidence").unwrap();
+        assert!(admission_from_records(&ticket_fixture(), &[record.clone()])
+            .unwrap_err()
+            .contains("changed"));
+        let generation = generation_for("source", &[record.clone()]).unwrap();
+        assert_ne!(generation, record.fingerprint);
+        assert!(record.decision.as_ref().unwrap().approved);
+        let mut fresh = record.clone();
+        fresh.fingerprint = generation.clone();
+        fresh.created_at = "2026-10-06T12:00:00Z".into();
+        fresh.evidence_files = vec![file_stamp(&path).unwrap()];
+        fresh.decision = None;
+        let reopened: TriageRecord =
+            serde_json::from_str(&serde_json::to_string(&fresh).unwrap()).unwrap();
+        assert_eq!(
+            generation_for("source", &[record.clone(), reopened]).unwrap(),
+            generation
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert!(generation_for("source", &[record])
+            .unwrap_err()
+            .contains("unavailable"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cited_repository_file_cannot_escape_registered_root() {
+        let root = std::env::temp_dir().join(format!("triage-scope-464-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let foreign = root.join("foreign.rs");
+        std::fs::write(&foreign, "foreign evidence").unwrap();
+        let mut context = context_fixture();
+        context.repository_matches.push(SearchMatch {
+            path: "../foreign.rs".into(),
+            line: 1,
+            text: "foreign evidence".into(),
+        });
+        let mut analysis = analysis_fixture();
+        analysis.evidence[0].source = "repository".into();
+        analysis.evidence[0].reference = "../foreign.rs:1".into();
+        assert!(
+            capture_evidence_files(&analysis.evidence, &context, repo.to_str(), None)
+                .unwrap_err()
+                .contains("escapes")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn latest_unknown_disposition_cannot_reuse_an_older_approval() {
         let ticket = ticket_fixture();
         let mut old = record_fixture();
@@ -1961,6 +2173,8 @@ mod tests {
     fn forge_comment_sanitizes_agent_markdown_and_mentions() {
         let record = TriageRecord {
             fingerprint: "abc".into(),
+            source_fingerprint: String::new(),
+            evidence_files: vec![],
             source_id: String::new(),
             binding: None,
             analysis: None,
