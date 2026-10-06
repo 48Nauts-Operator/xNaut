@@ -280,6 +280,30 @@ fn documents(p: &Project) -> Vec<Value> {
     docs.sort_by(|a, b| b["path"].as_str().cmp(&a["path"].as_str()));
     docs
 }
+/// A small owner-facing view of existing durable groups. Approval scope and
+/// ticket bodies remain in the native coordination store, not the Journal UI.
+fn group_views(registry: &Path, project: &str) -> Result<Value, String> {
+    use crate::swarm_plan::MemberState;
+    let groups = crate::swarm_plan::groups_in(registry, Some(project))?;
+    let scoped = |ticket: &str| {
+        ticket
+            .strip_prefix(&format!("{project}-"))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    };
+    if groups.iter().any(|g| {
+        g.members.iter().any(|m| !scoped(&m.ticket))
+            || g.plan.runs.iter().any(|r| !scoped(&r.ticket))
+    }) {
+        return Err("A saved group includes tickets outside this project; inspect its scope before stopping it.".into());
+    }
+    Ok(Value::Array(groups.into_iter().filter(|g| g.approved_at.is_some()).map(|g| {
+        let count=|state: fn(&MemberState)->bool| g.members.iter().filter(|m|state(&m.state)).count();
+        json!({"id":g.plan.id,"project":g.plan.project,"approved_at":g.approved_at,"stopped_at":g.stopped_at,
+            "counts":{"queued":count(|s|matches!(s,MemberState::Queued)),"running":count(|s|matches!(s,MemberState::Starting|MemberState::Tracking)),
+                "blocked":count(|s|matches!(s,MemberState::Blocked)),"verified":count(|s|matches!(s,MemberState::Verified))},
+            "members":g.members.iter().map(|m|json!({"ticket":m.ticket,"state":m.state,"run_id":m.run_id,"reason":redact(&m.reason)})).collect::<Vec<_>>()})
+    }).collect()))
+}
 pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> {
     let p = project(key)?;
     let docs = documents(&p);
@@ -299,8 +323,17 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
             let mut value = serde_json::to_value(&e).unwrap();
             if !e.run_id.is_empty() {
                 value["preview"] = json!(if e.id.starts_with("activity:") {
-                    format!("### {}\n\n{}", e.title, e.content.split("\n\n[Source evidence]").next().unwrap_or(&e.content))
-                } else { run_preview(&e) });
+                    format!(
+                        "### {}\n\n{}",
+                        e.title,
+                        e.content
+                            .split("\n\n[Source evidence]")
+                            .next()
+                            .unwrap_or(&e.content)
+                    )
+                } else {
+                    run_preview(&e)
+                });
             }
             value
         })
@@ -343,8 +376,16 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
         ),
         Err(error) => (Value::Null, Some(error)),
     };
+    let (groups, groups_error) =
+        match crate::agents::registry_dir().and_then(|dir| group_views(&dir, &p.key)) {
+            Ok(groups) => (groups, None::<String>),
+            Err(_) => (
+                json!([]),
+                Some("Approved groups are unavailable; refresh to retry.".into()),
+            ),
+        };
     Ok(
-        json!({"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"continuity":continuity,"continuity_error":continuity_error,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
+        json!({"groups":groups,"groups_error":groups_error,"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"continuity":continuity,"continuity_error":continuity_error,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
     )
 }
 #[tauri::command]
@@ -559,6 +600,64 @@ mod tests {
             source_at: String::new(),
             content: "Keep existing archives.\n\n```js\nconst keep = true;\n```".into(),
         }
+    }
+    #[test]
+    fn group_summary_is_scoped_compact_and_reloads_saved_stop_state() {
+        let registry =
+            std::env::temp_dir().join(format!("journal-groups-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(registry.join("swarm-plans")).unwrap();
+        let group = |project: &str, approved: bool| {
+            json!({
+            "plan":{"id":project,"project":project,"runs":[{"ticket":format!("{project}-1"),"title":"Scoped task","owner":"builder","model":"fixture","branch":"fix/task","scope":"private full ticket scope"}],"skipped":[],"max_parallel":2,"created_at":1},
+            "approved_at":if approved {Some(1)}else{None},"stopped_at":null,"events":[],
+            "members":[{"ticket":format!("{project}-1"),"state":"queued","reason":"Waiting","run_id":null,"started":null},
+                {"ticket":format!("{project}-2"),"state":"tracking","reason":"Working","run_id":"run-two","started":null},
+                {"ticket":format!("{project}-3"),"state":"blocked","reason":"Inspect evidence","run_id":"run-three","started":null}]})
+        };
+        for (project, approved) in [("ONE", true), ("TWO", true), ("UNAPPROVED", false)] {
+            let native: crate::swarm_plan::Group =
+                serde_json::from_value(group(project, approved)).unwrap();
+            std::fs::write(
+                registry.join(format!("swarm-plans/{project}.json")),
+                serde_json::to_vec(&native).unwrap(),
+            )
+            .unwrap();
+        }
+        let current = group_views(&registry, "ONE").unwrap();
+        assert_eq!(current.as_array().unwrap().len(), 1);
+        assert_eq!(
+            current[0]["counts"],
+            json!({"queued":1,"running":1,"blocked":1,"verified":0})
+        );
+        assert!(!current.to_string().contains("private full ticket scope"));
+        assert!(!current.to_string().contains("TWO"));
+        assert!(group_views(&registry, "UNAPPROVED")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let mut stopped = group("ONE", true);
+        stopped["stopped_at"] = json!(2);
+        std::fs::write(
+            registry.join("swarm-plans/ONE.json"),
+            serde_json::to_vec(&stopped).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(group_views(&registry, "ONE").unwrap()[0]["stopped_at"], 2);
+        assert_eq!(
+            group_views(&registry, "TWO").unwrap()[0]["stopped_at"],
+            Value::Null
+        );
+        stopped["members"][0]["ticket"] = json!("TWO-1");
+        std::fs::write(
+            registry.join("swarm-plans/ONE.json"),
+            serde_json::to_vec(&stopped).unwrap(),
+        )
+        .unwrap();
+        assert!(group_views(&registry, "ONE")
+            .unwrap_err()
+            .contains("outside this project"));
+        std::fs::remove_dir_all(registry).unwrap();
     }
     #[test]
     fn durable_idempotent_and_attributed() {

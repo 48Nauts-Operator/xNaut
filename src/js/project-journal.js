@@ -3,6 +3,7 @@
   'use strict';
   const instances = new WeakMap();
   const drafts = new Map();
+  const groupActions = new Map();
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
   const date = s => { const d = new Date(s); return Number.isNaN(d.getTime()) ? 'Time not recorded' : d.toLocaleString([], {dateStyle:'medium',timeStyle:'short'}); };
@@ -74,8 +75,8 @@
   }
   function mount(host, root, openWiki) {
     instances.get(host)?.dispose();
-    let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, timer;
-    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header><div class="pj-scroll"><article class="pj-document"><section class="pj-opening"><div class="pj-eyebrow">START HERE</div><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-continuity></div><h3>Saved context</h3><p class="pj-muted" data-history-date>Earlier reports retain their original dates and are not fresh verification.</p><div data-opening></div></section><section data-current></section><details class="pj-notes"><summary>Add your note or question</summary><form data-form><input data-ticket aria-label="Existing project ticket" placeholder="Ticket, e.g. XNAUT-455" required><select data-kind aria-label="Note type"><option value="note">Note</option><option value="question">Question</option><option value="decision">Decision</option></select><textarea data-note aria-label="Journal note" placeholder="Add context for the next person, a decision, or a question…" required></textarea><button type="submit">Save to Journal</button><small>Your name and time are recorded. Questions are saved here; use chat to ask an agent to answer.</small></form></details><section><div class="pj-eyebrow">AS THE WORK DEVELOPS</div><h2>Working notes</h2><p data-empty class="pj-muted"></p><div data-entries></div></section></article></div></section>`;
+    let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, groupsFingerprint='', timer;
+    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header><div class="pj-scroll"><article class="pj-document"><section class="pj-opening"><div class="pj-eyebrow">START HERE</div><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-continuity></div><section data-groups></section><h3>Saved context</h3><p class="pj-muted" data-history-date>Earlier reports retain their original dates and are not fresh verification.</p><div data-opening></div></section><section data-current></section><details class="pj-notes"><summary>Add your note or question</summary><form data-form><input data-ticket aria-label="Existing project ticket" placeholder="Ticket, e.g. XNAUT-455" required><select data-kind aria-label="Note type"><option value="note">Note</option><option value="question">Question</option><option value="decision">Decision</option></select><textarea data-note aria-label="Journal note" placeholder="Add context for the next person, a decision, or a question…" required></textarea><button type="submit">Save to Journal</button><small>Your name and time are recorded. Questions are saved here; use chat to ask an agent to answer.</small></form></details><section><div class="pj-eyebrow">AS THE WORK DEVELOPS</div><h2>Working notes</h2><p data-empty class="pj-muted"></p><div data-entries></div></section></article></div></section>`;
     const $ = q => host.querySelector(q);
     const status = s => { $('[data-status]').textContent=s; };
     const remember = () => drafts.set(root,{text:$('[data-note]').value,ticket:$('[data-ticket]').value,kind:$('[data-kind]').value});
@@ -94,18 +95,44 @@
         host.append(dialog);dialog.querySelector('button').onclick=()=>dialog.remove();dialog.showModal();
       } catch(e){status(String(e));}
     }
+    function paintGroups() {
+      const groups=(data.groups || []).filter(g=>g.project===data.project.key && g.approved_at!=null && (!filter || g.members?.some(m=>m.ticket===filter)));
+      const key=g=>data.project.key+':'+g.id;
+      const next=JSON.stringify([groups,data.groups_error,groups.map(g=>groupActions.get(key(g)))]);
+      if(next===groupsFingerprint)return;groupsFingerprint=next;
+      $('[data-groups]').innerHTML=(data.groups_error?`<p class="pj-continuity-warning">${esc(data.groups_error)}</p>`:'')+(groups.length?`<h3>Approved groups</h3><p class="pj-muted">Stopping further dispatch prevents this group from starting more work. Active workers retain their current work.</p>${groups.map(g=>{
+        const action=groupActions.get(key(g)) || {}, ended=g.stopped_at ?? action.stoppedAt;
+        const counts=g.counts || {};
+        return `<section class="pj-work" data-group="${esc(g.id)}"><strong>${ended!=null?'Further dispatch stopped':'Approved group'}</strong><p>${esc(counts.queued || 0)} queued · ${esc(counts.running || 0)} running · ${esc(counts.blocked || 0)} blocked${counts.verified?' · '+esc(counts.verified)+' verified':''}</p><small>${ended!=null?'Stopped '+esc(date(ended)):'Approved '+esc(date(g.approved_at))}</small><details><summary>Group members · ${g.members?.length || 0}</summary><ul>${(g.members || []).map(m=>`<li><strong>${esc(m.ticket)}</strong> · ${esc(String(m.state || '').replace(/_/g,' '))}${m.reason?' — '+esc(m.reason):''}</li>`).join('')}</ul></details>${ended==null?`<button data-stop-group="${esc(g.id)}" ${action.pending?'disabled':''}>${action.pending?'Stopping…':'Stop further dispatch'}</button>`:''}${action.error?`<p role="status" class="pj-continuity-warning">${esc(action.error)}</p>`:''}</section>`;
+      }).join('')}`:'');
+      $('[data-groups]').querySelectorAll('[data-stop-group]').forEach(button=>{button.onclick=()=>stopGroup(button.dataset.stopGroup);});
+    }
+    async function stopGroup(id) {
+      const group=(data?.groups || []).find(g=>g.id===id && g.project===data.project.key && g.approved_at!=null);
+      if(!group || group.stopped_at!=null)return;
+      const project=data.project.key, key=project+':'+id, previous=groupActions.get(key);
+      if(previous?.pending || previous?.stoppedAt!=null)return;
+      const action={pending:true};groupActions.set(key,action);paintGroups();
+      try {
+        const result=await invoke('swarm_plan_stop',{planId:id});
+        if(result?.plan?.id!==id || result?.plan?.project!==project || result?.stopped_at==null)throw Error('Stop receipt did not match this project group. Refresh to inspect its state.');
+        action.stoppedAt=result.stopped_at;
+      } catch(error) {action.error='Could not stop further dispatch: '+String(error);}
+      finally {action.pending=false;if(!stopped){paintGroups();if(action.stoppedAt!=null)void refresh();}}
+    }
     function paint() {
       $('[data-title]').textContent = `${data.project.name} · Live Journal`;
       $('[data-purpose]').textContent = data.project.purpose || 'The working document, from first question to handoff.';
       const dates=$('[data-date]');const previous=dates.value;
       dates.innerHTML='<option value="">Today</option>'+data.documents.map(d=>`<option value="${esc(d.path)}">${esc(d.path.split('/').pop().replace('.md',''))}</option>`).join('');dates.value=selected || previous;
       const snapshot=data.continuity?.project===data.project.key ? data.continuity : null;
-      const tickets=[...new Set([...data.entries.map(e=>e.ticket),...data.runs.map(r=>r.ticket),...(snapshot?.tickets || []).map(t=>t.id),...(snapshot?.assignments || []).map(a=>a.ticket)].filter(Boolean))];
+      const tickets=[...new Set([...data.entries.map(e=>e.ticket),...data.runs.map(r=>r.ticket),...(snapshot?.tickets || []).map(t=>t.id),...(snapshot?.assignments || []).map(a=>a.ticket),...(data.groups || []).filter(g=>g.project===data.project.key).flatMap(g=>(g.members || []).map(m=>m.ticket))].filter(Boolean))];
       $('[data-filter]').innerHTML='<option value="">All workstreams</option>'+tickets.map(t=>`<option>${esc(t)}</option>`).join('');$('[data-filter]').value=filter;
       $('[data-continuity-time]').textContent=snapshot ? 'Current project records · checked '+date(snapshot.observed_at)+(selected?' · independent of the selected Journal date':'') : 'Current project state is unavailable.';
       $('[data-history-date]').textContent='Journal date: '+data.path.split('/').pop().replace('.md','')+'. Earlier reports retain their original dates and are not fresh verification.';
       // Read timestamps change each poll; only changed records should replace the DOM.
       const next=JSON.stringify([data.path,data.opening,data.entries,data.runs,snapshot&&{...snapshot,observed_at:0},data.continuity_error,filter]);
+      paintGroups();
       if(next===fingerprint)return;fingerprint=next;
       const expanded=new Set([...$('[data-continuity]').querySelectorAll('details[open]')].map(d=>d.dataset.continuityDetail));
       $('[data-continuity]').innerHTML=snapshot ? continuityMarkup(snapshot,filter) : `<p class="pj-continuity-warning">${esc(data.continuity_error || 'Could not reconcile current project records. Refresh to retry.')} Saved context remains available below.</p>`;

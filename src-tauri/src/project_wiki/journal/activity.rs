@@ -96,6 +96,33 @@ fn phase_kind(state: &str) -> &'static str {
         "execution"
     }
 }
+/// Operator attribution remains the saved coordinator. The linked worker is a
+/// separate role: repair states refer to the author successor; review states to
+/// the reviewer. A blocked repair retains its preceding phase's identity.
+fn phase_run<'a>(v: &'a Value, original: &'a str, previous_state: &str) -> (&'a str, &'static str) {
+    let state = v["state"].as_str().or(v["kind"].as_str()).unwrap_or("");
+    let review = string(v, "review_child");
+    let author = string(v, "author_child");
+    let author_phase = state.starts_with("repair")
+        || (state == "pending" && review.is_empty() && !author.is_empty())
+        || (state == "blocked" && previous_state.starts_with("repair"));
+    let (worker, role) = if author_phase && !author.is_empty() {
+        (author, "Author repair")
+    } else if !review.is_empty() {
+        (review, "Independent review")
+    } else if !author.is_empty() {
+        (author, "Author repair")
+    } else {
+        (original, "Original assignment")
+    };
+    (
+        v["run_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(worker),
+        role,
+    )
+}
 fn history(
     project: &str,
     ticket: &str,
@@ -103,6 +130,7 @@ fn history(
     source: &str,
     values: &Value,
 ) -> Vec<Result<Activity, String>> {
+    let mut previous_state = String::new();
     values
         .as_array()
         .into_iter()
@@ -112,15 +140,14 @@ fn history(
                 .as_str()
                 .filter(|s| !s.is_empty())
                 .unwrap_or(ticket);
-            let run = v["run_id"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(run);
+            let original_run = run;
             if v["project"].as_str().is_some_and(|p| p != project) {
                 return Err("Activity history conflicts with its project scope".into());
             }
             let state = v["state"].as_str().or(v["kind"].as_str()).unwrap_or("");
-            let detail = format!(
+            let (run, role) = phase_run(v, original_run, &previous_state);
+            previous_state = state.into();
+            let mut detail = format!(
                 "**Recorded transition:** {}\n\n{}\n\n{}",
                 state.replace('_', " "),
                 v["reason"].as_str().or(v["detail"].as_str()).unwrap_or(""),
@@ -130,6 +157,18 @@ fn history(
                     format!("Revision: `{}`", string(v, "head"))
                 }
             );
+            if source == "review" {
+                detail.push_str(&format!("\n\n**Linked role:** {role}\n\n"));
+                for (label, key) in [
+                    ("Independent review run", "review_child"),
+                    ("Author repair run", "author_child"),
+                    ("Predecessor run", "predecessor_run_id"),
+                ] {
+                    if !string(v, key).is_empty() {
+                        detail.push_str(&format!("{label}: `{}`\n\n", string(v, key)));
+                    }
+                }
+            }
             event(
                 project,
                 ticket,
@@ -669,6 +708,48 @@ mod tests {
             assert!(!evidence.contains("also-private"));
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn phase_links_follow_review_and_author_successors_without_changing_operator() {
+        let values = json!([
+            {"id":"finding","at_ms":1791288000000i64,"state":"changes_requested","actor":"xNAUT coordinator","review_child":"review-one","predecessor_run_id":"author-original"},
+            {"id":"repair","at_ms":1791288001000i64,"state":"repair_running","actor":"xNAUT coordinator","review_child":"review-one","author_child":"repair-one","predecessor_run_id":"author-original"},
+            {"id":"blocked","at_ms":1791288002000i64,"state":"blocked","actor":"xNAUT coordinator","review_child":"review-one","author_child":"repair-one","predecessor_run_id":"author-original"},
+            {"id":"published","at_ms":1791288003000i64,"state":"pending","actor":"xNAUT coordinator","author_child":"repair-one","predecessor_run_id":"repair-one"},
+            {"id":"review","at_ms":1791288004000i64,"state":"running","actor":"xNAUT coordinator","review_child":"review-two","author_child":"repair-one","predecessor_run_id":"repair-one"},
+            {"id":"ready","at_ms":1791288005000i64,"state":"ready","actor":"xNAUT coordinator","review_child":"review-two","author_child":"repair-one","predecessor_run_id":"repair-one"}
+        ]);
+        let rows = history("ONE", "ONE-1", "author-original", "review", &values)
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.entry.run_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "review-one",
+                "repair-one",
+                "repair-one",
+                "repair-one",
+                "review-two",
+                "review-two"
+            ]
+        );
+        assert!(rows.iter().all(|r| r.entry.actor == "xNAUT coordinator"));
+        assert!(rows[1]
+            .entry
+            .content
+            .contains("Linked role:** Author repair"));
+        assert!(rows[1]
+            .entry
+            .content
+            .contains("Predecessor run: `author-original`"));
+        assert!(rows[4]
+            .entry
+            .content
+            .contains("Linked role:** Independent review"));
+        assert_eq!(rows[4].evidence["author_child"], "repair-one");
     }
     #[test]
     fn unknown_timestamps_and_cross_project_tickets_are_not_guessed() {
