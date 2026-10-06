@@ -632,12 +632,18 @@ pub(crate) fn worker_admission_for_ticket_in(
                 .min(profile_cap.clamp(1, HARD_CAP));
         }
     }
-    let pending = run
-        .ticket
-        .as_deref()
-        .map(|ticket| crate::run_control::continuation_in(registry, ticket))
-        .transpose()?
-        .flatten();
+    // During repair reservation, the proven-stopped predecessor may itself
+    // be a failed continuation. Its ordinary launch guard intentionally refuses
+    // reuse; this callback is reserving a NEW successor under positive proof.
+    let pending = if replacing.is_some() {
+        None
+    } else {
+        run.ticket
+            .as_deref()
+            .map(|ticket| crate::run_control::continuation_in(registry, ticket))
+            .transpose()?
+            .flatten()
+    };
     let own = pending
         .as_ref()
         .filter(|p| {
