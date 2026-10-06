@@ -838,7 +838,10 @@ fn publication_pending(t: &Transfer) -> bool {
 async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Result<(), String> {
     if t.state == "review" && t.review_parent.is_some() {
         let run = crate::run_control::load_manifest_in(&crate::agents::registry_dir()?, &t.run_id)?;
-        if run.state.terminal() { return Ok(()); }
+        // Historical liveness failures may predate collection of an accepted
+        // reviewer handback. Recheck its immutable publication; run_control
+        // permits only an exact journal-proven liveness failure to complete.
+        if matches!(run.state, crate::run_control::RunState::Done | crate::run_control::RunState::Retired) { return Ok(()); }
     }
     if !t.workdir.is_empty() && t.state == "running" {
         let snapshot = t.clone();
@@ -1405,6 +1408,71 @@ mod tests {
         assert!(!accept_reviewer_handback_in(&registry,&child,&parent,&result,Some(&handback)).unwrap());
         assert_eq!(run_control::load_manifest_in(&registry,&child.run_id).unwrap().revision,completed.revision);
         std::fs::remove_dir_all(registry).unwrap();
+
+        // Replay historical liveness failures only after the exact collected
+        // publication and parent-bound handback establish task completion.
+        for case in ["stall", "missing", "exit", "exit_receipt", "unknown", "wrong_head", "changed_identity", "successor",
+            "admission", "retired", "uncollected", "no_journal", "wrong_handback", "wrong_parent", "dirty", "before_publication"] {
+            let registry = std::env::temp_dir().join(format!("xnaut-review-recovery-{}",uuid::Uuid::new_v4()));
+            let mut native = completed.clone(); native.state = RunState::Requested; native.last_commit = child.source_sha.clone();
+            native.revision = 0;
+            run_control::request_in(&registry, native, || Ok(())).unwrap();
+            run_control::update_in(&registry,&child.run_id,|run| {
+                run.state = RunState::Running;
+                run.last_commit = if case == "before_publication" { child.source_sha.clone() } else { result.published_head.clone() };
+            }).unwrap();
+            run_control::update_in(&registry,&child.run_id,|run| {
+                run.state = if case == "retired" { RunState::Retired } else { RunState::Failed };
+                run.last_signal = match case {
+                    "missing" => "pid does not answer; zellij session absent; capture has not grown; no recent hook",
+                    "exit" => "process exited with status 137",
+                    "unknown" => "cancelled by owner",
+                    _ => "stalled: alive but capture, hooks and commits show no progress beyond the window; waiting_on empty",
+                }.into();
+                if case == "wrong_head" { run.last_commit = "d".repeat(40); }
+                if case == "changed_identity" { run.project = "OTHER".into(); }
+                if case == "successor" { run.next_run_id = Some("next-review".into()); }
+                if case == "admission" { run.admission_refused = true; }
+            }).unwrap();
+            if case == "changed_identity" {
+                run_control::update_in(&registry,&child.run_id,|run| run.project = child.project.clone()).unwrap();
+            }
+            // A later fetch cannot retroactively bind a different failure head.
+            if ["wrong_head", "before_publication"].contains(&case) { record_publication_in(&registry,&child,&result).unwrap(); }
+            let journal = registry.join(format!("{}.events.jsonl",child.run_id));
+            if case == "exit_receipt" { std::fs::write(registry.join(format!("{}.exit",child.run_id)),"137").unwrap(); }
+            if case == "no_journal" { std::fs::remove_file(&journal).unwrap(); }
+            let original = std::fs::read(&journal).unwrap_or_default();
+            let before = run_control::load_manifest_in(&registry,&child.run_id).unwrap();
+            let mut receipt = child.clone();
+            if case == "uncollected" { receipt.state = "running".into(); }
+            let mut bound = parent.clone();
+            if case == "wrong_parent" { bound.quality.as_mut().unwrap().child = Some("new-review".into()); }
+            let mut evidence = handback.clone();
+            if case == "wrong_handback" { evidence.run_id = Some("foreign-review".into()); }
+            let mut publication = result.clone();
+            if case == "dirty" { publication.uncommitted_source = true; }
+            assert!(accept_reviewer_handback_in(&registry,&receipt,&bound,&publication,None).is_err());
+            let recovered = accept_reviewer_handback_in(&registry,&receipt,&bound,&publication,Some(&evidence));
+            let after = run_control::load_manifest_in(&registry,&child.run_id).unwrap();
+            let sessions = vec![("interactive-reviewer".into(),"reviewer".into(),Some("exe-dev".into()))];
+            if ["stall", "missing"].contains(&case) {
+                assert!(recovered.unwrap(),"{case}");
+                assert_eq!(after.state,RunState::Done,"{case}");
+                assert_eq!(after.pid,Some(123),"completion is not a process-exit assertion");
+                assert!(after.last_signal.contains("historical liveness failure"));
+                assert!(std::fs::read(&journal).unwrap().starts_with(&original),"failure history must survive");
+                assert_eq!(run_control::live_viewport_count_in(&registry,&sessions).unwrap(),0);
+                assert!(!accept_reviewer_handback_in(&registry,&receipt,&bound,&publication,Some(&evidence)).unwrap());
+                assert_eq!(run_control::load_manifest_in(&registry,&child.run_id).unwrap().revision,after.revision);
+            } else {
+                assert!(!recovered.unwrap_or(false),"{case}");
+                assert_eq!(after,before,"{case}: ambiguous failure stays unchanged");
+                assert_eq!(std::fs::read(&journal).unwrap_or_default(),original,"{case}");
+            }
+            assert_eq!(serde_json::to_value(&parent).unwrap(),parent_before);
+            std::fs::remove_dir_all(registry).unwrap();
+        }
     }
 
     #[test]

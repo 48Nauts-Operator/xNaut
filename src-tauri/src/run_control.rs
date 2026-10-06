@@ -1296,6 +1296,54 @@ pub fn record_handback_in<T>(
     Ok(stored)
 }
 
+/// Return the original failure event only for a continuous, identity-bound
+/// liveness-only failure after this exact publication was already observed.
+/// The journal remains intact; a recovered task result never asserts PID exit.
+fn reviewer_liveness_failure_in(dir: &Path, run: &RunManifest, head: &str) -> Result<Option<String>, String> {
+    if run.state != RunState::Failed || run.last_commit != head || run.admission_refused
+        || run.prelaunch_failure.is_some() || run.previous_run_id.is_some() || run.next_run_id.is_some()
+        || run.retirement.is_some() || run.ticket_returned
+    { return Ok(None); }
+    match std::fs::read_to_string(dir.join(format!("{}.exit", run.run_id))) {
+        Ok(code) if code.trim() == "0" => {},
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+        Err(e) => return Err(e.to_string()),
+    }
+    let (_, valid_end) = replay_events_in(dir, &run.run_id)?;
+    if valid_end == 0 { return Ok(None); }
+    let body = std::fs::read(journal_path(dir, &run.run_id)).map_err(|e| e.to_string())?;
+    let mut previous: Option<RunManifest> = None;
+    let mut failure = None;
+    for line in body[..valid_end].split(|b| *b == b'\n').filter(|s| !s.iter().all(u8::is_ascii_whitespace)) {
+        let event: RunEvent = serde_json::from_slice(line).map_err(|e| e.to_string())?;
+        let observed = &event.run;
+        if observed.project != run.project || observed.agent_handle != run.agent_handle
+            || observed.kind != run.kind || observed.ticket != run.ticket || observed.user_conversation
+            || observed.worktree_path != run.worktree_path || observed.branch != run.branch
+            || observed.remote_env != run.remote_env || observed.admission_refused
+            || observed.prelaunch_failure.is_some() || observed.previous_run_id.is_some()
+            || observed.next_run_id.is_some() || observed.retirement.is_some() || observed.ticket_returned
+        { return Ok(None); }
+        if observed.state == RunState::Failed {
+            if observed.last_commit != head || !matches!(observed.last_signal.as_str(),
+                "stalled: alive but capture, hooks and commits show no progress beyond the window; waiting_on empty"
+                | "pid does not answer; zellij session absent; capture has not grown; no recent hook")
+            { return Ok(None); }
+            if failure.is_none() {
+                if !previous.as_ref().is_some_and(|p| p.state == RunState::Running && p.last_commit == head) {
+                    return Ok(None);
+                }
+                failure = Some(event.event_id);
+            }
+        } else if failure.is_some() || matches!(observed.state, RunState::Done | RunState::Retired | RunState::Retiring | RunState::Undead) {
+            return Ok(None);
+        }
+        previous = Some(event.run);
+    }
+    Ok(failure)
+}
+
 /// A ticketless independent reviewer hands evidence to its parent delivery,
 /// not to PM. Complete that task under the same contract as author handbacks;
 /// an attached interactive process is not claimed to have exited, and the
@@ -1315,7 +1363,12 @@ pub(crate) fn record_review_handback_in(
         || !crate::handback::review(handback).is_reviewable()
         || published_head.len() != 40 || !published_head.bytes().all(|b| b.is_ascii_hexdigit())
     { return Err("Reviewer handback does not match its native assignment and publication".into()); }
-    if !mark_completed(&mut run, "review task published; typed handback accepted (parent verdict remains separate)") {
+    let recovery = if transfer.state == "review" { reviewer_liveness_failure_in(dir, &run, published_head)? } else { None };
+    if let Some(event) = recovery {
+        run.state = RunState::Done;
+        run.waiting_on = None;
+        run.last_signal = format!("review task published; typed handback accepted after historical liveness failure {event} (parent verdict remains separate; process exit not asserted)");
+    } else if !mark_completed(&mut run, "review task published; typed handback accepted (parent verdict remains separate)") {
         return Ok(false);
     }
     run.last_commit = published_head.into();
