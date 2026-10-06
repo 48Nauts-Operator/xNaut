@@ -236,7 +236,9 @@ async fn run_git_grep(
     cap: usize,
 ) -> Result<SearchResult, String> {
     let mut cmd = Command::new("git");
-    cmd.arg("grep").arg("-n").arg("-I");
+    // Like rg, treat unescaped |, () and + as regex operators. In particular,
+    // triage joins title keywords with |; basic grep treats that as literal text.
+    cmd.arg("grep").arg("-n").arg("-I").arg("-E");
     if !opts.case_sensitive {
         cmd.arg("--ignore-case");
     }
@@ -355,6 +357,55 @@ pub async fn search_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn git_grep_fallback_matches_triage_title_alternation() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "fixture git failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        std::fs::write(
+            dir.path().join("calc.py"),
+            "def fee(cents):\n    return 0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "# Fee\n\nDocumented rounding contract: integer half up.\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("unrelated.txt"), "Unrelated content\n").unwrap();
+        git(&["add", "calc.py", "README.md", "unrelated.txt"]);
+
+        // Exact keyword alternation generated from the live XNAUT-464 finding.
+        // Call the fallback directly so an installed rg cannot hide a regression.
+        let query = "calc|return|violates|documented|rounding|contract";
+        let result = run_git_grep(dir.path(), query, &SearchOpts::default(), 20)
+            .await
+            .unwrap();
+        assert_eq!(result.backend, "git-grep");
+        assert!(!result.truncated);
+        assert_eq!(result.matches.len(), 2);
+        assert!(result
+            .matches
+            .iter()
+            .any(|m| { m.path == "calc.py" && m.line == 2 && m.text == "    return 0" }));
+        assert!(result.matches.iter().any(|m| {
+            m.path == "README.md"
+                && m.line == 3
+                && m.text == "Documented rounding contract: integer half up."
+        }));
+    }
 
     #[test]
     fn parses_rg_json_match_line() {
