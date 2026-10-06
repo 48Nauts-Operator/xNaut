@@ -993,7 +993,7 @@ async function init() {
 
     // Create initial terminal tab
     console.log('📝 Creating initial terminal tab...');
-    createNewTab();
+    createNewTab({ initialStartupTab: true });
     health.pass('first terminal tab');
 
     console.log('✅ XNAUT Ready!');
@@ -3459,12 +3459,13 @@ async function createSSHTerminal(tabId, sshSessionId) {
 }
 
 // Tab Management
-window.createNewTab = function() {
+window.createNewTab = function(options) {
   const tabId = `tab-${Date.now()}`;
   const tabName = `Terminal ${tabs.length + 1}`;
   const tab = {
     id: tabId,
     name: tabName,
+    initialStartupTab: options?.initialStartupTab === true,
     terminals: [],
     focusedPaneIndex: 0,
     layoutType: 'single',
@@ -7156,14 +7157,7 @@ function renderSnippets() {
   container.querySelectorAll('.run-cmd').forEach(btn => {
     btn.onclick = async () => {
       const cmd = btn.closest('.snippet-cmd').dataset.cmd;
-      const tab = tabs.find(t => t.id === activeTabId);
-      if (!tab || !tab.terminals.length) return;
-      const terminal = tab.terminals[tab.focusedPaneIndex || 0];
-      if (terminal) {
-        try {
-          await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: cmd + '\n' });
-        } catch (e) { console.error('Run command failed:', e); }
-      }
+      await runCommandInActiveTerminal(cmd);
     };
   });
   // Click header to expand/collapse commands
@@ -7266,7 +7260,7 @@ async function runCommandInActiveTerminal(cmd) {
   const tab = tabs.find(t => t.id === activeTabId);
   if (!tab || !tab.terminals || !tab.terminals.length) return false;
   const terminal = tab.terminals[tab.focusedPaneIndex || 0];
-  if (!terminal) return false;
+  if (!terminal || typeof terminal.sessionId !== 'string' || !terminal.sessionId.trim()) return false;
   try {
     await invoke('write_to_terminal', { sessionId: terminal.sessionId, data: cmd + '\n' });
     return true;

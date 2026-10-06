@@ -759,9 +759,9 @@ window.xnautAttachTasksTab = (opts) =>
       invoke('settings_get').then(applyModuleVisibility).catch(() => {});
       // Mesh is the global landing page: what needs André, first. Observatory
       // remains one click away for operational detail.
-      // A user can open Chat before this delayed startup callback runs.
-      // Do not replace the panel they just chose with the landing page.
-      if (!tabsRef().some((tab) => tab.isPanel) && typeof window.xnautOpenMesh === 'function') {
+      // Any user-created tab wins over delayed startup navigation, including
+      // Browser/Markdown and terminal tabs, which are not generic panels.
+      if (tabsRef().every((tab) => tab.initialStartupTab === true) && typeof window.xnautOpenMesh === 'function') {
         window.xnautOpenMesh();
       }
     }, 400);

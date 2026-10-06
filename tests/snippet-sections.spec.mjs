@@ -46,3 +46,16 @@ test('plain and unfenced headed snippets remain usable, and HTML is inert',async
  const parsed=await page.evaluate(()=>window.xnautSnippetSections.parse('Before\nTitle\n=====\n~~~sh\n# still code\n<img src=x onerror=alert(1)>\n~~~'));
  expect(parsed.blocks[1].title).toBe('Title');expect(parsed.commands).toEqual(['# still code\n<img src=x onerror=alert(1)>']);
 });
+
+test('Run never sends terminal IPC for a nonterminal panel or an empty session', async ({page}) => {
+ await open(page);await page.getByRole('button',{name:'AWS Checks',exact:true}).click();
+ for (const sessionId of [null, '', '   ']) {
+  await page.evaluate(sessionId => {
+   eval("tabs=[{id:'no-terminal',isPanel:true,focusedPaneIndex:0,terminals:[{}]}]; activeTabId='no-terminal';");
+   if (sessionId !== null) eval('tabs')[0].terminals[0].sessionId=sessionId;
+   window.__xnautInvokes.length=0;
+  }, sessionId);
+  await page.locator('[data-snippet-id="aws"] .run-cmd').first().click();
+  expect(await page.evaluate(()=>window.__xnautInvokes.filter(i=>i.cmd==='write_to_terminal'))).toEqual([]);
+ }
+});
