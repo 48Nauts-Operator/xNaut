@@ -598,12 +598,7 @@ impl WorkerGroupScope {
         let mut count = 0;
         for id in crate::run_control::list_ids_in(registry)? {
             let run = crate::run_control::load_manifest_in(registry, &id)?;
-            if matches!(
-                run.kind,
-                crate::run_control::RunKind::Agent | crate::run_control::RunKind::Review
-            ) && !run.state.terminal()
-                && self.contains(&run)
-            {
+            if crate::run_control::consumes_worker_capacity(&run) && self.contains(&run) {
                 count += 1;
             }
         }
@@ -1540,6 +1535,11 @@ mod tests {
         reviewer.review_parent = Some(parent.run_id.clone());
         reviewer.local_path = "/group-review".into();
         let scope = WorkerGroupScope::new(&group, &[parent, reviewer]);
+        // Even a conversation opened in a matching review checkout is exempt.
+        let mut chat = RunManifest::requested("owner-chat", "fixture", "/group-review", None, None, &[], 1);
+        chat.user_conversation = true;
+        run_control::request_in(&registry, chat, || Ok(())).unwrap();
+        assert_eq!(scope.count(&registry).unwrap(), 0);
         for n in 0..2 {
             let run = RunManifest::requested(
                 "other-project",

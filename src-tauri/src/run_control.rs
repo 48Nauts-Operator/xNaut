@@ -51,6 +51,10 @@ pub struct RunManifest {
     pub schema_version: u32,
     pub run_id: String,
     pub kind: RunKind,
+    /// Native launch classification: owner conversations/resumes do not consume
+    /// unattended worker capacity. Missing legacy classifications stay conservative.
+    #[serde(default)]
+    pub user_conversation: bool,
     pub ticket: Option<String>,
     pub project: String,
     /// The hostname, which is what a human recognises in a panel. Kept, and
@@ -203,6 +207,7 @@ impl RunManifest {
             schema_version: SCHEMA_VERSION,
             run_id: new_id(at),
             kind: RunKind::Agent,
+            user_conversation: false,
             // The ticket first: it is a stronger claim than a directory. Only
             // when there is no ticket does the worktree answer, and it usually
             // is the only thing that can: an agent launched from the app
@@ -347,13 +352,21 @@ pub(crate) fn under_admission_lock_in<T>(dir: &Path, apply: impl FnOnce() -> Res
     let _lock = StoreLock::acquire(dir)?;
     apply()
 }
+/// Explicit reviewers always consume a slot; ticketless Agent reviewers retain the
+/// default worker classification. Ticket presence is not a capacity discriminator.
+pub(crate) fn consumes_worker_capacity(run: &RunManifest) -> bool {
+    !run.state.terminal()
+        && (run.kind == RunKind::Review
+            || (run.kind == RunKind::Agent && !run.user_conversation))
+}
+
 /// Caller holds StoreLock. Requested successors reserve capacity across restarts;
 /// ticketless independent reviewers consume a worker slot just like authors.
 pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
     let mut count = 0;
     for id in list_ids_in(dir)? {
         let run = load_manifest_in(dir, &id)?;
-        if matches!(run.kind, RunKind::Agent | RunKind::Review) && !run.state.terminal() { count += 1; }
+        if consumes_worker_capacity(&run) { count += 1; }
     }
     Ok(count)
 }
@@ -365,7 +378,7 @@ pub(crate) fn worker_capacity_matching_in(dir: &Path, cap: usize, own: &str, rep
     for id in list_ids_in(dir)? {
         let run = load_manifest_in(dir, &id)?;
         if id != own && replacing != Some(id.as_str())
-            && matches!(run.kind, RunKind::Agent | RunKind::Review) && !run.state.terminal() && belongs(&run) { live += 1; }
+            && consumes_worker_capacity(&run) && belongs(&run) { live += 1; }
     }
     if live >= cap { return Err(format!("worker capacity: {live} durable author/reviewer reservations already consume limit {cap}")); }
     Ok(())
@@ -1302,6 +1315,7 @@ pub(crate) mod tests {
             schema_version: SCHEMA_VERSION,
             run_id: new_id(1_000),
             kind: RunKind::Agent,
+            user_conversation: false,
             ticket: Some("XNAUT-900".into()),
             project: "XNAUT".into(),
             machine: "test".into(),
@@ -1812,6 +1826,52 @@ pub(crate) mod tests {
         proof.branch_matches = false;
         assert_eq!(verdict(&run, &proof, 1_000_000), Verdict::Running);
     }
+    #[test]
+    fn durable_conversations_leave_two_worker_slots_and_ticketless_reviewers_count() {
+        let dir = directory("conversation-capacity");
+        for n in 0..2 {
+            let mut chat = RunManifest::requested("owner-chat", "fixture",
+                &format!("/chat-{n}"), None, None, &[], 10 + n);
+            chat.user_conversation = true;
+            let saved = request_in(&dir, chat, || Ok(())).unwrap();
+            let reopened = load_manifest_in(&dir, &saved.run_id).unwrap();
+            assert!(reopened.user_conversation, "classification survives reopening");
+            assert!(!consumes_worker_capacity(&reopened));
+        }
+        assert_eq!(worker_count_in(&dir).unwrap(), 0);
+        let launch = |path: &str, ticket: Option<String>| {
+            let task = RunManifest::requested("worker", "fixture", path, ticket, None, &[], 20);
+            let own = task.run_id.clone();
+            request_in(&dir, task, || worker_capacity_in(&dir, 2, &own, None))
+        };
+        let first = launch("/task-one", Some("TEST-1".into())).unwrap();
+        launch("/task-two", Some("TEST-2".into())).unwrap();
+        assert_eq!(worker_count_in(&dir).unwrap(), 2);
+        assert!(launch("/task-three", Some("TEST-3".into())).unwrap_err().starts_with("worker capacity:"));
+        update_in(&dir, &first.run_id, |run| run.state = RunState::Done).unwrap();
+        let reviewer = launch("/independent-review", None).unwrap();
+        assert!(!reviewer.user_conversation);
+        assert_eq!(worker_count_in(&dir).unwrap(), 2);
+        assert!(launch("/another-task", Some("TEST-4".into())).unwrap_err().starts_with("worker capacity:"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_unknown_and_explicit_review_records_remain_capacity_consumers() {
+        let mut record = serde_json::to_value(run()).unwrap();
+        record.as_object_mut().unwrap().remove("user_conversation");
+        record["ticket"] = serde_json::Value::Null;
+        let mut legacy: RunManifest = serde_json::from_value(record).unwrap();
+        assert!(!legacy.user_conversation);
+        assert!(consumes_worker_capacity(&legacy));
+        legacy.user_conversation = true;
+        assert!(!consumes_worker_capacity(&legacy));
+        legacy.kind = RunKind::Review;
+        assert!(consumes_worker_capacity(&legacy));
+        legacy.state = RunState::Done;
+        assert!(!consumes_worker_capacity(&legacy));
+    }
+
     #[test]
     fn requested_ids_are_unique_ulids_and_refusals_are_durable() {
         let dir = directory("admission");

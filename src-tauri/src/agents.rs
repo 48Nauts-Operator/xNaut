@@ -1980,8 +1980,9 @@ pub(crate) async fn launch_agent_with_env(
     use crate::run_control::{self, RunManifest, RunState};
     let dir = registry_dir()?;
     let handle = launch_identity.as_ref().map(|i| i.id.as_str()).unwrap_or(&req.agent_id);
-    let run = RunManifest::requested(handle, &req.agent_id, &req.worktree_path,
+    let mut run = RunManifest::requested(handle, &req.agent_id, &req.worktree_path,
         req.ticket.clone(), req.model.clone(), &run_control::ProjectSite::board(), run_control::now_ms());
+    run.user_conversation = req.conversation_mode || req.resume;
     let live = state.agent_sessions.lock().await.values().filter(|m| status::counts_as_live(m.status)).count();
     let capacity_run = run.clone();
     let run = run_control::request_in(&dir,run,|| {
