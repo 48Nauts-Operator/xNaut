@@ -2087,6 +2087,7 @@ pub async fn agent_profile_launch(
         // local pid, a local zellij session, a local capture file — finds none
         // of them, and fails a working agent inside the grace window.
         run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::GitVm.key().to_string());
+        crate::run_control::bind_pending_in(&registry, &mut run)?;
         // The spend and lease admissions already ran above; this registration
         // is bookkeeping, not a second gate.
         Some(crate::run_control::request_in(&registry, run, || Ok(()))?.run_id)
@@ -2340,6 +2341,7 @@ async fn launch_on_exe_dev(
         &crate::run_control::ProjectSite::board(), crate::run_control::now_ms(),
     );
     run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::ExeDev.key().into());
+    crate::run_control::bind_pending_in(&crate::agents::registry_dir()?, &mut run)?;
     let run_id = run.run_id.clone();
     let path = std::path::PathBuf::from(&req.worktree_path);
     let root = project.to_path_buf();
@@ -2382,7 +2384,8 @@ async fn launch_on_exe_dev(
     };
     let registry = crate::agents::registry_dir()?;
     run.branch = transfer.branch.clone();
-    crate::run_control::request_in(&registry, run, || Ok(()))?;
+    let admitted = crate::run_control::request_in(&registry, run, || Ok(()))?;
+    if admitted.run_id != run_id { return Err("Repository/registry run identity mismatch; launch refused".into()); }
     transfer.state = "running".into();
     crate::repository_transfer::save(&transfer)?;
 

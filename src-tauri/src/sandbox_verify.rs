@@ -416,7 +416,9 @@ pub fn evidence_refusal(
     handback_commits: &[String],
     contains: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    if verified_branch.is_some_and(|branch| branch_names_ticket(branch, ticket_id)) {
+    // A familiar branch name never overrides a newer handback revision.
+    if handback_commits.iter().all(|commit| commit.trim().is_empty())
+        && verified_branch.is_some_and(|branch| branch_names_ticket(branch, ticket_id)) {
         return None;
     }
     let sha = commit_sha.trim();
@@ -544,7 +546,7 @@ pub struct VerifyRecord {
     pub updated_at: String,
 }
 
-fn records_dir() -> PathBuf {
+pub(crate) fn records_dir() -> PathBuf {
     if let Some(path)=std::env::var_os("XNAUT_VERIFY_DIR") { return path.into(); }
     dirs::config_dir()
         .map(|p| p.join("xnaut").join("sandbox-verify").join("records"))
@@ -1591,6 +1593,10 @@ pub fn settle_ticket_in(
     if record.status != "passed" {
         return Ok(None);
     }
+    if let Some(reason) = crate::repository_review::independent_completion_refusal(&record.ticket_id,&record.commit_sha)? {
+        crate::ledger::record("verify_waiting_independent_review",crate::agent_profiles::RESERVED_NAUTBOT_HANDLE,&record.ticket_id,&reason);
+        return Ok(None);
+    }
     let ticket = crate::project_management::ticket_list_in(repo, Some(record.project.clone()))?
         .into_iter()
         .find(|t| t.id == record.ticket_id)
@@ -1831,6 +1837,19 @@ fn another_run_is_live(records: &[VerifyRecord], dir: &Path, own_id: &str) -> bo
         .any(|r| r.status == "running" && r.id != own_id && r.repo_path == want)
 }
 
+/// Retry identity is evidence identity, not ticket age. A revised commit or
+/// changed verification plan gets a fresh check budget; identical failures do
+/// not consume another repair turn just because the clock advanced.
+pub(crate) fn retry_epoch(record: &VerifyRecord) -> String {
+    crate::jury::hash(&serde_json::json!({"head":record.commit_sha,"provider":record.provider_kind,"steps":record.steps.iter().map(|s| (&s.name,&s.command)).collect::<Vec<_>>()}).to_string())
+}
+/// Failed setup, missing commands and absent exit evidence require environment
+/// recovery. Only a check that actually ran can become an author code finding.
+pub(crate) fn failure_is_environment(record: &VerifyRecord) -> bool {
+    record.status != "failed" || !record.steps.iter().any(|step|
+        ["test","build","gate"].contains(&step.name.as_str()) && step.exit_code.is_some_and(|code| code != 0 && code != 126 && code != 127))
+}
+
 /// Is there a passed, evidence-bearing verify record for this ticket? The
 /// question the `complete` rail asks; sync because it is asked under the PM
 /// mutation lock.
@@ -1843,7 +1862,28 @@ pub fn green_record_exists(ticket_id: &str) -> bool {
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| std::fs::read_to_string(e.path()).ok())
         .filter_map(|body| serde_json::from_str::<VerifyRecord>(&body).ok())
-        .any(|r| r.ticket_id == ticket_id && r.status == "passed" && !r.not_evidence)
+        .any(|r| r.ticket_id == ticket_id && r.status == "passed" && !r.not_evidence
+            && record_matches_current_ticket(&r)
+            && crate::repository_review::independent_completion_refusal(ticket_id,&r.commit_sha).is_ok_and(|refusal| refusal.is_none()))
+}
+
+// Called under PM's mutation lock: read current handback and local Git only,
+// never network. Old green A cannot close a handback now naming B, even when
+// the checkout still has the same ticket branch name.
+fn record_matches_current_ticket(record: &VerifyRecord) -> bool {
+    let Ok(repo) = crate::project_management::repo_now() else { return false; };
+    let Ok(tickets) = crate::project_management::ticket_list_in(&repo, Some(record.project.clone())) else { return false; };
+    let Some(ticket) = tickets.iter().find(|ticket| ticket.id == record.ticket_id) else { return false; };
+    let commits = ticket.handback.as_ref().map(|h| h.commits.as_slice()).unwrap_or_default();
+    record_matches_handback(record, commits)
+}
+fn record_matches_handback(record: &VerifyRecord, commits: &[String]) -> bool {
+    let tree = Path::new(&record.repo_path);
+    if commits.iter().all(|commit| commit.trim().is_empty()) {
+        if crate::repository_transfer::git(tree, &["rev-parse", "HEAD"]).ok().as_deref() != Some(record.commit_sha.as_str()) { return false; }
+    }
+    evidence_refusal(&record.ticket_id, head_branch(tree).as_deref(), &record.commit_sha, commits,
+        |commit| commit_is_in_tree(tree, commit, &record.commit_sha)).is_none()
 }
 
 /// The newest green record for a ticket at a commit, read synchronously
@@ -2402,6 +2442,24 @@ mod tests {
             created_at: "2026-09-03T00:00:00Z".into(),
             updated_at: "2026-09-03T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn old_green_cannot_close_a_new_handback_on_the_same_ticket_branch() {
+        let root = tmpdir();
+        let tree = root.join("tree");
+        let commits = history(&tree, "agent/author/rig-1", &["first", "repair"]);
+        let mut record = blank_record();
+        record.status = "passed".into();
+        record.repo_path = tree.to_string_lossy().into();
+        record.commit_sha = commits[0].clone();
+        assert!(record_matches_handback(&record, &[commits[0].clone()]));
+        assert!(!record_matches_handback(&record, &commits), "all current handback commits must be in the tested tree");
+        assert!(!record_matches_handback(&record, &[]), "without a handback the current exact HEAD is required");
+        record.commit_sha = commits[1].clone();
+        assert!(record_matches_handback(&record, &commits));
+        assert!(record_matches_handback(&record, &[]));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A runner that dies before any step can report an exit code must still

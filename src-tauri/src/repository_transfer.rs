@@ -18,9 +18,15 @@ pub struct Transfer {
     pub ticket: Option<String>,
     pub handle: String,
     pub local_path: String,
+    #[serde(default)]
+    pub local_branch: String,
     pub remote: String,
     #[serde(default)]
     pub review_parent: Option<String>,
+    /// Author successor of the original delivery. Reuses its PR/branch while
+    /// preserving a new native run and immutable artifacts for every repair.
+    #[serde(default)]
+    pub repair_parent: Option<String>,
     #[serde(default)]
     pub quality: Option<crate::repository_review::Review>,
     /// Local SSH route; revalidated against the canonical destination on use.
@@ -183,15 +189,22 @@ impl SshRoute {
                 Some((user, host)) => (Some(user.into()), host),
                 None => (None, host),
             };
-            Some(Self { host: host.into(), user, port: None, path: path.into() })
+            Some(Self {
+                host: host.into(),
+                user,
+                port: None,
+                path: path.into(),
+            })
         } else {
             None
         }
     }
     fn url(&self) -> Result<String, String> {
         let mut url = url::Url::parse("ssh://placeholder").unwrap();
-        url.set_host(Some(&self.host)).map_err(|_| "Invalid SSH hostname")?;
-        url.set_username(self.user.as_deref().unwrap_or("")).map_err(|_| "Invalid SSH user")?;
+        url.set_host(Some(&self.host))
+            .map_err(|_| "Invalid SSH hostname")?;
+        url.set_username(self.user.as_deref().unwrap_or(""))
+            .map_err(|_| "Invalid SSH user")?;
         url.set_port(self.port).map_err(|_| "Invalid SSH port")?;
         url.set_path(&self.path);
         validate_remote(url.as_str())
@@ -202,26 +215,46 @@ impl SshRoute {
 /// use this expansion as the desktop Git route: that would lose IdentityFile,
 /// ProxyJump and other settings bound to an SSH alias.
 pub(crate) fn portable_remote(remote: &str) -> Result<String, String> {
-    let Some(route) = SshRoute::parse(remote) else { return Ok(remote.into()); };
+    let Some(route) = SshRoute::parse(remote) else {
+        return Ok(remote.into());
+    };
     let mut command = Command::new("ssh");
     command.arg("-G");
-    if let Some(user) = &route.user { command.args(["-l", user]); }
-    if let Some(port) = route.port { command.args(["-p", &port.to_string()]); }
-    let out = command.args(["--", &route.host]).output().map_err(|e| e.to_string())?;
+    if let Some(user) = &route.user {
+        command.args(["-l", user]);
+    }
+    if let Some(port) = route.port {
+        command.args(["-p", &port.to_string()]);
+    }
+    let out = command
+        .args(["--", &route.host])
+        .output()
+        .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err("Cannot resolve the repository's SSH host.".into());
     }
     let config = String::from_utf8_lossy(&out.stdout);
     let get = |key: &str| {
-        config.lines().find_map(|line| line.strip_prefix(&format!("{key} "))).unwrap_or("")
+        config
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key} ")))
+            .unwrap_or("")
     };
     let hostname = get("hostname");
     let user = get("user");
-    let port = get("port").parse().map_err(|_| "Incomplete SSH host configuration")?;
+    let port = get("port")
+        .parse()
+        .map_err(|_| "Incomplete SSH host configuration")?;
     if hostname.is_empty() || user.is_empty() {
         return Err("Incomplete SSH host configuration".into());
     }
-    SshRoute { host: hostname.into(), user: Some(user.into()), port: Some(port), ..route }.url()
+    SshRoute {
+        host: hostname.into(),
+        user: Some(user.into()),
+        port: Some(port),
+        ..route
+    }
+    .url()
 }
 
 fn select_desktop_remote(
@@ -229,21 +262,39 @@ fn select_desktop_remote(
     candidates: &[String],
     resolve: impl Fn(&str) -> Result<String, String>,
 ) -> Result<String, String> {
-    let Some(route) = SshRoute::parse(configured) else { return Ok(configured.into()); };
+    let Some(route) = SshRoute::parse(configured) else {
+        return Ok(configured.into());
+    };
     let canonical = resolve(configured)?;
     let target = SshRoute::parse(&canonical).ok_or("Invalid resolved SSH repository")?;
     // An explicitly configured alias already names the owner's chosen route.
-    if !route.host.eq_ignore_ascii_case(&target.host) { return Ok(configured.into()); }
+    if !route.host.eq_ignore_ascii_case(&target.host) {
+        return Ok(configured.into());
+    }
     let mut matches = Vec::new();
     for candidate in candidates {
-        if validate_remote(candidate).is_err() { continue; }
-        let Some(mut alias) = SshRoute::parse(candidate) else { continue; };
-        if alias.host.eq_ignore_ascii_case(&target.host) { continue; }
-        let Ok(resolved) = resolve(candidate) else { continue; };
-        let Some(endpoint) = SshRoute::parse(&resolved) else { continue; };
+        if validate_remote(candidate).is_err() {
+            continue;
+        }
+        let Some(mut alias) = SshRoute::parse(candidate) else {
+            continue;
+        };
+        if alias.host.eq_ignore_ascii_case(&target.host) {
+            continue;
+        }
+        let Ok(resolved) = resolve(candidate) else {
+            continue;
+        };
+        let Some(endpoint) = SshRoute::parse(&resolved) else {
+            continue;
+        };
         if endpoint.host.eq_ignore_ascii_case(&target.host)
-            && endpoint.user == target.user && endpoint.port == target.port
-            && endpoint.path.trim_end_matches(".git").eq_ignore_ascii_case(target.path.trim_end_matches(".git"))
+            && endpoint.user == target.user
+            && endpoint.port == target.port
+            && endpoint
+                .path
+                .trim_end_matches(".git")
+                .eq_ignore_ascii_case(target.path.trim_end_matches(".git"))
         {
             // Preserve the configured path's spelling even on case-sensitive forges.
             alias.path = target.path.clone();
@@ -260,14 +311,21 @@ fn select_desktop_remote(
 }
 
 pub(crate) fn desktop_remote(source: &Path, configured: &str) -> Result<String, String> {
-    if SshRoute::parse(configured).is_none() { return Ok(configured.into()); }
+    if SshRoute::parse(configured).is_none() {
+        return Ok(configured.into());
+    }
     let mut candidates = Vec::new();
     // Only credentials from this project's own remotes qualify. Never fall
     // back to origin: it can be a mirror on an entirely different forge.
     if let Ok(names) = git(source, &["remote"]) {
         for name in names.lines() {
-            for args in [vec!["remote", "get-url", "--all", name], vec!["remote", "get-url", "--push", "--all", name]] {
-                if let Ok(urls) = git(source, &args) { candidates.extend(urls.lines().map(String::from)); }
+            for args in [
+                vec!["remote", "get-url", "--all", name],
+                vec!["remote", "get-url", "--push", "--all", name],
+            ] {
+                if let Ok(urls) = git(source, &args) {
+                    candidates.extend(urls.lines().map(String::from));
+                }
             }
         }
     }
@@ -280,7 +338,7 @@ pub(crate) fn store_dir() -> Result<PathBuf, String> {
 pub(crate) fn save_at(dir: &Path, transfer: &Transfer) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{}.json", transfer.run_id));
-    let tmp = path.with_extension("tmp");
+    let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     std::fs::write(
         &tmp,
         serde_json::to_vec_pretty(transfer).map_err(|e| e.to_string())?,
@@ -316,7 +374,10 @@ pub(crate) fn list() -> Result<Vec<Transfer>, String> {
 /// until repository reconciliation has confirmed delivery.
 pub fn guard_worker_teardown(local_path: &Path) -> Result<(), String> {
     for transfer in list()? {
-        if let crate::worker_bootstrap::Target::GitVm { local_path: worker_path } = &transfer.worker {
+        if let crate::worker_bootstrap::Target::GitVm {
+            local_path: worker_path,
+        } = &transfer.worker
+        {
             if worker_path == local_path && transfer.state == "running" {
                 return Err(format!("Task {} still has unconfirmed repository delivery; retain its worker for upload retry.", transfer.run_id));
             }
@@ -345,8 +406,13 @@ pub(crate) fn project_for_source<'a>(
     };
     if let Some(ticket) = ticket {
         let (key, _) = ticket.rsplit_once('-').ok_or("Invalid ticket identity")?;
-        let project = projects.iter().find(|p| p.key == key).ok_or("Ticket project is not registered")?;
-        return if matches_source(project) { Ok(project) } else {
+        let project = projects
+            .iter()
+            .find(|p| p.key == key)
+            .ok_or("Ticket project is not registered")?;
+        return if matches_source(project) {
+            Ok(project)
+        } else {
             Err("The ticket's project does not match this checkout. Link the correct local folder in Project settings before uploading source.".into())
         };
     }
@@ -362,33 +428,65 @@ pub(crate) fn project_for_source<'a>(
 
 /// A task PR must describe the task delta, not everything the launch checkout
 /// happened to have ahead of the forge's default branch (PR #105).
-fn task_base(path: &Path, source_checkout: &Path, remote: &str, source: &str) -> Result<String, String> {
-    let refs = git(path, &["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"])?;
-    let default = refs.lines().find_map(|line| {
-        line.strip_prefix("ref: refs/heads/").and_then(|v| v.split_once('\t')).map(|(name, _)| name.to_string())
-    }).ok_or("The configured repository needs a default branch with an initial commit.")?;
-    let heads: std::collections::BTreeMap<String, String> = refs.lines().filter_map(|line| {
-        let (sha, reference) = line.split_once('\t')?;
-        let name = reference.strip_prefix("refs/heads/")?;
-        (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
-            .then(|| (name.to_string(), sha.to_string()))
-    }).collect();
-    let public_branch = |name: &str| !name.starts_with("xnaut/inputs/") && !name.starts_with("xnaut/runs/");
-    let preferred = git(source_checkout, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+fn task_base(
+    path: &Path,
+    source_checkout: &Path,
+    remote: &str,
+    source: &str,
+) -> Result<String, String> {
+    let refs = git(
+        path,
+        &["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"],
+    )?;
+    let default = refs
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("ref: refs/heads/")
+                .and_then(|v| v.split_once('\t'))
+                .map(|(name, _)| name.to_string())
+        })
+        .ok_or("The configured repository needs a default branch with an initial commit.")?;
+    let heads: std::collections::BTreeMap<String, String> = refs
+        .lines()
+        .filter_map(|line| {
+            let (sha, reference) = line.split_once('\t')?;
+            let name = reference.strip_prefix("refs/heads/")?;
+            (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then(|| (name.to_string(), sha.to_string()))
+        })
+        .collect();
+    let public_branch =
+        |name: &str| !name.starts_with("xnaut/inputs/") && !name.starts_with("xnaut/runs/");
+    let preferred = git(
+        source_checkout,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )
+    .ok();
     let mut candidates = Vec::new();
     if let Some(name) = preferred.filter(|name| public_branch(name) && heads.contains_key(name)) {
         candidates.push(name);
     }
-    if !candidates.contains(&default) { candidates.push(default); }
+    if !candidates.contains(&default) {
+        candidates.push(default);
+    }
     for name in candidates {
-        let Some(tip) = heads.get(&name) else { continue };
-        if tip == source { return Ok(name); }
+        let Some(tip) = heads.get(&name) else {
+            continue;
+        };
+        if tip == source {
+            return Ok(name);
+        }
         git(path, &["fetch", "--no-tags", remote, tip])?;
-        if git(path, &["merge-base", "--is-ancestor", source, tip]).is_ok() { return Ok(name); }
+        if git(path, &["merge-base", "--is-ancestor", source, tip]).is_ok() {
+            return Ok(name);
+        }
     }
     // A detached verification checkout can still identify an exact, uniquely
     // published source branch. Never choose an arbitrary alias or input ref.
-    let exact: Vec<_> = heads.iter().filter(|(name, tip)| public_branch(name) && *tip == source).collect();
+    let exact: Vec<_> = heads
+        .iter()
+        .filter(|(name, tip)| public_branch(name) && *tip == source)
+        .collect();
     match exact.as_slice() {
         [(name, _)] => Ok((*name).clone()),
         [] => Err("The task's starting commit is not on a published source branch. Push that branch to the project's repository before starting the task; refusing a PR with unrelated source changes.".into()),
@@ -415,20 +513,33 @@ pub fn prepare(
     let desktop = desktop_remote(path, &configured)?;
     let review_parent = crate::repository_review::parent_for_workspace(path)?;
     let base = if let Some(parent) = &review_parent {
-        list()?.into_iter().find(|t| &t.run_id == parent).ok_or("Parent review receipt missing")?.base
+        list()?
+            .into_iter()
+            .find(|t| &t.run_id == parent)
+            .ok_or("Parent review receipt missing")?
+            .base
     } else {
-        task_base(path, Path::new(&crate::project_management::local_source_path(project)), &desktop, &source_sha)?
+        task_base(
+            path,
+            Path::new(&crate::project_management::local_source_path(project)),
+            &desktop,
+            &source_sha,
+        )?
     };
     git(path, &["check-ref-format", &format!("refs/heads/{base}")])?;
-    let quality = review_parent.is_none().then(crate::repository_review::Review::default);
-    Ok(Transfer {
+    let quality = review_parent
+        .is_none()
+        .then(crate::repository_review::Review::default);
+    let mut prepared = Transfer {
         review_parent,
+        repair_parent: None,
         quality,
         run_id: run_id.into(),
         project: project.key.clone(),
         ticket,
         handle: handle.trim_start_matches('@').to_ascii_lowercase(),
         local_path: path.to_string_lossy().into(),
+        local_branch: git(path, &["symbolic-ref", "--short", "HEAD"]).unwrap_or_default(),
         remote,
         desktop_remote: Some(desktop),
         worker_remote: None,
@@ -442,12 +553,57 @@ pub fn prepare(
         pr_url: None,
         error: None,
         filed: false,
-    })
+    };
+    inherit_repair_delivery(&mut prepared, &list()?)?;
+    Ok(prepared)
+}
+
+/// Only a persisted, exact repair reservation may inherit publication rights.
+/// A caller-provided ticket, branch or PR alone never creates this linkage.
+pub(crate) fn inherit_repair_delivery(t: &mut Transfer, rows: &[Transfer]) -> Result<(), String> {
+    let parents: Vec<_> = rows
+        .iter()
+        .filter(|parent| {
+            parent.quality.as_ref().is_some_and(|q| {
+                q.repair_child.as_deref() == Some(t.run_id.as_str()) && q.state == "repair_reserved"
+            })
+        })
+        .collect();
+    if parents.len() > 1 {
+        return Err("Repair reservation has multiple parents".into());
+    }
+    let Some(parent) = parents.first() else {
+        return Ok(());
+    };
+    let q = parent.quality.as_ref().unwrap();
+    if t.review_parent.is_some()
+        || parent.project != t.project
+        || parent.ticket != t.ticket
+        || parent.handle != t.handle
+        || parent.remote != t.remote
+        || parent.local_path != t.local_path
+        || parent.local_branch.is_empty()
+        || parent.local_branch != t.local_branch
+        || parent.pr_url.is_none()
+        || t.source_sha != q.head
+    {
+        return Err(
+            "Repair receipt differs from its authorized predecessor/worktree/revision".into(),
+        );
+    }
+    t.repair_parent = Some(parent.run_id.clone());
+    t.branch = parent.branch.clone();
+    t.base = parent.base.clone();
+    t.pr_url = parent.pr_url.clone();
+    t.quality = None;
+    Ok(())
 }
 
 pub(crate) fn transfer_desktop_remote(t: &Transfer) -> Result<String, String> {
     if let Some(route) = &t.desktop_remote {
-        if portable_remote(route)? == t.remote { return Ok(route.clone()); }
+        if portable_remote(route)? == t.remote {
+            return Ok(route.clone());
+        }
         return Err("The desktop SSH alias now resolves to a different repository. Restore its configuration before retrying delivery.".into());
     }
     desktop_remote(Path::new(&t.local_path), &t.remote)
@@ -471,14 +627,21 @@ pub fn stage(transfer: &Transfer, access: &crate::worker_bootstrap::Access) -> R
         ],
     )?;
     // A fresh directory per run, with real history. Never delete an earlier run.
-    let proxy_config = access.http_proxy.as_ref().map(|proxy|
-        format!("git config --local http.proxy {}; ", quote(proxy))).unwrap_or_default();
+    let proxy_config = access
+        .http_proxy
+        .as_ref()
+        .map(|proxy| format!("git config --local http.proxy {}; ", quote(proxy)))
+        .unwrap_or_default();
     let command = format!("set -e; export GIT_TERMINAL_PROMPT=0; test ! -e {dir}; mkdir -p {parent}; git -c core.sshCommand={ssh} clone --no-checkout -- {remote} {dir}; cd {dir}; git config --local core.sshCommand {ssh}; {proxy_config}git config --local user.name xNAUT; git config --local user.email xnaut@localhost; git lfs install --local; git fetch origin {input}; test \"$(git rev-parse FETCH_HEAD)\" = {sha}; git checkout -b {branch} {sha}; git push --dry-run origin HEAD:refs/heads/{branch}; test ! -L .xnaut; test ! -L .xnaut/runs; mkdir -p {artifacts}",
         dir=quote(&transfer.workdir), parent=quote(Path::new(&transfer.workdir).parent().ok_or("Invalid worker directory")?.to_str().ok_or("Invalid worker directory")?), remote=quote(&access.remote), ssh=quote(&access.ssh_command), input=quote(&input), sha=quote(&transfer.source_sha), branch=quote(&transfer.branch), artifacts=quote(&transfer.artifacts));
     transfer.worker.command(&command)?;
     let metadata = serde_json::to_string_pretty(transfer).map_err(|e| e.to_string())?;
-    transfer.worker.file(&transfer.workdir, ".git/xnaut-transfer.json", &metadata)?;
-    transfer.worker.file(&transfer.workdir, ".git/xnaut-publish.py", PUBLISHER)?;
+    transfer
+        .worker
+        .file(&transfer.workdir, ".git/xnaut-transfer.json", &metadata)?;
+    transfer
+        .worker
+        .file(&transfer.workdir, ".git/xnaut-publish.py", PUBLISHER)?;
     let attrs = MEDIA
         .iter()
         .flat_map(|ext| [ext.to_string(), ext.to_uppercase()])
@@ -507,19 +670,23 @@ pub fn instructions(t: &Transfer) -> String {
 }
 
 pub fn run_script(t: &Transfer, command: &str, seed: &str) -> String {
-    let directory = if Path::new(&t.workdir).is_absolute() { quote(&t.workdir) } else { format!("\"$HOME\"/{}", quote(&t.workdir)) };
-    format!("#!/bin/bash -l\ncd {} || exit 1\n{}\nprintf '%s\\n' 'xNAUT: repository-backed run; results are retained until uploaded.'\necho $$ > .git/xnaut-supervisor.pid\nprintf running > .git/xnaut-phase\nenv {}\ncode=$?\nprintf uploading > .git/xnaut-phase\npython3 .git/xnaut-publish.py --finish \"$code\" --retry\nexit \"$code\"\n", directory, seed, command)
+    let directory = if Path::new(&t.workdir).is_absolute() {
+        quote(&t.workdir)
+    } else {
+        format!("\"$HOME\"/{}", quote(&t.workdir))
+    };
+    format!("#!/bin/bash -l\ncd {} || exit 1\n{}\nprintf '%s\\n' 'xNAUT: repository-backed run; results are retained until uploaded.'\necho $$ > .git/xnaut-supervisor.pid\nprintf running > .git/xnaut-phase\nenv {}\ncode=$?\nprintf uploading > .git/xnaut-phase\npython3 .git/xnaut-publish.py --finish \"$code\" --retry\npublished=$?\nif [ \"$published\" = 0 ]; then printf finished > .git/xnaut-phase; fi\nexit \"$code\"\n", directory, seed, command)
 }
 
 #[derive(Debug, Deserialize)]
-struct ResultRecord {
+pub(crate) struct ResultRecord {
     run_id: String,
     source_sha: String,
-    exit_code: i32,
-    uncommitted_source: bool,
+    pub exit_code: i32,
+    pub uncommitted_source: bool,
 }
 
-fn fetch_result(
+pub(crate) fn fetch_result(
     t: &Transfer,
 ) -> Result<Option<(ResultRecord, Option<crate::handback::Handback>)>, String> {
     fetch_result_in(&store_dir()?, t)
@@ -578,10 +745,8 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
     if !t.workdir.is_empty() && t.state == "running" {
         let snapshot = t.clone();
         // Liveness evidence comes from the worker, never from opening a viewport.
-        if let Ok(Ok(proof)) = tokio::task::spawn_blocking(move || {
-            snapshot.worker.probe(&snapshot.workdir)
-        })
-        .await
+        if let Ok(Ok(proof)) =
+            tokio::task::spawn_blocking(move || snapshot.worker.probe(&snapshot.workdir)).await
         {
             if let Ok(registry) = crate::agents::registry_dir() {
                 let pong = crate::run_control::Pong {
@@ -641,7 +806,10 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
         }
     }
     if result.exit_code != 0 || result.uncommitted_source {
-        return Err("Results and PR preserved; the agent exited unsuccessfully or left source changes uncommitted. Review required.".into());
+        // Published implementation remains reviewable after a failed author.
+        // Uncommitted source is explicitly retained and prevents any pass.
+        t.state = "review".into();
+        return Err(format!("Published evidence retained: author exit {}; uncommitted source {}. Independent review required; process exit is not completion.", result.exit_code, result.uncommitted_source));
     }
     if t.ticket.is_some() && !t.filed {
         let mut h = handback
@@ -671,7 +839,7 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
                 }
                 let request = serde_json::from_value(serde_json::json!({
                     "id": current.id, "expected_revision": current.revision,
-                    "caller": h_copy.from, "status": "review"
+                    "caller": null, "owner": crate::agent_profiles::RESERVED_NAUTBOT_HANDLE, "status": "review"
                 })).map_err(|e| e.to_string())?;
                 crate::project_management::ticket_update_in(&repo, request)?;
             }
@@ -688,42 +856,71 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
 
 /// Only receipts minted by this installation are fetched. Repository content
 /// is parsed as bounded JSON, never executed, and cannot select a ticket/actor.
-pub fn spawn_reconciler(app: tauri::AppHandle) {
-    use tauri::Manager;
+pub fn spawn_reconciler(_app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             crate::repository_notes::drain().await;
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
     });
-    tauri::async_runtime::spawn(async move {
-        loop {
-            let hosts = app
-                .state::<crate::state::AppState>()
-                .settings
-                .lock()
-                .await
-                .forges
-                .clone();
-            if let Ok(rows) = list() {
-                for mut t in rows
-                    .into_iter()
-                    .filter(|r| r.state == "running" || r.state == "pushed")
-                {
-                    t.error = reconcile(&mut t, &hosts).await.err();
-                    let _ = save(&t);
-                }
+}
+
+/// One pass owned by the durable sweep. No second scheduler or polling task.
+pub async fn tick(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    static TICK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Ok(_tick) = TICK.try_lock() else {
+        return;
+    };
+    let hosts = app
+        .state::<crate::state::AppState>()
+        .settings
+        .lock()
+        .await
+        .forges
+        .clone();
+    if let Ok(rows) = list() {
+        for mut t in rows
+            .into_iter()
+            .filter(|r| r.state == "running" || r.state == "pushed")
+        {
+            // Publication and quality advancement share a cross-process lease;
+            // a late publisher must not overwrite a freshly launched review.
+            let Ok(dir) = store_dir() else {
+                continue;
+            };
+            let Ok(Some(_lease)) = crate::repository_review::QualityLease::acquire(&dir, &t.run_id)
+            else {
+                continue;
+            };
+            let Ok(bytes) = std::fs::read(dir.join(format!("{}.json", t.run_id))) else {
+                continue;
+            };
+            let Ok(current) = serde_json::from_slice::<Transfer>(&bytes) else {
+                continue;
+            };
+            t = current;
+            if !["running", "pushed"].contains(&t.state.as_str()) {
+                continue;
             }
-            // Quality workers use the same task launcher and repository delivery,
-            // but their output never opens another task PR or review cycle.
-            if let Ok(rows) = list() {
-                for mut t in rows.iter().filter(|t| t.state == "review" && t.review_parent.is_none() && t.quality.is_some()).cloned() {
-                    let _ = crate::repository_review::advance(&app, &mut t, &rows, &hosts).await;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            t.error = reconcile(&mut t, &hosts).await.err();
+            let _ = save(&t);
         }
-    });
+    }
+    if let Ok(rows) = list() {
+        for mut t in rows
+            .iter()
+            .filter(|t| {
+                t.state == "review"
+                    && t.review_parent.is_none()
+                    && t.repair_parent.is_none()
+                    && t.quality.is_some()
+            })
+            .cloned()
+        {
+            let _ = crate::repository_review::advance(app, &mut t, &rows, &hosts).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -743,15 +940,38 @@ mod tests {
                 _ => remote.into(),
             })
         };
-        let wrong: Vec<String> = ["mirror:team/repo.git", "other-user:team/repo.git", "other-port:team/repo.git", "other-repo:team/else.git"].into_iter().map(String::from).collect();
-        assert_eq!(select_desktop_remote(configured, &wrong, resolve).unwrap(), configured);
+        let wrong: Vec<String> = [
+            "mirror:team/repo.git",
+            "other-user:team/repo.git",
+            "other-port:team/repo.git",
+            "other-repo:team/else.git",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(
+            select_desktop_remote(configured, &wrong, resolve).unwrap(),
+            configured
+        );
         let mut candidates = wrong;
         candidates.extend(["work:team/repo.git".into(), "work:team/repo.git".into()]);
-        assert_eq!(select_desktop_remote(configured, &candidates, resolve).unwrap(), "ssh://work/Team/Repo.git");
-        assert_eq!(select_desktop_remote("work:team/repo.git", &[], resolve).unwrap(), "work:team/repo.git");
+        assert_eq!(
+            select_desktop_remote(configured, &candidates, resolve).unwrap(),
+            "ssh://work/Team/Repo.git"
+        );
+        assert_eq!(
+            select_desktop_remote("work:team/repo.git", &[], resolve).unwrap(),
+            "work:team/repo.git"
+        );
         candidates.push("work2:team/repo.git".into());
-        assert!(select_desktop_remote(configured, &candidates, resolve).unwrap_err().contains("Multiple"));
-        assert_eq!(select_desktop_remote("https://forge.example/Team/Repo.git", &candidates, resolve).unwrap(), "https://forge.example/Team/Repo.git");
+        assert!(select_desktop_remote(configured, &candidates, resolve)
+            .unwrap_err()
+            .contains("Multiple"));
+        assert_eq!(
+            select_desktop_remote("https://forge.example/Team/Repo.git", &candidates, resolve)
+                .unwrap(),
+            "https://forge.example/Team/Repo.git"
+        );
     }
 
     /// Explicit operator-only acceptance check: provisions repository access,
@@ -760,19 +980,39 @@ mod tests {
     #[ignore = "requires an explicitly selected live project and worker"]
     async fn live_repository_access_preflight() {
         let source = std::env::var("XNAUT_PREFLIGHT_SOURCE").expect("explicit source required");
-        let remote = validate_remote(&std::env::var("XNAUT_PREFLIGHT_REMOTE").expect("explicit remote required")).unwrap();
+        let remote = validate_remote(
+            &std::env::var("XNAUT_PREFLIGHT_REMOTE").expect("explicit remote required"),
+        )
+        .unwrap();
         let desktop = desktop_remote(Path::new(&source), &remote).unwrap();
-        let refs = git(Path::new(&source), &["ls-remote", "--symref", &desktop, "HEAD"]).unwrap();
+        let refs = git(
+            Path::new(&source),
+            &["ls-remote", "--symref", &desktop, "HEAD"],
+        )
+        .unwrap();
         assert!(refs.contains("ref: refs/heads/"));
         println!("desktop repository read: passed");
-        git(Path::new(&source), &["push", "--dry-run", &desktop, "HEAD:refs/heads/xnaut/preflight-access-check"]).unwrap();
+        git(
+            Path::new(&source),
+            &[
+                "push",
+                "--dry-run",
+                &desktop,
+                "HEAD:refs/heads/xnaut/preflight-access-check",
+            ],
+        )
+        .unwrap();
         println!("desktop repository write dry-run: passed");
         let settings = crate::settings::load_or_default();
         let access = crate::worker_bootstrap::prepare(
             &crate::worker_bootstrap::Target::ExeDev,
-            &portable_remote(&remote).unwrap(), "xnaut/preflight-access-check",
-            &settings.forges, &settings.worker_network,
-        ).await.unwrap();
+            &portable_remote(&remote).unwrap(),
+            "xnaut/preflight-access-check",
+            &settings.forges,
+            &settings.worker_network,
+        )
+        .await
+        .unwrap();
         assert!(!access.ssh_command.is_empty());
         println!("worker tools, network, repository read/write dry-run and LFS upload authorization: passed");
     }
@@ -780,41 +1020,95 @@ mod tests {
     #[test]
     fn ticketless_tasks_resolve_a_project_registered_to_a_linked_worktree() {
         struct Scratch(PathBuf);
-        impl Scratch { fn path(&self) -> &Path { &self.0 } }
-        impl Drop for Scratch { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
-        let dir = Scratch(std::env::temp_dir().join(format!("xnaut-source-project-{}", uuid::Uuid::new_v4())));
+        impl Scratch {
+            fn path(&self) -> &Path {
+                &self.0
+            }
+        }
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = Scratch(
+            std::env::temp_dir().join(format!("xnaut-source-project-{}", uuid::Uuid::new_v4())),
+        );
         std::fs::create_dir_all(dir.path()).unwrap();
         let main = dir.path().join("main");
         let linked = dir.path().join("registered-source");
         git(dir.path(), &["init", main.to_str().unwrap()]).unwrap();
-        git(&main, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base"]).unwrap();
-        git(&main, &["worktree", "add", "-b", "registered", linked.to_str().unwrap()]).unwrap();
+        git(
+            &main,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "base",
+            ],
+        )
+        .unwrap();
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "registered",
+                linked.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         // A fixture must not inherit a real machine's XNAUT project-path override.
         let key = format!("FIXTURE{}", uuid::Uuid::new_v4().simple());
         let ticket = format!("{key}-1");
-        let project: crate::project_management::ProjectRecord = serde_json::from_value(serde_json::json!({
-            "key":key, "name":"fixture", "source_path":linked,
-            "forge_remote":"https://forge.example/team/xnaut.git", "created_at":"fixture"
-        })).unwrap();
+        let project: crate::project_management::ProjectRecord =
+            serde_json::from_value(serde_json::json!({
+                "key":key, "name":"fixture", "source_path":linked,
+                "forge_remote":"https://forge.example/team/xnaut.git", "created_at":"fixture"
+            }))
+            .unwrap();
         let root = crate::sandbox::launch_env::project_root(&linked);
         let mut projects = vec![project.clone()];
         assert_eq!(project_for_source(&projects, None, &root).unwrap().key, key);
         assert!(project_for_source(&projects, Some("OTHER-1"), &root).is_err());
-        projects.push(crate::project_management::ProjectRecord { key:format!("{key}B"), ..project });
-        assert!(project_for_source(&projects, None, &root).unwrap_err().contains("Multiple"));
-        assert_eq!(project_for_source(&projects, Some(&ticket), &root).unwrap().key, key);
+        projects.push(crate::project_management::ProjectRecord {
+            key: format!("{key}B"),
+            ..project
+        });
+        assert!(project_for_source(&projects, None, &root)
+            .unwrap_err()
+            .contains("Multiple"));
+        assert_eq!(
+            project_for_source(&projects, Some(&ticket), &root)
+                .unwrap()
+                .key,
+            key
+        );
         assert!(project_for_source(&projects, Some(&ticket), dir.path()).is_err());
     }
     #[test]
     fn task_pr_base_excludes_inherited_feature_changes_and_refuses_unpublished_sources() {
         struct Scratch(PathBuf);
-        impl Drop for Scratch { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
-        let scratch = Scratch(std::env::temp_dir().join(format!("xnaut-pr-base-{}", uuid::Uuid::new_v4())));
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("xnaut-pr-base-{}", uuid::Uuid::new_v4())));
         std::fs::create_dir_all(&scratch.0).unwrap();
         let root = scratch.0.join("source");
         let remote = scratch.0.join("remote.git");
         let task = scratch.0.join("task");
-        git(&scratch.0, &["init", "--bare", "-b", "main", remote.to_str().unwrap()]).unwrap();
+        git(
+            &scratch.0,
+            &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
+        )
+        .unwrap();
         git(&scratch.0, &["init", "-b", "main", root.to_str().unwrap()]).unwrap();
         git(&root, &["config", "user.name", "Fixture"]).unwrap();
         git(&root, &["config", "user.email", "fixture@example.invalid"]).unwrap();
@@ -829,21 +1123,49 @@ mod tests {
         std::fs::write(root.join("app.txt"), "unrelated feature\n").unwrap();
         git(&root, &["commit", "-am", "feature"]).unwrap();
         let source = git(&root, &["rev-parse", "HEAD"]).unwrap();
-        assert!(task_base(&root, &root, remote, &source).unwrap_err().contains("published source branch"));
+        assert!(task_base(&root, &root, remote, &source)
+            .unwrap_err()
+            .contains("published source branch"));
         git(&root, &["push", remote, "feature"]).unwrap();
-        git(&root, &["worktree", "add", "--detach", task.to_str().unwrap(), &source]).unwrap();
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                task.to_str().unwrap(),
+                &source,
+            ],
+        )
+        .unwrap();
         assert_eq!(task_base(&task, &root, remote, &source).unwrap(), "feature");
         assert_eq!(task_base(&task, &task, remote, &source).unwrap(), "feature");
         std::fs::write(task.join("report.md"), "smoke evidence\n").unwrap();
         git(&task, &["add", "report.md"]).unwrap();
         git(&task, &["commit", "-m", "task report"]).unwrap();
         let base = task_base(&task, &root, remote, &source).unwrap();
-        assert_eq!(git(&task, &["diff", "--name-only", &format!("{base}...HEAD")]).unwrap(), "report.md");
-        assert!(git(&task, &["diff", "--name-only", "main...HEAD"]).unwrap().contains("app.txt"));
+        assert_eq!(
+            git(&task, &["diff", "--name-only", &format!("{base}...HEAD")]).unwrap(),
+            "report.md"
+        );
+        assert!(git(&task, &["diff", "--name-only", "main...HEAD"])
+            .unwrap()
+            .contains("app.txt"));
         // Aliased detached tips must not choose a random parent. A checked-out
         // source branch still disambiguates them, and internal input refs don't.
-        git(&root, &["push", remote, "feature:refs/heads/alias", "feature:refs/heads/xnaut/inputs/fixture"]).unwrap();
-        assert!(task_base(&task, &task, remote, &source).unwrap_err().contains("Several published branches"));
+        git(
+            &root,
+            &[
+                "push",
+                remote,
+                "feature:refs/heads/alias",
+                "feature:refs/heads/xnaut/inputs/fixture",
+            ],
+        )
+        .unwrap();
+        assert!(task_base(&task, &task, remote, &source)
+            .unwrap_err()
+            .contains("Several published branches"));
         assert_eq!(task_base(&task, &root, remote, &source).unwrap(), "feature");
     }
     #[test]
@@ -890,12 +1212,14 @@ mod tests {
         let source = git(&worker, &["rev-parse", "HEAD"]).unwrap();
         let t = Transfer {
             review_parent: None,
+            repair_parent: None,
             quality: None,
             run_id: "fixture".into(),
             project: "TEST".into(),
             ticket: Some("TEST-1".into()),
             handle: "builder".into(),
             local_path: worker.to_string_lossy().into(),
+            local_branch: "task".into(),
             remote: remote.to_string_lossy().into(),
             desktop_remote: None,
             worker_remote: None,

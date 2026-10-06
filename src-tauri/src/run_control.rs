@@ -451,7 +451,13 @@ pub fn request_in(
 ) -> Result<RunManifest, String> {
     let _lock = StoreLock::acquire(dir)?;
     if manifest_path(dir, &run.run_id).exists() || journal_path(dir, &run.run_id).exists() {
-        return Err("run id already exists".into());
+        // A remote launch must know its reserved continuation ID before it
+        // stages repository receipts. Consume that exact reservation once.
+        let pending = load_manifest_in(dir, &run.run_id)?;
+        if pending.state != RunState::Requested || pending.previous_run_id.is_none()
+            || pending.previous_run_id != run.previous_run_id || pending.ticket != run.ticket
+            || pending.worktree_path != run.worktree_path || pending.branch != run.branch
+        { return Err("run id already exists".into()); }
     }
     if let Some(holder) = protected_worktree_in(dir, Path::new(&run.worktree_path))? {
         return Err(format!("worktree retained by protected run {holder}"));
@@ -1946,6 +1952,73 @@ pub fn swap_required(run: &RunManifest, requirement: &str) -> bool {
             .waiting_on
             .as_deref()
             .is_none_or(|w| w.trim().is_empty())
+}
+
+/// Bind a not-yet-launched remote worker to the native pending continuation.
+/// This happens before any repository receipt/script contains the run ID.
+pub(crate) fn bind_pending_in(dir: &Path, run: &mut RunManifest) -> Result<(), String> {
+    let Some(ticket) = run.ticket.as_deref() else { return Ok(()); };
+    let Some(pending) = continuation_in(dir,ticket)? else { return Ok(()); };
+    if pending.worktree_path != run.worktree_path { return Err("Continuation must preserve its original worktree".into()); }
+    if pending.state == RunState::Failed && pending.admission_refused {
+        run.previous_run_id = Some(pending.run_id);
+    } else if pending.state == RunState::Requested {
+        run.run_id = pending.run_id;
+        run.previous_run_id = pending.previous_run_id;
+    } else { return Err("Continuation is not eligible for admission".into()); }
+    run.branch = pending.branch;
+    Ok(())
+}
+
+/// Reserve one author repair after externally proving that the previous
+/// repository worker AND its publisher finished. No signals or guessing from
+/// terminal registry state. This shares admission's store lock and identity.
+pub(crate) fn reserve_repair_in(dir: &Path, id: &str, proof: &Proofs, at: i64) -> Result<RunManifest,String> {
+    let _lock = StoreLock::acquire(dir)?;
+    let mut previous = load_manifest_in(dir,id)?;
+    if previous.kind != RunKind::Agent || previous.ticket.is_none() { return Err("Repair requires a ticketed author run".into()); }
+    if previous.next_run_id.is_none() {
+        let children = list_ids_in(dir)?.iter().map(|id| load_manifest_in(dir,id)).collect::<Result<Vec<_>,_>>()?;
+        let matching: Vec<_> = children.iter().filter(|r| r.previous_run_id.as_deref() == Some(id) && r.ticket == previous.ticket && r.worktree_path == previous.worktree_path).collect();
+        if matching.len() > 1 { return Err("Multiple continuation identities; owner recovery required".into()); }
+        if let Some(child) = matching.first() {
+            // Only replay our reserved repair, not arbitrary successor data.
+            if child.branch != previous.branch || child.state != RunState::Requested || !child.last_signal.starts_with("independent review requested author repair after ") { return Err("Existing successor requires recovery".into()); }
+            previous.state = RunState::Retired;
+            previous.retirement = Some(Retirement { started_at:at,quiet_since:at,capture_bytes:proof.capture_bytes,requirement:String::new(),stopped_at:Some(at),dead_since:Some(at) });
+            previous.ticket_returned = true; previous.next_run_id = Some(child.run_id.clone());
+            persist_locked(dir,&mut previous)?;
+        }
+    }
+    if let Some(next) = &previous.next_run_id {
+        let child = load_manifest_in(dir,next)?;
+        if child.previous_run_id.as_deref() == Some(id) && child.ticket == previous.ticket && child.worktree_path == previous.worktree_path && child.branch == previous.branch {
+            return Ok(child);
+        }
+        return Err("Existing continuation does not match this author".into());
+    }
+    if !(proof.pid_absent && !proof.pid_alive && proof.session_known && !proof.session_alive
+        && proof.capture_known && proof.capture_quiet && proof.worktree_exists && proof.branch_matches && !proof.commit.is_empty()) {
+        return Err("Author stop/publication proof is incomplete; preserve existing work and inspect the worker".into());
+    }
+    for other_id in list_ids_in(dir)? {
+        let other = load_manifest_in(dir,&other_id)?;
+        if other.run_id != id && other.kind == RunKind::Agent && !other.state.terminal()
+            && (other.ticket == previous.ticket || other.worktree_path == previous.worktree_path) {
+            return Err("Another author owns this ticket or worktree; repair was not reserved".into());
+        }
+    }
+    let mut next = RunManifest::requested(&previous.agent_handle,&previous.runtime_id,&previous.worktree_path,previous.ticket.clone(),previous.model.clone(),&[],at);
+    next.project = previous.project.clone(); next.branch = previous.branch.clone(); next.previous_run_id = Some(previous.run_id.clone()); next.last_commit = proof.commit.clone();
+    next.last_signal = format!("independent review requested author repair after {}",previous.run_id);
+    previous.state = RunState::Retired;
+    previous.retirement = Some(Retirement { started_at:at,quiet_since:at,capture_bytes:proof.capture_bytes,requirement:String::new(),stopped_at:Some(at),dead_since:Some(at) });
+    previous.ticket_returned = true; previous.next_run_id = Some(next.run_id.clone());
+    // Persist child first. A restart recovers the same child by predecessor;
+    // callers must not replace it with a new ID after an interrupted write.
+    persist_locked(dir,&mut next)?;
+    persist_locked(dir,&mut previous)?;
+    Ok(next)
 }
 
 /// Native proof that an initial request never reached worker execution.

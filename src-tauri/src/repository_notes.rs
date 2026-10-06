@@ -108,6 +108,8 @@ fn push_in(root: &Path, snapshot: &Snapshot, remote: &str) -> Result<(), String>
 
         let t = Transfer {
             review_parent: None,
+            repair_parent: None,
+            local_branch: String::new(),
             quality: None,
             run_id: snapshot.id.clone(),
             project: snapshot.project.clone(),
@@ -252,6 +254,8 @@ pub async fn drain() {
                 .and_then(|b| serde_json::from_slice::<Transfer>(&b).ok());
             let mut transfer = existing.unwrap_or(Transfer {
                 review_parent: None,
+                repair_parent: None,
+                local_branch: String::new(),
                 quality: None,
                 run_id: snapshot.id.clone(),
                 project: snapshot.project,
