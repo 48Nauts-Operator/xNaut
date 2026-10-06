@@ -201,7 +201,7 @@ fn verification_contract(ticket: &crate::project_management::TicketRecord) -> (S
         )
     } else {
         (
-            "Read the project's `.xnaut/verify.json` at the checked-out revision and run every required command exactly as configured, plus the ticket's acceptance checks. Zero failures. Preserve command, exit code, and log evidence. Missing tools or configuration are explicit verification gaps; never substitute another project's suites or invent passing totals.".into(),
+            "Use the project's verification plan at the checked-out revision: explicit `.xnaut/verify.json` takes precedence; when absent, the native verifier supports Node auto-detection from `package.json`. Run the resolved required commands and the ticket's acceptance checks. Zero failures. Preserve command, exit code, and log evidence. Missing tools or configuration are explicit verification gaps; never substitute another project's suites or invent passing totals.".into(),
             format!("`.xnaut/bundles/{}.md` records what changed, the actual project checks and their results, how to verify by hand, and any unresolved requirements. Follow the supplied remote delivery contract for artifact location and handback when running in a sandbox.", ticket.id),
         )
     }
@@ -609,6 +609,7 @@ mod tests {
         let prompt = dispatch_prompt(&foreign, "", 90);
         assert!(prompt.contains("`.xnaut/verify.json`"));
         assert!(prompt.contains("command, exit code, and log evidence"));
+        assert!(prompt.contains("when absent, the native verifier supports Node auto-detection from `package.json`"));
         assert!(prompt.contains(".xnaut/bundles/MUSIC-1.md"));
         for unrelated in ["cargo test", "playwright test", "XNAUT_TEST_TOTALS"] {
             assert!(!prompt.contains(unrelated), "foreign project inherited {unrelated}");
