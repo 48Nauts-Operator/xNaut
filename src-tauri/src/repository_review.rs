@@ -500,6 +500,23 @@ fn read_report_in(
     Ok(report)
 }
 
+/// New reviewers require an existing project ticket even though their child
+/// runs are ticketless. Read only; never invent a ticket or relabel receipts.
+fn require_review_ticket_in(t: &Transfer, control: &Path) -> Result<(), String> {
+    let refusal = || format!("Independent review requires this parent delivery to reference an existing ticket in project {}. Register or link the real project ticket first; existing review receipts are preserved.", t.project);
+    let id = t.ticket.as_deref().filter(|id| !id.trim().is_empty()).ok_or_else(refusal)?;
+    let suffix = id.strip_prefix(&format!("{}-", t.project)).ok_or_else(refusal)?;
+    if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) { return Err(refusal()); }
+    let tickets = crate::project_management::ticket_list_in(control, Some(t.project.clone()))?;
+    if tickets.iter().filter(|ticket| ticket.id == id && ticket.project == t.project).count() != 1 {
+        return Err(refusal());
+    }
+    Ok(())
+}
+fn require_review_ticket(t: &Transfer) -> Result<(), String> {
+    require_review_ticket_in(t, &crate::project_management::repo_now()?)
+}
+
 fn current_ticket(t: &Transfer) -> Result<crate::project_management::TicketRecord, String> {
     let id = t
         .ticket
@@ -1419,6 +1436,7 @@ async fn advance_inner(
         advance_repair(app, t, q, rows).await?;
     }
     if q.state == "pending" {
+        require_review_ticket(t)?;
         if q.attempts >= 3 {
             return Err("Review retry limit reached; owner attention required".into());
         }
@@ -1508,6 +1526,9 @@ async fn advance_inner(
             crate::worker_bootstrap::Target::ExeDev => "exe-dev",
             _ => "gitvm",
         };
+        // Re-read after asynchronous preparation; an earlier queue admission
+        // cannot authorize launch after the owner removes the ticket.
+        require_review_ticket(t)?;
         let launched = crate::agent_profiles::agent_profile_launch(
             app.clone(),
             app.state(),
@@ -1814,6 +1835,7 @@ pub fn repository_review_request(run_id: String) -> Result<Transfer, String> {
     {
         return Err("Only published task PRs can be reviewed".into());
     }
+    require_review_ticket(&t)?;
     if !policy(&t.project, &t.remote)?.automatic_review {
         return Err("Enable automatic review in project settings first".into());
     }
@@ -2247,6 +2269,40 @@ mod tests {
         assert!(!prompt.contains("playwright test"));
         let mut xnaut = t; xnaut.project = "XNAUT".into();
         assert!(repair_prompt(&xnaut, &q).contains("original xNAUT ticket's suite, totals bundle, design-document"));
+    }
+
+    #[test]
+    fn reviewer_admission_requires_a_real_current_ticket_in_the_parent_project() {
+        let root = std::env::temp_dir().join(format!("xnaut-review-ticket-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("projects/TEST/tickets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ticket = json!({"id":"TEST-1","project":"TEST","title":"Registered task","type":"feature","status":"review","priority":"high","owner":"author","revision":1,"created_at":"2026-10-06T12:00:00Z","updated_at":"2026-10-06T12:00:00Z"});
+        let path = dir.join("TEST-1.json");
+        std::fs::write(&path, ticket.to_string()).unwrap();
+        let mut t: Transfer = serde_json::from_value(json!({"run_id":"author","project":"TEST","ticket":"TEST-1","handle":"author","local_path":"/fixture","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/author","state":"review","pr_url":"https://forge.test/team/app/pulls/1","error":null})).unwrap();
+        t.quality = Some(Review::default()); // automatic queue seeded by publication
+        let original = serde_json::to_value(&t).unwrap();
+        require_review_ticket_in(&t, &root).unwrap();
+        for missing in [None, Some(""), Some(" "), Some("TEST-2"), Some("OTHER-1"), Some("TEST-../1")] {
+            let mut unbound = t.clone(); unbound.ticket = missing.map(str::to_owned);
+            let before = serde_json::to_value(&unbound).unwrap();
+            let error = require_review_ticket_in(&unbound, &root).unwrap_err();
+            assert!(error.contains("Register or link the real project ticket first"));
+            assert_eq!(serde_json::to_value(&unbound).unwrap(), before);
+        }
+        let mut foreign = ticket.clone(); foreign["project"] = json!("OTHER");
+        std::fs::write(&path, foreign.to_string()).unwrap();
+        assert!(require_review_ticket_in(&t, &root).is_err());
+        std::fs::write(&path, ticket.to_string()).unwrap();
+        std::fs::write(dir.join("duplicate.json"), ticket.to_string()).unwrap();
+        assert!(require_review_ticket_in(&t, &root).is_err());
+        std::fs::remove_file(dir.join("duplicate.json")).unwrap();
+        require_review_ticket_in(&t, &root).unwrap();
+        // Removal between queue admission and final dispatch invalidates it.
+        std::fs::remove_file(&path).unwrap();
+        assert!(require_review_ticket_in(&t, &root).is_err());
+        assert_eq!(serde_json::to_value(&t).unwrap(), original);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
