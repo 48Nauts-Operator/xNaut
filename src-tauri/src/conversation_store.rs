@@ -26,7 +26,7 @@ fn allowed(key: &str) -> bool {
 }
 pub(crate) fn root() -> Result<PathBuf, String> {
     if crate::loop_acceptance::ENABLED { return Ok(crate::loop_acceptance::config()); }
-    Ok(dirs::config_dir()
+    Ok(crate::loop_acceptance::platform_config_dir()
         .ok_or("Configuration directory unavailable")?
         .join(if crate::CONTINUITY_PREVIEW { "xnaut/continuity-preview" } else if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
 }
@@ -208,6 +208,7 @@ fn legacy_files(path: &Path, depth: u8, files: &mut Vec<PathBuf>) {
     }
 }
 fn import_webkit(db: &Connection) -> Result<(), String> {
+    if crate::loop_acceptance::ENABLED {return Ok(());}
     #[cfg(target_os = "macos")]
     {
         let Some(home) = dirs::home_dir() else {

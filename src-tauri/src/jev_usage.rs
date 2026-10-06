@@ -51,7 +51,7 @@ fn read(path: &Path) -> Result<Vec<Receipt>, String> {
 #[tauri::command]
 pub async fn jev_usage() -> Result<Summary, String> {
     tokio::task::spawn_blocking(|| {
-        let root = dirs::config_dir().ok_or("configuration directory unavailable")?.join("xnaut");
+        let root = crate::loop_acceptance::platform_config_dir().ok_or("configuration directory unavailable")?.join("xnaut");
         let configured = crate::secrets::load("plugin/typesafe/TYPESAFE_API_KEY").is_some()
             || crate::plugins::plugin_env("typesafe").is_some_and(|env| env.get("TYPESAFE_API_KEY").is_some_and(|v| !v.trim().is_empty()));
         // This file is reserved for xNaut's native Jev caller. Do not import

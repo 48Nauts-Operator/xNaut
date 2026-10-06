@@ -67,7 +67,7 @@ pub fn registered_in(config: &Path) -> Result<Vec<(PathBuf, String)>, String> {
     Ok(paths)
 }
 pub fn registered() -> Result<Vec<(PathBuf, String)>, String> {
-    registered_in(&dirs::config_dir().ok_or("No config directory")?.join("xnaut"))
+    registered_in(&crate::loop_acceptance::platform_config_dir().ok_or("No config directory")?.join("xnaut"))
 }
 pub fn reason(path: &Path, registrations: &[(PathBuf, String)]) -> Option<String> {
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());

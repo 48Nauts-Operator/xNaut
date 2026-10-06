@@ -27,7 +27,7 @@ fn command_path(name: &str) -> Result<String, String> {
 }
 
 fn local_excalidraw_dir() -> Result<std::path::PathBuf, String> {
-    dirs::data_local_dir()
+    crate::loop_acceptance::platform_data_local_dir()
         .map(|root| root.join("xnaut").join("mcp").join("excalidraw-mcp"))
         .ok_or_else(|| "local application data directory is unavailable".into())
 }

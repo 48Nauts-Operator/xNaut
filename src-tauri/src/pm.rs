@@ -52,7 +52,7 @@ pub struct ExternalProject {
 }
 
 fn config_dir() -> PathBuf {
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut"))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
 }

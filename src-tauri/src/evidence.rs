@@ -50,7 +50,7 @@ pub fn dir() -> PathBuf {
     if let Some(over) = std::env::var("XNAUT_EVIDENCE_DIR").ok().filter(|v| !v.trim().is_empty()) {
         return PathBuf::from(over);
     }
-    dirs::config_dir().unwrap_or_default().join("xnaut").join("evidence")
+    crate::loop_acceptance::platform_config_dir().unwrap_or_default().join("xnaut").join("evidence")
 }
 
 pub fn log_path() -> PathBuf {
@@ -1133,7 +1133,7 @@ mod tests {
     /// `a_ticket_leads_to_the_commands_its_agent_ran`.
     #[test]
     fn a_real_session_resolves_to_the_real_commands_it_ran() {
-        let live = dirs::config_dir().unwrap_or_default().join("xnaut").join("evidence");
+        let live = crate::loop_acceptance::platform_config_dir().unwrap_or_default().join("xnaut").join("evidence");
         if !live.join("execution.jsonl").exists() {
             eprintln!("SKIPPED: no live evidence log at {}", live.display());
             return;

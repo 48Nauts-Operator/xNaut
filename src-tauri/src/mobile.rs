@@ -125,7 +125,7 @@ pub fn save_config(cfg: &MobileConfig) -> Result<(), String> {
 
 fn mobile_config_path() -> std::path::PathBuf {
     if crate::loop_acceptance::ENABLED { return crate::loop_acceptance::config().join("mobile.json"); }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut"))
         .unwrap_or_else(|| std::path::PathBuf::from(".xnaut"))
         .join("mobile.json")
@@ -764,6 +764,7 @@ async fn git_overview(
 /// Agents drop share-with-the-phone output here (HTML reports, prototypes,
 /// images). Served raw over the tailnet — no claude.ai login involved.
 fn artifacts_root() -> std::path::PathBuf {
+    if crate::loop_acceptance::ENABLED {let root=crate::loop_acceptance::root().join("vault/artifacts");let _=std::fs::create_dir_all(&root);return root;}
     let root = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".xnaut-vault/artifacts");

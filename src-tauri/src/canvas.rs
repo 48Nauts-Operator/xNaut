@@ -87,7 +87,7 @@ pub struct Canvas {
 }
 
 fn canvas_dir() -> Result<PathBuf, String> {
-    let dir = dirs::config_dir()
+    let dir = crate::loop_acceptance::platform_config_dir()
         .ok_or_else(|| "could not resolve the config directory".to_string())?
         .join("xnaut")
         .join("canvases");

@@ -164,7 +164,7 @@ pub fn policy_path() -> PathBuf {
     if let Ok(path) = std::env::var("XNAUT_VETO_POLICY") {
         return PathBuf::from(path);
     }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|dir| dir.join("xnaut").join("veto.toml"))
         .unwrap_or_else(|| PathBuf::from("veto.toml"))
 }

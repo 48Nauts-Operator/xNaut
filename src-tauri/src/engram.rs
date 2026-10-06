@@ -145,7 +145,7 @@ async fn run_consolidation(url: &str) -> Result<Value, String> {
 }
 
 fn learning_state_path() -> PathBuf {
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut").join("engram-learning.json"))
         .unwrap_or_else(|| PathBuf::from(".xnaut/engram-learning.json"))
 }

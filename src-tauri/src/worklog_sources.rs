@@ -83,7 +83,7 @@ fn root() -> PathBuf {
     {
         return PathBuf::from(over);
     }
-    dirs::config_dir().unwrap_or_default().join("xnaut")
+    crate::loop_acceptance::platform_config_dir().unwrap_or_default().join("xnaut")
 }
 
 fn overridden() -> bool {
@@ -115,7 +115,7 @@ fn verify_dir() -> PathBuf {
 
 /// Run captures are the one source NOT under the app support dir: `script(1)`
 /// writes them where `agents::run_dir` puts them, `~/.config/xnaut/agent-runs`,
-/// which on macOS is a different directory from `dirs::config_dir()`.
+/// which on macOS is a different directory from `crate::loop_acceptance::platform_config_dir()`.
 fn runs_dir() -> PathBuf {
     if overridden() {
         return root().join("agent-runs");

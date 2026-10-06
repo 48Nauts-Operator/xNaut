@@ -79,7 +79,7 @@ fn database(path: &Path) -> Result<Connection, String> {
     Ok(db)
 }
 fn path() -> Result<std::path::PathBuf, String> {
-    Ok(dirs::data_dir().ok_or("No app data directory")?.join("xnaut/voice-usage.sqlite3"))
+    Ok(crate::loop_acceptance::platform_data_dir().ok_or("No app data directory")?.join("xnaut/voice-usage.sqlite3"))
 }
 fn save_to(db: &Connection, r: &Record) -> Result<(), String> {
     let json = serde_json::to_string(r).map_err(|_| "Cannot encode voice usage")?;

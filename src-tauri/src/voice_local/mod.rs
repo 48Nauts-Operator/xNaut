@@ -51,7 +51,7 @@ impl Config {
         Ok(url)
     }
     fn load() -> Result<Self, String> {
-        let path = dirs::data_dir()
+        let path = crate::loop_acceptance::platform_data_dir()
             .ok_or("no app data directory")?
             .join("xnaut/voice-local.json");
         let metadata = std::fs::metadata(&path).map_err(|_| format!("Local voice setup required. Start the optional companion with --connection-file {}", path.display()))?;

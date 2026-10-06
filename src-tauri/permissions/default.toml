@@ -399,6 +399,7 @@ commands.allow = [
   "ticket_triage_decide",
   "ticket_triage_records",
   "pm_ticket_dispatch",
+  "loop_acceptance_plan",
   "swarm_plan_dispatch",
   "swarm_plan_stop",
   "pm_ticket_tag",

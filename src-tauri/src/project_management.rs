@@ -1177,7 +1177,7 @@ pub fn local_source_path(project: &ProjectRecord) -> String {
 }
 
 fn local_path_overrides() -> std::collections::HashMap<String, String> {
-    let Some(dir) = dirs::config_dir() else {
+    let Some(dir) = crate::loop_acceptance::platform_config_dir() else {
         return Default::default();
     };
     let path = dir.join("xnaut").join("project-paths.json");
@@ -1928,7 +1928,7 @@ pub async fn pm_project_update(
         &format!("chore(pm): update project {key}"),
     )?;
     if local_edit {
-        let dir = dirs::config_dir().ok_or("Machine configuration folder unavailable")?;
+        let dir = crate::loop_acceptance::platform_config_dir().ok_or("Machine configuration folder unavailable")?;
         write_json_atomic(&dir.join("xnaut/project-paths.json"), &paths)?;
     }
     Ok(projects_for_display(vec![record]).remove(0))

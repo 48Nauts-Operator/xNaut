@@ -76,7 +76,7 @@ fn bundled_root() -> Option<PathBuf> {
 }
 
 pub fn user_root() -> PathBuf {
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut").join("skills"))
         .unwrap_or_else(|| PathBuf::from(".xnaut/skills"))
 }

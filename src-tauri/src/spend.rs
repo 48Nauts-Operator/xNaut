@@ -79,7 +79,7 @@ pub(crate) fn config_dir() -> PathBuf {
     if let Some(root) = std::env::var_os("XNAUT_SPEND_DIR") {
         return PathBuf::from(root);
     }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut"))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
 }

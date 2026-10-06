@@ -90,7 +90,7 @@ const MODEL_FILE: &str = "ggml-base.bin";
 /// App-support path for the model. Same directory family as settings.json, so
 /// a user who clears app data clears the model too.
 pub fn model_path() -> Result<PathBuf, String> {
-    let dir = dirs::data_dir()
+    let dir = crate::loop_acceptance::platform_data_dir()
         .ok_or_else(|| "no data directory on this platform".to_string())?
         .join("xnaut");
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;

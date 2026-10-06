@@ -1411,7 +1411,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(
                 std::env::temp_dir().join(format!("xnaut-designer-holding-{}", self.slug)),
             );
-            if let Some(config) = dirs::config_dir() {
+            if let Some(config) = crate::loop_acceptance::platform_config_dir() {
                 let _ = std::fs::remove_file(
                     config
                         .join("xnaut/looms/logs")

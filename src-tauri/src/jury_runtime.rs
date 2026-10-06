@@ -129,6 +129,7 @@ pub(crate) fn use_test_config(dir: PathBuf) {
 }
 
 fn config_dir() -> Result<PathBuf, String> {
+    if crate::loop_acceptance::ENABLED {return Ok(crate::loop_acceptance::config());}
     #[cfg(test)]
     if let Some(dir) = TEST_CONFIG.with(|slot| slot.borrow().clone()) {
         return Ok(dir);
@@ -279,6 +280,7 @@ fn prepare_command(
     deny: &[PathBuf],
     deadline: i64,
 ) -> Result<Command, String> {
+    crate::loop_acceptance::refuse_local_worker()?;
     if !cfg!(target_os = "macos") {
         return Err("reviewer OS isolation unavailable on this host".into());
     }

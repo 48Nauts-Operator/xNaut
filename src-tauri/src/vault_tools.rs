@@ -26,6 +26,7 @@ pub fn vault_root() -> Result<PathBuf, String> {
     if let Some(root) = crate::vault::test_vault() {
         return Ok(root);
     }
+    if crate::loop_acceptance::ENABLED {return Ok(crate::loop_acceptance::root().join("vault"));}
     let root = dirs::home_dir()
         .ok_or_else(|| "could not resolve the home directory".to_string())?
         .join(".xnaut-vault");

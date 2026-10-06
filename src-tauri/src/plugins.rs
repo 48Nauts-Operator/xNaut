@@ -99,7 +99,7 @@ fn store_path() -> PathBuf {
             return PathBuf::from(path);
         }
     }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|dir| dir.join("xnaut").join("plugins.json"))
         .unwrap_or_else(|| PathBuf::from(".xnaut-plugins.json"))
 }

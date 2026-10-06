@@ -27,7 +27,7 @@ pub struct AuditEntry {
 }
 
 fn audit_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("xnaut").join("audit.jsonl"))
+    crate::loop_acceptance::platform_config_dir().map(|p| p.join("xnaut").join("audit.jsonl"))
 }
 
 /// Appends one entry. Never returns an error to the caller: an audit write must

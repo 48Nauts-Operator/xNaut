@@ -130,11 +130,9 @@ fn layout_kdl(cwd: &str, shell_command: &str) -> String {
 /// Writes a single-pane KDL layout that runs `shell_command` (via sh -c) in `cwd`,
 /// to ~/.config/xnaut/layouts/<session>.kdl. Returns the layout path.
 pub fn write_layout(session: &str, cwd: &str, shell_command: &str) -> Result<PathBuf, String> {
-    let dir = dirs::home_dir()
-        .ok_or_else(|| "could not resolve home directory".to_string())?
-        .join(".config")
-        .join("xnaut")
-        .join("layouts");
+    let dir = if crate::loop_acceptance::ENABLED {crate::loop_acceptance::root().join("layouts")} else {
+        dirs::home_dir().ok_or("could not resolve home directory")?.join(".config/xnaut/layouts")
+    };
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create layout dir {}: {e}", dir.display()))?;
     let path = dir.join(format!("{session}.kdl"));

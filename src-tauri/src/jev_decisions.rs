@@ -66,7 +66,7 @@ impl Config {
     }
 }
 fn root() -> Result<PathBuf, String> {
-    Ok(dirs::config_dir()
+    Ok(crate::loop_acceptance::platform_config_dir()
         .ok_or("Configuration directory unavailable")?
         .join("xnaut"))
 }

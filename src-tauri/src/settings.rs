@@ -572,7 +572,7 @@ fn shellexpand_home(path: &str) -> String {
 
 fn config_dir() -> PathBuf {
     if crate::loop_acceptance::ENABLED { return crate::loop_acceptance::config(); }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join(if crate::CONTINUITY_PREVIEW { "xnaut/continuity-preview" } else if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
 }
@@ -585,13 +585,17 @@ pub fn load_or_default() -> Settings {
     let path = settings_path();
     let mut settings = match std::fs::read_to_string(&path) {
         Ok(body) => serde_json::from_str(&body).unwrap_or_else(|e| {
+            assert!(!crate::loop_acceptance::ENABLED,"Acceptance settings became invalid; refusing owner defaults");
             eprintln!(
                 "[settings] parse error in {}: {e} — using defaults",
                 path.display()
             );
             Settings::default()
         }),
-        Err(_) => Settings::default(),
+        Err(_) => {
+            assert!(!crate::loop_acceptance::ENABLED,"Acceptance settings disappeared; refusing owner defaults");
+            Settings::default()
+        },
     };
     if migrate_legacy_nautgate_settings(&mut settings) {
         if let Err(error) = save(&settings) {

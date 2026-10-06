@@ -76,7 +76,7 @@ struct Config {
 
 impl Config {
     fn path() -> Result<std::path::PathBuf, String> {
-        Ok(dirs::data_dir()
+        Ok(crate::loop_acceptance::platform_data_dir()
             .ok_or("no app data directory")?
             .join("xnaut/voice-live.json"))
     }

@@ -249,7 +249,7 @@ cannot, and has to be taken on trust.
 /// they cannot change would be a lie. Ship a good default, let them replace
 /// it, and always show which one is active.
 pub fn override_path() -> std::path::PathBuf {
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut").join("foundation.md"))
         .unwrap_or_else(|| std::path::PathBuf::from(".xnaut/foundation.md"))
 }

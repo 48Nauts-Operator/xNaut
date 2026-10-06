@@ -86,7 +86,7 @@ pub struct LogPage {
 
 fn logs_dir() -> Option<PathBuf> {
     Some(
-        dirs::config_dir()?
+        crate::loop_acceptance::platform_config_dir()?
             .join("xnaut")
             .join("looms")
             .join("logs"),

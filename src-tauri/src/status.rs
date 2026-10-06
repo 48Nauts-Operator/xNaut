@@ -578,6 +578,13 @@ pub async fn adopt_remote_runs(sessions: &AgentSessions, app: &AppHandle) {
             }
         };
         for name in names {
+            if crate::loop_acceptance::ENABLED {
+                let owned=crate::agents::registry_dir().and_then(|dir| {
+                    crate::run_control::list_ids_in(&dir)?.into_iter().map(|id|crate::run_control::load_manifest_in(&dir,&id)).collect::<Result<Vec<_>,_>>()
+                }).is_ok_and(|runs|runs.iter().any(|r|r.pty_session.as_deref()==Some(name.as_str()) || r.zellij_session.as_deref()==Some(name.as_str())
+                    || name==crate::sandbox::launch_env::repository_session_name(&r.agent_handle,&r.run_id)));
+                if !owned {continue;}
+            }
             let meta = {
                 let mut map = sessions.lock().await;
                 if map.contains_key(&name)

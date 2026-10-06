@@ -207,7 +207,7 @@ pub struct TriageResult {
 }
 
 pub(crate) fn triage_root() -> Result<PathBuf, String> {
-    dirs::data_local_dir()
+    crate::loop_acceptance::platform_data_local_dir()
         .ok_or_else(|| "local application data directory is unavailable".to_string())
         .map(|root| root.join("xnaut").join("ticket-triage"))
 }

@@ -145,7 +145,7 @@ pub(crate) fn lease_dir() -> Result<PathBuf, String> {
     if let Some(root) = std::env::var_os("XNAUT_LEASE_DIR") {
         return Ok(PathBuf::from(root));
     }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|dir| dir.join("xnaut").join("worktree-leases"))
         .ok_or_else(|| "could not resolve the config directory".to_string())
 }

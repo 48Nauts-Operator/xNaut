@@ -2714,9 +2714,19 @@ pub mod exe {
         "ConnectTimeout=15",
     ];
 
+    // Acceptance may read existing SSH identities/trust but cannot add host keys
+    // or attach to the owner's ControlMaster sockets. Production flags unchanged.
+    fn ssh_opts()->Vec<String> {
+        let mut out=Vec::new();
+        if crate::loop_acceptance::ENABLED {
+            for value in ["-o","StrictHostKeyChecking=yes","-o","UpdateHostKeys=no","-o","ControlMaster=no","-o","ControlPath=none"] {out.push(value.into());}
+        }
+        out.extend(SSH_OPTS.iter().map(|s|s.to_string()));out
+    }
+
     fn ssh(dest: &str, command: &str) -> Result<std::process::Output, String> {
         std::process::Command::new("ssh")
-            .args(SSH_OPTS)
+            .args(ssh_opts())
             .arg(dest)
             .arg(command)
             .output()
@@ -2910,7 +2920,7 @@ pub mod exe {
                 "--exclude",
                 "node_modules",
                 "-e",
-                &format!("ssh {}", SSH_OPTS.join(" ")),
+                &format!("ssh {}", ssh_opts().join(" ")),
                 &format!("{}/", dir.display()),
                 &format!("{host}:{workdir}/"),
             ])
@@ -2936,7 +2946,7 @@ pub mod exe {
         use std::io::Write;
         use std::process::Stdio;
         let mut child = std::process::Command::new("ssh")
-            .args(SSH_OPTS)
+            .args(ssh_opts())
             .args(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"])
             .arg(vm_host())
             .arg(format!("timeout {seconds}s bash -lc {}", shell_single_quote(command)))
@@ -3188,7 +3198,7 @@ print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase}))
 
     fn remote_pty_argv(remote: &str) -> Vec<String> {
         let mut argv: Vec<String> = vec!["ssh".into()];
-        argv.extend(SSH_OPTS.iter().map(|opt| opt.to_string()));
+        argv.extend(ssh_opts().iter().map(|opt| opt.to_string()));
         argv.extend(KEEPALIVE.iter().map(|opt| opt.to_string()));
         argv.push("-tt".into());
         argv.push(vm_host());

@@ -246,8 +246,9 @@ pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub fn vault_init() -> Result<String, String> {
-    let home = dirs::home_dir().ok_or("no home dir")?;
-    let root = home.join(".xnaut-vault");
+    let root = if crate::loop_acceptance::ENABLED {crate::loop_acceptance::root().join("vault")} else {
+        dirs::home_dir().ok_or("no home dir")?.join(".xnaut-vault")
+    };
     for v in ["work", "personal"] {
         std::fs::create_dir_all(root.join(v).join("_inbox")).map_err(|e| e.to_string())?;
     }
@@ -754,6 +755,7 @@ pub fn vault_tag_notes(
 /// hardcoded, last-write-wins - one human, one machine.
 #[tauri::command]
 pub async fn vault_sync(direction: String) -> Result<String, String> {
+    if crate::loop_acceptance::ENABLED {return Err("Acceptance vault cannot synchronize with the owner's bucket".into());}
     let home = dirs::home_dir().ok_or("no home dir")?;
     let root = home.join(".xnaut-vault").to_string_lossy().into_owned();
     let bucket = "cosmos/xnaut-vault".to_string();

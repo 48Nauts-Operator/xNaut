@@ -3311,7 +3311,7 @@ mod tests {
         let outcome = run_turn(&llm, "gpt-5.6-sol", messages, None, &[], &key).await;
         let canvas = crate::canvas::load(&key);
         let _ = std::fs::remove_file(
-            dirs::config_dir().unwrap().join("xnaut").join("canvases").join(format!("{key}.json")),
+            crate::loop_acceptance::platform_config_dir().unwrap().join("xnaut").join("canvases").join(format!("{key}.json")),
         );
 
         let TurnOutcome { text, performed, .. } = outcome.expect("the turn should finish");

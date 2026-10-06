@@ -123,7 +123,7 @@ impl AgentRegistry {
 }
 
 fn config_dir() -> PathBuf {
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut"))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
 }
@@ -888,7 +888,7 @@ done
 exec /usr/bin/open "$@"
 "#;
     use std::os::unix::fs::PermissionsExt;
-    let dir = dirs::config_dir()?.join("xnaut").join("bin");
+    let dir = crate::loop_acceptance::platform_config_dir()?.join("xnaut").join("bin");
     std::fs::create_dir_all(&dir).ok()?;
     let script = dir.join("open");
     if std::fs::read_to_string(&script).ok().as_deref() != Some(SHIM) {
@@ -1454,11 +1454,9 @@ fn shell_quote(value: &str) -> String {
 
 /// Where a zellij-backed run keeps its script, its clean output and its errors.
 pub(crate) fn run_dir() -> Result<std::path::PathBuf, String> {
-    let dir = dirs::home_dir()
-        .ok_or_else(|| "could not resolve the home directory".to_string())?
-        .join(".config")
-        .join("xnaut")
-        .join("agent-runs");
+    let dir = if crate::loop_acceptance::ENABLED { crate::loop_acceptance::root().join("agent-runs") } else {
+        dirs::home_dir().ok_or("could not resolve home directory")?.join(".config/xnaut/agent-runs")
+    };
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create the run directory: {e}"))?;
     Ok(dir)
@@ -1780,6 +1778,7 @@ fn apply_preflight_trust(trust: PreflightTrust, worktree_path: &str) {
 /// The second gemini launch on tron (2026-09-06 14:51) parked on that dialog
 /// after the first had died on its argv. Same treatment as codex and Claude.
 fn accept_gemini_folder_trust(worktree_path: &str) -> Result<(), String> {
+    crate::loop_acceptance::refuse_local_worker()?;
     let dir = std::fs::canonicalize(worktree_path)
         .unwrap_or_else(|_| std::path::PathBuf::from(worktree_path));
     let store = dirs::home_dir()
@@ -1814,6 +1813,7 @@ fn write_gemini_folder_trust(store: &std::path::Path, dir: &str) -> Result<(), S
 /// pre-trusted for Claude Code. Idempotent; the path is codex's own spelling,
 /// canonicalised.
 fn accept_codex_project_trust(worktree_path: &str) -> Result<(), String> {
+    crate::loop_acceptance::refuse_local_worker()?;
     let dir = std::fs::canonicalize(worktree_path)
         .unwrap_or_else(|_| std::path::PathBuf::from(worktree_path));
     let config = dirs::home_dir()
@@ -1883,6 +1883,7 @@ fn write_claude_project_trust(
 /// Record that decision before Claude starts so its TUI cannot consume the
 /// prompt while waiting at the otherwise invisible first-run trust screen.
 fn accept_claude_project_trust(worktree_path: &str) -> Result<(), String> {
+    crate::loop_acceptance::refuse_local_worker()?;
     let config = dirs::home_dir()
         .ok_or_else(|| "home directory is unavailable".to_string())?
         .join(".claude.json");
@@ -1975,6 +1976,7 @@ pub(crate) async fn launch_agent_with_env(
     app: AppHandle, state: State<'_, AppState>, req: LaunchAgentRequest,
     identity_env: HashMap<String,String>, launch_identity: Option<AgentLaunchIdentity>,
 ) -> Result<LaunchAgentResponse,String> {
+    crate::loop_acceptance::refuse_local_worker()?;
     use crate::run_control::{self, RunManifest, RunState};
     let dir = registry_dir()?;
     let handle = launch_identity.as_ref().map(|i| i.id.as_str()).unwrap_or(&req.agent_id);

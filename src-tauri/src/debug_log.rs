@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 const CAP_BYTES: u64 = 2_000_000; // trim to last ~1 MB once we cross 2 MB
 
 fn config_dir() -> PathBuf {
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut"))
         .unwrap_or_else(|| PathBuf::from(".xnaut"))
 }

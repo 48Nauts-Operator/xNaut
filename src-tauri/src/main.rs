@@ -233,7 +233,7 @@ async fn main() {
             msg
         );
         eprintln!("{line}");
-        if let Some(dir) = dirs::data_dir() {
+        if let Some(dir) = crate::loop_acceptance::platform_data_dir() {
             let p = dir.join("xnaut");
             let _ = std::fs::create_dir_all(&p);
             if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -637,6 +637,7 @@ async fn main() {
             ticket_triage::ticket_triage_records,
             // Sandbox verify (XNAUT-19)
             dispatch::pm_ticket_dispatch,
+            loop_acceptance::loop_acceptance_plan,
             swarm_plan::swarm_plan_dispatch,
             swarm_plan::swarm_plan_stop,
             project_management::pm_ticket_tag,
@@ -746,11 +747,11 @@ async fn main() {
         .setup(|app| {
             // Journal capture is passive and runs for all projects, including previews.
             std::thread::spawn(project_wiki::journal::capture_loop);
-            if !FULL_WIKI_PREVIEW {
+            if !FULL_WIKI_PREVIEW && !loop_acceptance::ENABLED {
             // Credentials and evidence live here; nobody else on this machine
             // needs read access. Idempotent, and it also closes files written
             // by earlier versions (XNAUT-213).
-            if let Some(dir) = dirs::config_dir().map(|d| d.join("xnaut")) {
+            if let Some(dir) = crate::loop_acceptance::platform_config_dir().map(|d| d.join("xnaut")) {
                 secrets::harden(&dir);
             }
 
@@ -1024,7 +1025,7 @@ async fn main() {
                     voice::release_window(handle.state::<state::AppState>().inner(), &label).await;
                 });
             }
-            if !FULL_WIKI_PREVIEW && matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+            if !FULL_WIKI_PREVIEW && !loop_acceptance::ENABLED && matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
                 let _ = mcp::stop_local_excalidraw_process();
             }
         });

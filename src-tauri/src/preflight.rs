@@ -484,7 +484,7 @@ mod tests {
     #[ignore]
     fn reads_this_machine_without_touching_it() {
         let temp = std::env::temp_dir().join(format!("preflight-{}.toml", uuid::Uuid::new_v4()));
-        let real = dirs::config_dir()
+        let real = crate::loop_acceptance::platform_config_dir()
             .map(|p| p.join("xnaut").join("agents.toml"))
             .expect("a config dir");
         if real.is_file() {

@@ -150,7 +150,7 @@ fn inbox_dir() -> std::path::PathBuf {
     #[cfg(test)]
     if let Some(dir) = TEST_INBOX_DIR.with(|slot| slot.borrow().clone()) { return dir; }
     if let Some(path)=std::env::var_os("XNAUT_INBOX_DIR") { return path.into(); }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut").join("inbox"))
         .unwrap_or_else(|| std::path::PathBuf::from(".xnaut/inbox"))
 }

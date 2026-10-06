@@ -112,7 +112,7 @@ fn records_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("XNAUT_VERIFY_DIR") {
         return path.into();
     }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|p| p.join("xnaut").join("sandbox-verify").join("records"))
         .unwrap_or_else(|| PathBuf::from(".xnaut-sandbox-verify"))
 }

@@ -515,7 +515,7 @@ fn delete_legacy_profile(rel: &str) -> Result<(), String> {
 
 fn profile_store_path() -> PathBuf {
     if crate::loop_acceptance::ENABLED { return crate::loop_acceptance::config().join("agent-profiles.toml"); }
-    dirs::config_dir()
+    crate::loop_acceptance::platform_config_dir()
         .map(|path| path.join("xnaut").join("agent-profiles.toml"))
         .unwrap_or_else(|| PathBuf::from(".xnaut/agent-profiles.toml"))
 }
@@ -2978,7 +2978,7 @@ pub async fn agent_remote_attach(
 pub fn agent_scratch_workspace(handle: String) -> Result<String, String> {
     let handle = normalize_handle(&handle);
     validate_handle(&handle)?;
-    let config = dirs::config_dir()
+    let config = crate::loop_acceptance::platform_config_dir()
         .ok_or_else(|| "could not resolve the config directory".to_string())?;
     let dir = scratch_workspace_in(&config, &handle)?;
     Ok(dir.to_string_lossy().into_owned())
