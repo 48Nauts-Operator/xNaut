@@ -71,6 +71,19 @@ jobs:
             ~/.cargo/git
             src-tauri/target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Remove cached application packages before rebuilding
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Reuse compiled dependencies, never a previous release's packages.
+          # Cargo and every verification step still run on the checked-out source.
+          rm -rf -- "src-tauri/target/${{ matrix.target }}/release/bundle"
+          rm -f -- "src-tauri/target/${{ matrix.target }}/release/xnaut" \
+            "src-tauri/target/${{ matrix.target }}/release/xnaut.exe"
+          rm -f -- src-tauri/target/xNAUT-*
 
       # Import the Developer ID Application cert into a throwaway keychain so
       # `cargo tauri build` can codesign. Skipped automatically if the secret is
