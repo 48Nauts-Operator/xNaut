@@ -596,12 +596,25 @@ fn reserve_repair_at(
     proof: &crate::run_control::Proofs,
     now: i64,
 ) -> Result<(), String> {
+    reserve_repair_at_admitted(store, registry, t, q, author_id, proof, now, |_| Ok(()))
+}
+fn reserve_repair_at_admitted(
+    store: &Path,
+    registry: &Path,
+    t: &mut Transfer,
+    q: &mut Review,
+    author_id: &str,
+    proof: &crate::run_control::Proofs,
+    now: i64,
+    admit: impl FnOnce(&crate::run_control::RunManifest) -> Result<(), String>,
+) -> Result<(), String> {
     if q.repair_attempts >= MAX_REPAIR_ATTEMPTS {
         return Err(
             "Author repair limit reached; owner must inspect the remaining findings".into(),
         );
     }
-    let next = crate::run_control::reserve_repair_in(registry, author_id, proof, now)?;
+    let next =
+        crate::run_control::reserve_repair_admitted_in(registry, author_id, proof, now, admit)?;
     if next.state != crate::run_control::RunState::Requested {
         return Err("Reserved author already started; recover its existing receipt instead of launching again".into());
     }
@@ -629,14 +642,16 @@ fn reserve_repair(t: &mut Transfer, q: &mut Review, rows: &[Transfer]) -> Result
     }
     let author = author_for(t, q, rows)?.clone();
     let proof = stopped_author_proof(t, q, &author)?;
-    reserve_repair_at(
+    let registry = crate::agents::registry_dir()?;
+    reserve_repair_at_admitted(
         &transfer::store_dir()?,
-        &crate::agents::registry_dir()?,
+        &registry,
         t,
         q,
         &author.run_id,
         &proof,
         crate::run_control::now_ms(),
+        |next| crate::swarm_plan::worker_admission_in(&registry, next, Some(&author.run_id)),
     )
 }
 /// Process a published fix without erasing the preceding review. Metadata-only
@@ -690,7 +705,14 @@ async fn advance_repair(
         if now < q.next_attempt_at {
             return Ok(());
         }
-        reserve_repair(t, q, rows)?;
+        if let Err(error) = reserve_repair(t, q, rows) {
+            if error.starts_with("worker capacity:") {
+                q.next_attempt_at = now + REPAIR_BACKOFF_MS;
+                persist(t, q, &format!("Author repair queued: {error}"), None)?;
+                return Ok(());
+            }
+            return Err(error);
+        }
     }
     if q.state == "repair_reserved" {
         repair_authorized(t, q)?;
@@ -1133,7 +1155,34 @@ async fn advance_inner(
             "ralph"
         }
         .into();
-        crate::agent_profiles::agent_profile_get(q.reviewer.clone())?;
+        let reviewer = crate::agent_profiles::agent_profile_get(q.reviewer.clone())?;
+        let candidate = crate::run_control::RunManifest::requested(
+            &q.reviewer,
+            &reviewer.runtime_id,
+            &t.local_path,
+            None,
+            Some(reviewer.model),
+            &[],
+            crate::run_control::now_ms(),
+        );
+        let registry = crate::agents::registry_dir()?;
+        if let Err(error) = crate::run_control::under_admission_lock_in(&registry, || {
+            crate::swarm_plan::worker_admission_for_ticket_in(
+                &registry,
+                &candidate,
+                None,
+                t.ticket.as_deref(),
+            )
+        }) {
+            if error.starts_with("worker capacity:") {
+                let reason = format!("Independent reviewer queued: {error}");
+                if q.message != reason {
+                    persist(t, q, &reason, None)?;
+                }
+                return Ok(());
+            }
+            return Err(error);
+        }
         q.head = ref_sha(t, &format!("refs/heads/{}", t.branch))?;
         q.base = ref_sha(t, &format!("refs/heads/{}", t.base))?;
         let root = crate::sandbox::launch_env::project_root(Path::new(&t.local_path));
@@ -1204,7 +1253,20 @@ async fn advance_inner(
                 environment: Some(environment.into()),
             },
         )
-        .await?;
+        .await;
+        let launched = match launched {
+            Ok(launched) => launched,
+            Err(error) if error.starts_with("worker capacity:") => {
+                // Native request_in durably marked this admission refused
+                // before worker execution. Keep the worktree/evidence; no
+                // actual reviewer attempt was spent racing another refill.
+                q.state = "pending".into();
+                q.attempts = q.attempts.saturating_sub(1);
+                persist(t, q, &format!("Independent reviewer queued: {error}"), None)?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         q.child = Some(
             launched
                 .run_id
@@ -2330,6 +2392,103 @@ mod repair_loop_tests {
         assert_eq!(f.q.state, "blocked");
         assert_eq!(f.q.events.last().unwrap().reason, reason);
         assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn shared_native_capacity_serializes_repair_refill_and_counts_ticketless_reviewers() {
+        let mut f = Fixture::new();
+        f.review("review-red", 1);
+        let reviewer_path = f.root.join("live-reviewer");
+        let refill_path = f.root.join("queued-member");
+        std::fs::create_dir_all(&reviewer_path).unwrap();
+        std::fs::create_dir_all(&refill_path).unwrap();
+        let reviewer = RunManifest::requested(
+            "reviewer",
+            "fixture",
+            reviewer_path.to_str().unwrap(),
+            None,
+            None,
+            &[],
+            100,
+        );
+        let reviewer = run_control::request_in(&f.registry, reviewer, || Ok(())).unwrap();
+        assert_eq!(run_control::worker_count_in(&f.registry).unwrap(), 1);
+        let author = f.parent.run_id.clone();
+        let proof = f.proof();
+        let registry = f.registry.clone();
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let repair_start = start.clone();
+        let repair = std::thread::spawn(move || {
+            repair_start.wait();
+            run_control::reserve_repair_admitted_in(&registry, &author, &proof, 200, |next| {
+                run_control::worker_capacity_in(&registry, 2, &next.run_id, Some(&author))
+            })
+        });
+        let refill = RunManifest::requested(
+            "another-author",
+            "fixture",
+            refill_path.to_str().unwrap(),
+            Some("TEST-2".into()),
+            None,
+            &[],
+            200,
+        );
+        let own = refill.run_id.clone();
+        start.wait();
+        let refill = run_control::request_in(&f.registry, refill, || {
+            run_control::worker_capacity_in(&f.registry, 2, &own, None)
+        });
+        let repair = repair.join().unwrap();
+        assert_ne!(
+            repair.is_ok(),
+            refill.is_ok(),
+            "exactly one worker may consume the last slot"
+        );
+        assert_eq!(run_control::worker_count_in(&f.registry).unwrap(), 2);
+        let ids = run_control::list_ids_in(&f.registry).unwrap();
+        let persisted: Vec<_> = ids
+            .iter()
+            .map(|id| run_control::load_manifest_in(&f.registry, id).unwrap())
+            .collect();
+        assert_eq!(
+            persisted
+                .iter()
+                .filter(|r| matches!(
+                    r.kind,
+                    run_control::RunKind::Agent | run_control::RunKind::Review
+                ) && !r.state.terminal())
+                .count(),
+            2,
+            "restart reconstructs identical occupancy"
+        );
+        if let Ok(next) = repair {
+            assert_eq!(
+                next.state,
+                RunState::Requested,
+                "repair reserves capacity before launch"
+            );
+            assert!(
+                run_control::under_admission_lock_in(&f.registry, || {
+                    run_control::worker_capacity_in(&f.registry, 2, &next.run_id, None)
+                })
+                .is_ok(),
+                "the pending successor consumes its own slot only once"
+            );
+        } else {
+            assert!(
+                run_control::load_manifest_in(&f.registry, &f.parent.run_id)
+                    .unwrap()
+                    .next_run_id
+                    .is_none(),
+                "refused repair never invents a continuation"
+            );
+        }
+        run_control::update_in(&f.registry, &reviewer.run_id, |r| r.state = RunState::Done)
+            .unwrap();
+        assert!(run_control::under_admission_lock_in(&f.registry, || {
+            run_control::worker_capacity_in(&f.registry, 2, "next-worker", None)
+        })
+        .is_ok());
     }
 
     #[test]

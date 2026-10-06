@@ -45,6 +45,12 @@ pub struct PlannedRun {
     pub scope: String,
     #[serde(default)]
     pub repository_root: Option<String>,
+    #[serde(default)]
+    pub runtime_id: Option<String>,
+    #[serde(default)]
+    pub environment: Option<String>,
+    #[serde(default)]
+    pub repository_remote: Option<String>,
 }
 
 /// A ticket that was asked for and is not in the plan, and why.
@@ -188,6 +194,9 @@ pub fn plan_from(
             model: model.clone(),
             scope: scope(ticket),
             repository_root: None,
+            runtime_id: None,
+            environment: None,
+            repository_remote: None,
         });
     }
 
@@ -483,12 +492,162 @@ fn authorized_member(
         {
             return true;
         }
-        let Some(previous) = manifest.previous_run_id else {
+        let Some(previous) = manifest.previous_run_id.as_deref() else {
             return false;
         };
-        id = previous;
+        let Ok(prior) = crate::run_control::load_manifest_in(registry, previous) else {
+            return false;
+        };
+        if prior.next_run_id.as_deref() != Some(manifest.run_id.as_str())
+            || prior.project != manifest.project
+            || prior.ticket != manifest.ticket
+            || prior.branch != manifest.branch
+            || prior.worktree_path != manifest.worktree_path
+            || prior.agent_handle != manifest.agent_handle
+        {
+            return false;
+        }
+        id = previous.to_owned();
     }
     false
+}
+
+/// Shared by refill and every repair/reviewer admission. Legacy approvals
+/// without runtime/environment pins require renewed approval, never guessing.
+fn current_pins(run: &PlannedRun, project: &str) -> Result<bool, String> {
+    let repo = crate::project_management::repo_now()?;
+    let projects = crate::project_management::list_projects(&repo)?;
+    let Some(p) = projects.iter().find(|p| p.key == project) else {
+        return Ok(false);
+    };
+    let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())?;
+    let root = Path::new(crate::project_management::local_source_path(p).trim())
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let environment = crate::sandbox::launch_env::resolve(
+        profile.execution.pinned_environment(),
+        &crate::settings::load_or_default().sandboxes,
+    );
+    Ok(!p.owner_only
+        && pins_match(
+            run,
+            root.to_str(),
+            &p.forge_remote,
+            &profile.model,
+            &profile.runtime_id,
+            environment.key(),
+        ))
+}
+fn pins_match(
+    run: &PlannedRun,
+    root: Option<&str>,
+    remote: &str,
+    model: &str,
+    runtime: &str,
+    environment: &str,
+) -> bool {
+    run.repository_root.as_deref() == root
+        && root.is_some()
+        && run.repository_remote.as_deref() == Some(remote)
+        && run.model == model
+        && run.runtime_id.as_deref() == Some(runtime)
+        && run.environment.as_deref() == Some(environment)
+}
+
+/// Called while native StoreLock is held, before a Requested worker becomes
+/// admitted or a repair successor consumes a slot. Includes ticketless reviewers.
+pub(crate) fn worker_admission_in(
+    registry: &Path,
+    run: &crate::run_control::RunManifest,
+    replacing: Option<&str>,
+) -> Result<(), String> {
+    worker_admission_for_ticket_in(registry, run, replacing, None)
+}
+pub(crate) fn worker_admission_for_ticket_in(
+    registry: &Path,
+    run: &crate::run_control::RunManifest,
+    replacing: Option<&str>,
+    review_ticket: Option<&str>,
+) -> Result<(), String> {
+    let groups = groups_in(registry, None)?;
+    let mut ticket = run
+        .ticket
+        .clone()
+        .or_else(|| review_ticket.map(str::to_owned));
+    if ticket.is_none() {
+        if let Some(parent) = crate::repository_transfer::list()?.iter().find(|t| {
+            t.quality
+                .as_ref()
+                .is_some_and(|q| q.worktree == run.worktree_path && q.reviewer == run.agent_handle)
+        }) {
+            ticket = parent.ticket.clone();
+        }
+    }
+    let mut cap = crate::spend::load_ceiling().max_concurrent as usize;
+    if let Some(ticket) = ticket {
+        if let Some(group) = groups
+            .iter()
+            .filter(|g| g.approved_at.is_some() && g.members.iter().any(|m| m.ticket == ticket))
+            .max_by_key(|g| g.approved_at)
+        {
+            if group.stopped_at.is_some() {
+                return Err("Approved group was stopped; worker admission refused".into());
+            }
+            let (planned, member) = group
+                .plan
+                .runs
+                .iter()
+                .zip(&group.members)
+                .find(|(p, _)| p.ticket == ticket)
+                .ok_or("Group membership is inconsistent")?;
+            let repo = crate::project_management::repo_now()?;
+            let current =
+                crate::project_management::ticket_list_in(&repo, Some(group.plan.project.clone()))?
+                    .into_iter()
+                    .find(|t| t.id == ticket)
+                    .ok_or("Group ticket unavailable")?;
+            if !authorized_member(registry, planned, member, &current)
+                || !current_pins(planned, &group.plan.project)?
+            {
+                return Err(
+                    "Approved group owner, scope, repository, runtime or environment changed"
+                        .into(),
+                );
+            }
+            if run.ticket.is_some()
+                && (run.agent_handle != planned.owner
+                    || run.runtime_id != planned.runtime_id.as_deref().unwrap_or("")
+                    || run.model.as_deref().unwrap_or("") != planned.model
+                    || run.remote_env.as_deref().unwrap_or("local")
+                        != planned.environment.as_deref().unwrap_or(""))
+            {
+                return Err("Native author identity differs from the approved group".into());
+            }
+            let profile_cap = crate::agent_profiles::agent_profile_get(
+                crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.into(),
+            )?
+            .max_parallel as usize;
+            cap = cap
+                .min(group.plan.max_parallel)
+                .min(profile_cap.clamp(1, HARD_CAP));
+        }
+    }
+    let pending = run
+        .ticket
+        .as_deref()
+        .map(|ticket| crate::run_control::continuation_in(registry, ticket))
+        .transpose()?
+        .flatten();
+    let own = pending
+        .as_ref()
+        .filter(|p| {
+            p.worktree_path == run.worktree_path
+                && p.branch == run.branch
+                && p.state == crate::run_control::RunState::Requested
+        })
+        .map(|p| p.run_id.as_str())
+        .unwrap_or(&run.run_id);
+    crate::run_control::worker_capacity_in(registry, cap, own, replacing)
 }
 
 pub(crate) fn authorizes_ticket_repair(
@@ -502,15 +661,27 @@ pub(crate) fn authorizes_ticket_repair(
     let Some(current) = tickets.iter().find(|t| t.id == ticket) else {
         return Ok(false);
     };
-    Ok(groups_in(&registry, Some(project))?.iter().any(|g| {
-        g.approved_at.is_some()
-            && g.stopped_at.is_none()
-            && g.plan.runs.iter().zip(&g.members).any(|(r, m)| {
-                r.ticket == ticket
-                    && r.owner == owner
-                    && authorized_member(&registry, r, m, current)
-            })
-    }))
+    let groups = groups_in(&registry, Some(project))?;
+    let Some(group) = groups
+        .iter()
+        .filter(|g| g.approved_at.is_some() && g.members.iter().any(|m| m.ticket == ticket))
+        .max_by_key(|g| g.approved_at)
+    else {
+        return Ok(false);
+    };
+    if group.stopped_at.is_some() {
+        return Ok(false);
+    }
+    for (run, member) in group.plan.runs.iter().zip(&group.members) {
+        if run.ticket == ticket
+            && run.owner == owner
+            && authorized_member(&registry, run, member, current)
+            && current_pins(run, project)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 // One filesystem lease across confirms, the sweep, and other app instances. A crashed
@@ -598,8 +769,23 @@ pub fn build(project: &str, requested: &[String]) -> Result<SwarmPlan, String> {
         .map_err(|e| e.to_string())?
         .to_string_lossy()
         .to_string();
+    let settings = crate::settings::load_or_default();
     for run in &mut plan.runs {
+        let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())?;
         run.repository_root = Some(root.clone());
+        run.runtime_id = Some(profile.runtime_id.clone());
+        run.environment = Some(
+            crate::sandbox::launch_env::resolve(
+                profile.execution.pinned_environment(),
+                &settings.sandboxes,
+            )
+            .key()
+            .into(),
+        );
+        run.repository_remote = projects
+            .iter()
+            .find(|p| p.key == project)
+            .map(|p| p.forge_remote.clone());
     }
     Ok(plan)
 }
@@ -695,6 +881,7 @@ fn slot_available(member: &Member, live: usize, cap: usize) -> bool {
 }
 
 fn recover_member(
+    registry: &Path,
     group: &mut Group,
     i: usize,
     snapshot: &crate::project_continuity::ProjectSnapshot,
@@ -707,6 +894,28 @@ fn recover_member(
         .filter(|a| a.ticket.as_deref() == Some(ticket.as_str()))
         .collect();
     if !assignments.is_empty() {
+        if group.members[i].started.is_none()
+            && assignments
+                .iter()
+                .filter_map(|a| crate::run_control::load_manifest_in(registry, &a.run_id).ok())
+                .any(|r| {
+                    assignments.iter().all(|a| a.run_id == r.run_id)
+                        && crate::run_control::initial_admission_refused(&r)
+                        && r.last_signal
+                            .starts_with("admission failed: worker capacity:")
+                })
+        {
+            transition(
+                group,
+                i,
+                MemberState::Queued,
+                "capacity refusal proved no worker started; retry existing native continuation"
+                    .into(),
+                None,
+                now,
+            );
+            return false;
+        }
         let active = assignments
             .iter()
             .find(|a| a.run_state.is_some_and(|s| !s.terminal()));
@@ -780,6 +989,7 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
                         .is_some_and(|root| run.repository_root.as_deref() == root.to_str())
             });
             if !project_allowed
+                || !current_pins(&run, &group.plan.project)?
                 || current.is_none_or(|t| !authorized_member(&registry, &run, &group.members[i], t))
             {
                 let id = group.members[i].run_id.clone();
@@ -794,7 +1004,7 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
                 save_in(&registry, &group)?;
                 continue;
             }
-            if recover_member(&mut group, i, &snapshot, now) {
+            if recover_member(&registry, &mut group, i, &snapshot, now) {
                 save_in(&registry, &group)?;
                 continue;
             }
@@ -813,7 +1023,6 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
                 save_in(&registry, &group)?;
                 continue;
             }
-            let live = crate::run_control::live_tickets_in(&registry)?;
             let profile_cap = crate::agent_profiles::agent_profile_get(
                 crate::agent_profiles::RESERVED_NAUTBOT_HANDLE.into(),
             )
@@ -821,7 +1030,7 @@ pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
             .unwrap_or(DEFAULT_MAX_PARALLEL);
             if !slot_available(
                 &group.members[i],
-                live.len(),
+                crate::run_control::worker_count_in(&registry)?,
                 group.plan.max_parallel.min(profile_cap.clamp(1, HARD_CAP)),
             ) {
                 transition(
@@ -926,8 +1135,10 @@ pub fn swarm_plan_stop(plan_id: String) -> Result<Group, String> {
     let path = path_in(&registry, plan_id.trim())?;
     let mut group: Group = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    stop(&mut group, crate::run_control::now_ms());
-    save_in(&registry, &group)?;
+    crate::run_control::under_admission_lock_in(&registry, || {
+        stop(&mut group, crate::run_control::now_ms());
+        save_in(&registry, &group)
+    })?;
     Ok(group)
 }
 
@@ -1235,6 +1446,84 @@ mod tests {
     }
 
     #[test]
+    fn persisted_approval_pins_repository_runtime_and_resolved_environment() {
+        let dir = scratch();
+        let original = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
+        let mut plan = plan_from(
+            "pins",
+            "XNAUT",
+            &[],
+            &board(&[original], &models(), &HashSet::new()),
+            2,
+            0,
+        )
+        .unwrap();
+        let run = &mut plan.runs[0];
+        run.repository_root = Some("/approved/repository".into());
+        run.repository_remote = Some("ssh://forge/team/repo.git".into());
+        run.runtime_id = Some("claude-code".into());
+        run.environment = Some("gitvm".into());
+        remember_in(&dir, plan).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        approve(&mut group, 1);
+        save_in(&dir, &group).unwrap();
+        let group = groups_in(&dir, None).unwrap().remove(0);
+        let run = &group.plan.runs[0];
+        assert!(pins_match(
+            run,
+            Some("/approved/repository"),
+            "ssh://forge/team/repo.git",
+            &run.model,
+            "claude-code",
+            "gitvm"
+        ));
+        for field in ["root", "remote", "model", "runtime", "environment"] {
+            assert!(
+                !pins_match(
+                    run,
+                    Some(if field == "root" {
+                        "/changed"
+                    } else {
+                        "/approved/repository"
+                    }),
+                    if field == "remote" {
+                        "ssh://different/team/repo.git"
+                    } else {
+                        "ssh://forge/team/repo.git"
+                    },
+                    if field == "model" {
+                        "changed-model"
+                    } else {
+                        &run.model
+                    },
+                    if field == "runtime" {
+                        "changed-runtime"
+                    } else {
+                        "claude-code"
+                    },
+                    if field == "environment" {
+                        "exe-dev"
+                    } else {
+                        "gitvm"
+                    }
+                ),
+                "{field}"
+            );
+        }
+        let mut legacy = run.clone();
+        legacy.runtime_id = None;
+        assert!(!pins_match(
+            &legacy,
+            Some("/approved/repository"),
+            "ssh://forge/team/repo.git",
+            &run.model,
+            "claude-code",
+            "gitvm"
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn scope_owner_and_owner_only_changes_revoke_group_authorization() {
         let original = ticket("XNAUT-1", "XNAUT", "ready", Some("claude"));
         let plan = plan_from(
@@ -1302,7 +1591,7 @@ mod tests {
                 "project":"XNAUT","observed_at":3,"tickets":[],"assignments":[],"diagnostics":[]
             }))
             .unwrap();
-        assert!(recover_member(&mut restarted, 0, &snapshot, 3));
+        assert!(recover_member(&dir, &mut restarted, 0, &snapshot, 3));
         assert_eq!(restarted.members[0].state, MemberState::Blocked);
         crate::project_continuity::add_launch_receipt(
             &mut snapshot,
@@ -1312,7 +1601,7 @@ mod tests {
             }),
             "test receipt",
         );
-        assert!(recover_member(&mut restarted, 0, &snapshot, 4));
+        assert!(recover_member(&dir, &mut restarted, 0, &snapshot, 4));
         assert_eq!(restarted.members[0].run_id.as_deref(), Some("original-run"));
         assert_ne!(
             restarted.members[0].state,

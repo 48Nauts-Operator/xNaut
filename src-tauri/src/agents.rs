@@ -1983,7 +1983,9 @@ pub(crate) async fn launch_agent_with_env(
     let run = RunManifest::requested(handle, &req.agent_id, &req.worktree_path,
         req.ticket.clone(), req.model.clone(), &run_control::ProjectSite::board(), run_control::now_ms());
     let live = state.agent_sessions.lock().await.values().filter(|m| status::counts_as_live(m.status)).count();
+    let capacity_run = run.clone();
     let run = run_control::request_in(&dir,run,|| {
+        if !req.conversation_mode && !req.resume { crate::swarm_plan::worker_admission_in(&dir, &capacity_run, None)?; }
         if let Some(ticket_id) = req.ticket.as_deref() {
             let repo = crate::project_management::repo_now()?;
             let ticket = crate::project_management::ticket_list_in(&repo, None)?.into_iter()

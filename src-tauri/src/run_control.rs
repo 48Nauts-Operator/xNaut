@@ -341,6 +341,33 @@ impl Drop for StoreLock {
         }
     }
 }
+/// Operations revoking worker authority share the admission lock so a stop
+/// cannot race between the final scope/capacity check and durable registration.
+pub(crate) fn under_admission_lock_in<T>(dir: &Path, apply: impl FnOnce() -> Result<T,String>) -> Result<T,String> {
+    let _lock = StoreLock::acquire(dir)?;
+    apply()
+}
+/// Caller holds StoreLock. Requested successors reserve capacity across restarts;
+/// ticketless independent reviewers consume a worker slot just like authors.
+pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
+    let mut count = 0;
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if matches!(run.kind, RunKind::Agent | RunKind::Review) && !run.state.terminal() { count += 1; }
+    }
+    Ok(count)
+}
+pub(crate) fn worker_capacity_in(dir: &Path, cap: usize, own: &str, replacing: Option<&str>) -> Result<(),String> {
+    let mut live = 0;
+    for id in list_ids_in(dir)? {
+        let run = load_manifest_in(dir, &id)?;
+        if id != own && replacing != Some(id.as_str())
+            && matches!(run.kind, RunKind::Agent | RunKind::Review) && !run.state.terminal() { live += 1; }
+    }
+    if live >= cap { return Err(format!("worker capacity: {live} durable author/reviewer reservations already consume limit {cap}")); }
+    Ok(())
+}
+
 fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let parent = path.parent().ok_or("missing parent")?;
     let temp = parent.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
@@ -1974,6 +2001,9 @@ pub(crate) fn bind_pending_in(dir: &Path, run: &mut RunManifest) -> Result<(), S
 /// repository worker AND its publisher finished. No signals or guessing from
 /// terminal registry state. This shares admission's store lock and identity.
 pub(crate) fn reserve_repair_in(dir: &Path, id: &str, proof: &Proofs, at: i64) -> Result<RunManifest,String> {
+    reserve_repair_admitted_in(dir, id, proof, at, |_| Ok(()))
+}
+pub(crate) fn reserve_repair_admitted_in(dir: &Path, id: &str, proof: &Proofs, at: i64, admit: impl FnOnce(&RunManifest) -> Result<(),String>) -> Result<RunManifest,String> {
     let _lock = StoreLock::acquire(dir)?;
     let mut previous = load_manifest_in(dir,id)?;
     if previous.kind != RunKind::Agent || previous.ticket.is_none() { return Err("Repair requires a ticketed author run".into()); }
@@ -2009,8 +2039,10 @@ pub(crate) fn reserve_repair_in(dir: &Path, id: &str, proof: &Proofs, at: i64) -
         }
     }
     let mut next = RunManifest::requested(&previous.agent_handle,&previous.runtime_id,&previous.worktree_path,previous.ticket.clone(),previous.model.clone(),&[],at);
+    next.remote_env = previous.remote_env.clone();
     next.project = previous.project.clone(); next.branch = previous.branch.clone(); next.previous_run_id = Some(previous.run_id.clone()); next.last_commit = proof.commit.clone();
     next.last_signal = format!("independent review requested author repair after {}",previous.run_id);
+    admit(&next)?;
     previous.state = RunState::Retired;
     previous.retirement = Some(Retirement { started_at:at,quiet_since:at,capture_bytes:proof.capture_bytes,requirement:String::new(),stopped_at:Some(at),dead_since:Some(at) });
     previous.ticket_returned = true; previous.next_run_id = Some(next.run_id.clone());

@@ -2090,7 +2090,10 @@ pub async fn agent_profile_launch(
         crate::run_control::bind_pending_in(&registry, &mut run)?;
         // The spend and lease admissions already ran above; this registration
         // is bookkeeping, not a second gate.
-        Some(crate::run_control::request_in(&registry, run, || Ok(()))?.run_id)
+        Some({
+            let capacity_run = run.clone();
+            crate::run_control::request_in(&registry, run, || crate::swarm_plan::worker_admission_in(&registry, &capacity_run, None))?.run_id
+        })
     } else {
         None
     };
@@ -2384,7 +2387,8 @@ async fn launch_on_exe_dev(
     };
     let registry = crate::agents::registry_dir()?;
     run.branch = transfer.branch.clone();
-    let admitted = crate::run_control::request_in(&registry, run, || Ok(()))?;
+    let capacity_run = run.clone();
+    let admitted = crate::run_control::request_in(&registry, run, || crate::swarm_plan::worker_admission_in(&registry, &capacity_run, None))?;
     if admitted.run_id != run_id { return Err("Repository/registry run identity mismatch; launch refused".into()); }
     transfer.state = "running".into();
     crate::repository_transfer::save(&transfer)?;
