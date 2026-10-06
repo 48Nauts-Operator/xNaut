@@ -879,9 +879,22 @@ fn accept_repair_publication(
     q.repair_child = None;
     Ok(())
 }
-/// Only a recorded spend refusal before execution may reopen a reserved repair.
+// Exact historical rejection repaired by applying bound repair inheritance
+// before the fresh-task source-branch gate. Other preparation errors stay held.
+const REPAIR_SOURCE_BRANCH_REFUSAL: &str = "The task's starting commit is not on a published source branch. Push that branch to the project's repository before starting the task; refusing a PR with unrelated source changes.";
+fn repair_preparation_refused(run: &crate::run_control::RunManifest) -> bool {
+    crate::run_control::prelaunch_refused(run)
+        && run.prelaunch_failure.as_ref().is_some_and(|p| p.phase == crate::run_control::PrelaunchPhase::RepositoryPreparation)
+        && run.last_signal.strip_prefix("admission failed: ") == Some(REPAIR_SOURCE_BRANCH_REFUSAL)
+}
+fn repair_retry_refused(run: &crate::run_control::RunManifest) -> bool {
+    (crate::run_control::spend_prelaunch_refused(run)
+        && run.last_signal.strip_prefix("admission failed: ").is_some_and(crate::spend::is_concurrent_refusal))
+        || repair_preparation_refused(run)
+}
+/// Only a recorded, supported refusal before execution may reopen a repair.
 /// Missing transfer/process evidence alone is not a retry authorization.
-fn repair_spend_refusal_proven(
+fn repair_prelaunch_refusal_proven(
     t: &Transfer, q: &Review, rows: &[Transfer], runs: &[crate::run_control::RunManifest],
 ) -> Option<crate::run_control::RunManifest> {
     use crate::run_control::{RunKind, RunState};
@@ -894,7 +907,7 @@ fn repair_spend_refusal_proven(
     let matching: Vec<_> = runs.iter().filter(|r| r.run_id == id).collect();
     let [run] = matching.as_slice() else { return None; };
     let error = run.last_signal.strip_prefix("admission failed: ")?;
-    if !crate::spend::is_concurrent_refusal(error) { return None; }
+    if !crate::spend::is_concurrent_refusal(error) && error != REPAIR_SOURCE_BRANCH_REFUSAL { return None; }
     let bound = |e: &LoopEvent| e.head == q.head && e.base == q.base
         && e.author_child.as_deref() == Some(id) && e.review_child == q.child
         && e.predecessor_run_id.as_deref() == Some(q.author_run.as_deref().unwrap_or(&t.run_id));
@@ -932,7 +945,7 @@ fn repair_spend_refusal_proven(
     } else if run.next_run_id.is_some() {
         return None;
     }
-    if !crate::run_control::spend_prelaunch_refused(&proof) || proof.user_conversation
+    if !repair_retry_refused(&proof) || proof.user_conversation
         || proof.output_path.is_some() || proof.kind != RunKind::Agent
         || proof.project != t.project || proof.ticket != t.ticket || t.ticket.is_none()
         || proof.agent_handle != t.handle || proof.worktree_path != t.local_path
@@ -940,6 +953,7 @@ fn repair_spend_refusal_proven(
         || rows.iter().any(|r| r.run_id == id)
     { return None; }
     let author = q.author_run.as_deref().unwrap_or(&t.run_id);
+    let mut preparation_refusals = usize::from(repair_preparation_refused(&proof));
     let mut current = *run;
     let mut seen = std::collections::BTreeSet::new();
     loop {
@@ -958,10 +972,13 @@ fn repair_spend_refusal_proven(
         if parent.run_id == author { break; }
         let mut refused_parent = (*parent).clone();
         refused_parent.state = RunState::Failed;
-        if !crate::run_control::spend_prelaunch_refused(&refused_parent)
+        if !repair_retry_refused(&refused_parent)
             || parent.last_commit != q.head || parent.output_path.is_some()
             || rows.iter().any(|r| r.run_id == parent.run_id)
         { return None; }
+        preparation_refusals += usize::from(repair_preparation_refused(&refused_parent));
+        // A persistent preparation problem is not an endless free retry loop.
+        if preparation_refusals > 1 { return None; }
         current = *parent;
     }
     Some((*run).clone())
@@ -970,18 +987,18 @@ fn repair_registry_rows(registry: &Path) -> Result<Vec<crate::run_control::RunMa
     crate::run_control::list_ids_in(registry)?.iter()
         .map(|id| crate::run_control::load_manifest_in(registry, id)).collect()
 }
-fn reserve_after_repair_spend_at(
+fn reserve_after_repair_refusal_at(
     stores: (&Path, &Path), t: &mut Transfer, q: &mut Review, rows: &[Transfer], now: i64,
     admit: impl FnOnce(&crate::run_control::RunManifest) -> Result<(), String>,
 ) -> Result<(), String> {
     let (store, registry) = stores;
-    let refused = repair_spend_refusal_proven(t, q, rows, &repair_registry_rows(registry)?)
-        .ok_or("Repair capacity refusal lacks exact pre-execution reservation proof")?;
+    let refused = repair_prelaunch_refusal_proven(t, q, rows, &repair_registry_rows(registry)?)
+        .ok_or("Repair refusal lacks exact pre-execution reservation proof")?;
     let tree = Path::new(&t.local_path);
     if git(tree, &["symbolic-ref", "--short", "HEAD"])? != t.local_branch
         || git(tree, &["rev-parse", "HEAD"])? != q.head
         || !git(tree, &["status", "--porcelain"])?.is_empty()
-    { return Err("Capacity-held repair worktree changed; preserve it for owner recovery".into()); }
+    { return Err("Refused repair worktree changed; preserve it for owner recovery".into()); }
     let proof = crate::run_control::Proofs {
         pid_absent: true, session_known: true, capture_known: true, capture_quiet: true,
         worktree_exists: true, branch_matches: true, commit: q.head.clone(), ..Default::default()
@@ -990,7 +1007,7 @@ fn reserve_after_repair_spend_at(
         // The native store lock is held. Refuse a concurrent change instead of
         // retiring a different worker from the earlier snapshot.
         if crate::run_control::load_manifest_in(registry, &refused.run_id)? != refused {
-            return Err("Repair reservation changed before capacity recovery".into());
+            return Err("Repair reservation changed before pre-execution recovery".into());
         }
         admit(next)
     })?;
@@ -1008,7 +1025,10 @@ fn reserve_after_repair_spend_at(
     q.next_attempt_at = 0;
     q.message = "Author repair reserved on the existing branch/worktree/PR".into();
     let reason = q.message.clone();
-    event(t, q, &reason, Some(json!({"pre_execution_capacity_refusal":refused})));
+    let evidence = if refused.prelaunch_failure.as_ref().is_some_and(|p| p.phase == crate::run_control::PrelaunchPhase::RepositoryPreparation) {
+        json!({"pre_execution_preparation_refusal":refused})
+    } else { json!({"pre_execution_capacity_refusal":refused}) };
+    event(t, q, &reason, Some(evidence));
     t.quality = Some(q.clone());
     transfer::save_at(store, t)
 }
@@ -1038,8 +1058,8 @@ async fn advance_repair(
         repair_authorized(t, q)?;
         let registry = crate::agents::registry_dir()?;
         let runs = repair_registry_rows(&registry)?;
-        if repair_spend_refusal_proven(t, q, rows, &runs).is_some() {
-            if let Err(error) = reserve_after_repair_spend_at(
+        if repair_prelaunch_refusal_proven(t, q, rows, &runs).is_some() {
+            if let Err(error) = reserve_after_repair_refusal_at(
                 (&transfer::store_dir()?, &registry), t, q, rows, now,
                 |next| crate::swarm_plan::worker_admission_in(&registry, next, None),
             ) {
@@ -1126,7 +1146,7 @@ async fn advance_repair(
                     // Only typed native pre-execution proof can reopen it.
                     q.next_attempt_at = now + REPAIR_BACKOFF_MS;
                     persist(t, q, &format!("Author repair queued: {error}"), None)?;
-                    if repair_spend_refusal_proven(t, q, &transfer::list()?, &repair_registry_rows(&registry)?).is_none() {
+                    if repair_prelaunch_refusal_proven(t, q, &transfer::list()?, &repair_registry_rows(&registry)?).is_none() {
                         return Err(error);
                     }
                     return Ok(());
@@ -1636,9 +1656,10 @@ async fn advance_inner(
         || (q.state == "publishing" && q.report.as_ref().is_some_and(|r| r["verdict"] == "pass")) {
         reconcile_author_outcome(t, q, rows)?;
     }
-    if q.state == "blocked" && (crate::spend::is_concurrent_refusal(&q.message) || q.message == REVIEW_PAUSED_REASON) {
+    if q.state == "blocked" && (crate::spend::is_concurrent_refusal(&q.message)
+        || q.message == REPAIR_SOURCE_BRANCH_REFUSAL || q.message == REVIEW_PAUSED_REASON) {
         let registry = crate::agents::registry_dir()?;
-        if repair_spend_refusal_proven(t, q, rows, &repair_registry_rows(&registry)?).is_some() {
+        if repair_prelaunch_refusal_proven(t, q, rows, &repair_registry_rows(&registry)?).is_some() {
             // The existing historical rejection remains in events. The repair
             // path rechecks current authorization and atomically reserves capacity.
             q.state = "repair_reserved".into();
@@ -2779,6 +2800,70 @@ mod repair_loop_tests {
             }
         }
     }
+    #[test]
+    fn repair_source_preparation_refusal_recovers_once_with_prior_spend_history() {
+        let mut f = Fixture::new();
+        let red = f.review("review-preparation", 1);
+        let author = f.parent.run_id.clone();
+        let proof = f.proof();
+        reserve_repair_at(&f.store, &f.registry, &mut f.parent, &mut f.q, &author, &proof, 2000).unwrap();
+        let spend_id = f.q.repair_child.clone().unwrap();
+        let pending = run_control::load_manifest_in(&f.registry, &spend_id).unwrap();
+        let spend = "spend ceiling: 3 agent sessions are already live and the concurrent cap is 2. Wait for one to finish, or raise the cap (spend-ceiling.json).";
+        run_control::refuse_prelaunch_in(&f.registry, pending, run_control::PrelaunchPhase::SpendAdmission, spend).unwrap();
+        f.q.state = "blocked".into(); f.q.message = spend.into();
+        event(&f.parent, &mut f.q, spend, None);
+        f.save(); f.reload();
+        let rows = vec![f.parent.clone(), red];
+        reserve_after_repair_refusal_at((&f.store, &f.registry), &mut f.parent, &mut f.q, &rows, 3000, |_| Ok(())).unwrap();
+        let preparation_id = f.q.repair_child.clone().unwrap();
+        let pending = run_control::load_manifest_in(&f.registry, &preparation_id).unwrap();
+        run_control::refuse_prelaunch_in(&f.registry, pending, run_control::PrelaunchPhase::RepositoryPreparation, REPAIR_SOURCE_BRANCH_REFUSAL).unwrap();
+        f.q.state = "blocked".into(); f.q.message = REPAIR_SOURCE_BRANCH_REFUSAL.into();
+        event(&f.parent, &mut f.q, REPAIR_SOURCE_BRANCH_REFUSAL, None);
+        f.save(); f.reload();
+        let rejected = f.q.clone();
+        let runs = repair_registry_rows(&f.registry).unwrap();
+        assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&rows,&runs).is_some());
+        for case in ["phase", "reason", "pid", "transfer", "event"] {
+            let mut altered = runs.clone(); let mut receipts = rows.clone(); let mut quality = f.q.clone();
+            let run = altered.iter_mut().find(|r|r.run_id == preparation_id).unwrap();
+            match case {
+                "phase" => run.prelaunch_failure.as_mut().unwrap().phase = run_control::PrelaunchPhase::RepositoryStaging,
+                "reason" => run.last_signal = "admission failed: credentials unavailable".into(),
+                "pid" => run.pid = Some(7),
+                "transfer" => { let mut receipt = f.parent.clone(); receipt.run_id = preparation_id.clone(); receipts.push(receipt); },
+                "event" => quality.events.last_mut().unwrap().reason = "another refusal".into(),
+                _ => unreachable!(),
+            }
+            assert!(repair_prelaunch_refusal_proven(&f.parent,&quality,&receipts,&altered).is_none(),"{case}");
+        }
+        assert!(reserve_after_repair_refusal_at((&f.store,&f.registry),&mut f.parent,&mut f.q,&rows,4000,
+            |_| Err("worker capacity: full".into())).is_err());
+        assert_eq!(f.q.repair_child.as_deref(),Some(preparation_id.as_str()));
+        reserve_after_repair_refusal_at((&f.store,&f.registry),&mut f.parent,&mut f.q,&rows,5000,|_|Ok(())).unwrap();
+        let successor = f.q.repair_child.clone().unwrap();
+        assert_ne!(successor,preparation_id);
+        assert_eq!(f.q.repair_attempts,0);
+        assert_eq!(f.q.head,rejected.head); assert_eq!(f.q.report,rejected.report);
+        assert_eq!(f.parent.pr_url.as_deref(),Some("https://fixture/pulls/17"));
+        assert_eq!(f.q.events.len(),rejected.events.len()+1);
+        assert_eq!(f.q.events.last().unwrap().evidence.as_ref().unwrap()["pre_execution_preparation_refusal"]["run_id"],preparation_id);
+        // Restart after native successor persistence but before quality save.
+        f.q = rejected; f.save(); f.reload();
+        reserve_after_repair_refusal_at((&f.store,&f.registry),&mut f.parent,&mut f.q,&rows,6000,
+            |_|panic!("existing reservation must not consume capacity twice")).unwrap();
+        assert_eq!(f.q.repair_child.as_deref(),Some(successor.as_str()));
+        assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(),4);
+        let pending = run_control::load_manifest_in(&f.registry,&successor).unwrap();
+        run_control::refuse_prelaunch_in(&f.registry,pending,run_control::PrelaunchPhase::RepositoryPreparation,REPAIR_SOURCE_BRANCH_REFUSAL).unwrap();
+        f.q.state = "blocked".into(); f.q.message = REPAIR_SOURCE_BRANCH_REFUSAL.into();
+        event(&f.parent,&mut f.q,REPAIR_SOURCE_BRANCH_REFUSAL,None);
+        f.save(); f.reload();
+        assert!(repair_prelaunch_refusal_proven(&f.parent,&f.q,&rows,&repair_registry_rows(&f.registry).unwrap()).is_none(),
+            "a repeated preparation problem must remain held instead of minting free retries");
+    }
+
     /// XNAUT-465: replay the actual reservation -> typed spend refusal ->
     /// restart -> same-PR native admission boundary using persisted stores.
     #[test]
@@ -2803,7 +2888,7 @@ mod repair_loop_tests {
         let pr = f.parent.pr_url.clone();
         let rows = vec![f.parent.clone(), red];
         let runs = repair_registry_rows(&f.registry).unwrap();
-        assert_eq!(repair_spend_refusal_proven(&f.parent, &f.q, &rows, &runs), Some(refused.clone()));
+        assert_eq!(repair_prelaunch_refusal_proven(&f.parent, &f.q, &rows, &runs), Some(refused.clone()));
         for mutation in ["no_type", "wrong_phase", "pid", "output", "branch", "project", "remote", "head", "reciprocal", "next", "duplicate", "no_event", "other_error", "transfer"] {
             let mut altered = runs.clone(); let mut q = f.q.clone(); let mut receipts = rows.clone();
             let index = altered.iter().position(|r| r.run_id == refused_id).unwrap();
@@ -2824,16 +2909,16 @@ mod repair_loop_tests {
                 "transfer" => { let mut receipt = f.parent.clone(); receipt.run_id = refused_id.clone(); receipts.push(receipt); },
                 _ => unreachable!(),
             }
-            assert!(repair_spend_refusal_proven(&f.parent, &q, &receipts, &altered).is_none(), "{mutation}");
+            assert!(repair_prelaunch_refusal_proven(&f.parent, &q, &receipts, &altered).is_none(), "{mutation}");
         }
         // A full global/group cap keeps the historical child and all counters.
-        assert!(reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+        assert!(reserve_after_repair_refusal_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
             &rows, 3000, |_| Err("worker capacity: full".into())).unwrap_err().starts_with("worker capacity:"));
         assert_eq!(run_control::load_manifest_in(&f.registry, &refused_id).unwrap(), refused);
         assert_eq!(f.q.repair_child.as_deref(), Some(refused_id.as_str()));
         assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(), 2);
         let rejected_quality = f.q.clone();
-        reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+        reserve_after_repair_refusal_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
             &rows, 4000, |_| Ok(())).unwrap();
         let successor = f.q.repair_child.clone().unwrap();
         assert_ne!(successor, refused_id);
@@ -2849,13 +2934,13 @@ mod repair_loop_tests {
             r.retirement = refused.retirement.clone(); r.ticket_returned = refused.ticket_returned;
         }).unwrap();
         f.q = rejected_quality.clone(); f.save(); f.reload();
-        reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+        reserve_after_repair_refusal_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
             &rows, 4500, |_| panic!("orphan reservation already consumed capacity")).unwrap();
         assert_eq!(f.q.repair_child.as_deref(), Some(successor.as_str()));
         assert_eq!(run_control::load_manifest_in(&f.registry, &refused_id).unwrap().next_run_id.as_deref(), Some(successor.as_str()));
         // Second window: both native records saved, quality not yet saved.
         f.q = rejected_quality; f.save(); f.reload();
-        reserve_after_repair_spend_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
+        reserve_after_repair_refusal_at((&f.store, &f.registry), &mut f.parent, &mut f.q,
             &rows, 5000, |_| panic!("already reserved capacity must not mint another run")).unwrap();
         assert_eq!(f.q.repair_child.as_deref(), Some(successor.as_str()));
         assert_eq!(run_control::list_ids_in(&f.registry).unwrap().len(), 3);
