@@ -80,3 +80,54 @@ test('reflects a user-customized keybinding from localStorage', async ({ page })
   const row = page.locator('.help-row', { hasText: 'New Tab' });
   await expect(row.locator('.help-kbd', { hasText: 'Shift' })).toBeVisible();
 });
+
+test('hidden native webview opens Help in final geometry and closes its blocking backdrop', async ({ page }) => {
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.querySelector('#btn-help').click();
+  });
+  const opened = await page.evaluate(() => {
+    const panel = document.querySelector('#help-overlay');
+    const backdrop = document.querySelector('#help-overlay-backdrop');
+    return { x: panel.getBoundingClientRect().x, right: panel.getBoundingClientRect().right,
+      width: innerWidth, transform: getComputedStyle(panel).transform,
+      transition: getComputedStyle(panel).transitionDuration, opacity: getComputedStyle(backdrop).opacity,
+      blocking: getComputedStyle(backdrop).pointerEvents };
+  });
+  expect(opened.x).toBeLessThan(opened.width);
+  expect(opened.right).toBeLessThanOrEqual(opened.width);
+  expect(opened.transition).toBe('0s');
+  expect(opened.opacity).toBe('1');
+  expect(opened.blocking).toBe('auto');
+  await page.evaluate(() => document.querySelector('#btn-help-close').click());
+  const closed = await page.evaluate(() => ({ hidden: document.querySelector('#help-overlay').hidden,
+    opacity: getComputedStyle(document.querySelector('#help-overlay-backdrop')).opacity,
+    blocking: getComputedStyle(document.querySelector('#help-overlay-backdrop')).pointerEvents,
+    hit: document.elementFromPoint(10, 10)?.id }));
+  expect(closed).toMatchObject({ hidden: true, opacity: '0', blocking: 'none' });
+  expect(closed.hit).not.toBe('help-overlay-backdrop');
+  // Returning to the visible lifecycle must restore the normal transition.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.querySelector('#btn-help').click();
+  });
+  expect(await page.locator('#help-overlay').evaluate(e => getComputedStyle(e).transitionDuration)).toBe('0.28s');
+});
+
+test('hiding during a foreground Help transition settles to its actual final state', async ({ page }) => {
+  const result = await page.evaluate(() => {
+    document.querySelector('#btn-help').click();
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    const panel = document.querySelector('#help-overlay');
+    const open = { right: panel.getBoundingClientRect().right, width: innerWidth,
+      offset: new DOMMatrixReadOnly(getComputedStyle(panel).transform).m41 };
+    document.querySelector('#help-overlay-backdrop').click();
+    return { open, closed: panel.hidden, blocking: getComputedStyle(document.querySelector('#help-overlay-backdrop')).pointerEvents };
+  });
+  expect(result.open.offset).toBe(0);
+  expect(result.open.right).toBeLessThanOrEqual(result.open.width);
+  expect(result.closed).toBe(true);
+  expect(result.blocking).toBe('none');
+});

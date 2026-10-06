@@ -2548,6 +2548,8 @@ body {
   will-change: transform;
 }
 .help-overlay.open { transform: translateX(0); }
+.help-overlay.help-no-motion,
+.help-overlay-backdrop.help-no-motion { transition: none; }
 /* .help-overlay sets display:flex, which would otherwise defeat the [hidden]
    attribute — restore hiding so the panel is truly removed when closed. */
 .help-overlay[hidden] { display: none; }

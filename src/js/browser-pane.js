@@ -58,6 +58,34 @@
     return `browser-${Date.now().toString(36)}-${labelCounter}`;
   }
 
+  // Hidden WKWebViews may never deliver animation frames (native bridge or
+  // restored background tabs). Keep foreground layout settling, but never let
+  // a paused frame clock hold native child creation indefinitely. XNAUT-467.
+  function settleLayout(pane) {
+    return new Promise((resolve) => {
+      let frame = 0;
+      let remaining = 2;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        cancelAnimationFrame(frame);
+        document.removeEventListener('visibilitychange', changed);
+        resolve(pane.isConnected);
+      };
+      const changed = () => { if (document.hidden) finish(); };
+      const tick = () => {
+        if (settled) return;
+        if (!pane.isConnected || --remaining === 0) finish();
+        else frame = requestAnimationFrame(tick);
+      };
+      const timer = setTimeout(finish, document.hidden ? 0 : 150);
+      document.addEventListener('visibilitychange', changed);
+      if (!document.hidden) frame = requestAnimationFrame(tick);
+    });
+  }
+
   /**
    * Build the DOM for a browser pane and ask Rust to attach a child webview
    * over the placeholder rect. Returns the pane element so callers (the tab
@@ -128,8 +156,7 @@
     // the placeholder's rect — sampling too early can return 0×0 (or worse:
     // the pane's full bounds because the bar hasn't been laid out yet) and
     // the resulting webview ends up covering the address bar.
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    if (!document.body.contains(placeholder)) {
+    if (!await settleLayout(pane)) {
       // Pane was removed (e.g. tab closed) before we got here.
       return null;
     }
@@ -137,7 +164,7 @@
     if (r0.width < 2 || r0.height < 2) {
       console.warn('[browser-pane] placeholder has zero size; deferring creation', r0);
       // Try once more on the next frame.
-      await new Promise((r) => requestAnimationFrame(r));
+      if (!await settleLayout(pane)) return null;
     }
     // Compute the webview bounds from BAR rect, not placeholder — guarantees
     // we start below the bar even if the placeholder hasn't laid out yet.
@@ -146,6 +173,11 @@
     const barRect = bar.getBoundingClientRect();
     const paneRect = pane.getBoundingClientRect();
     const placeholderRect = placeholder.getBoundingClientRect();
+    if (![paneRect.width, barRect.height, placeholderRect.width, placeholderRect.height]
+      .every((value) => Number.isFinite(value) && value >= 2)) {
+      pane.remove();
+      throw new Error('Browser pane has no renderable bounds; native child was not created');
+    }
     const yOffset = getChromeOffsetY();
     const CREATE_INSET = 6; // keep in sync with syncBounds INSET
     const z = rectScale();
@@ -267,6 +299,12 @@
 
     try {
       await addPage(url, label); // first page carries the pane's label
+      // The tab may close while the native request is in flight. Its entry is
+      // not registered yet, so normal tab cleanup cannot find this child.
+      if (!pane.isConnected) {
+        await invoke('browser_pane_destroy', { label });
+        return null;
+      }
     } catch (e) {
       pane.remove();
       throw e;

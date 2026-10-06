@@ -119,11 +119,28 @@
     return !!(ov && ov.classList.contains('open'));
   }
 
+  // A hidden native webview freezes CSS transitions at their starting values.
+  // The transparent backdrop still intercepts clicks while the panel remains
+  // offscreen. Apply the real final state without motion in that lifecycle;
+  // ordinary visible-window transitions remain unchanged. XNAUT-467.
+  function syncMotion() {
+    const hidden = document.hidden;
+    for (const id of ['help-overlay', 'help-overlay-backdrop']) {
+      document.getElementById(id)?.classList.toggle('help-no-motion', hidden);
+    }
+    if (hidden && !isOpen()) {
+      const ov = document.getElementById('help-overlay');
+      if (ov) ov.hidden = true;
+    }
+    return hidden;
+  }
+
   function openOverlay() {
     const ov = document.getElementById('help-overlay');
     const btn = document.getElementById('btn-help');
     const backdrop = document.getElementById('help-overlay-backdrop');
     if (!ov) return;
+    const hidden = syncMotion();
     renderList();
     ov.hidden = false;
     // force reflow so the transform transition runs from the hidden state
@@ -132,7 +149,7 @@
     if (backdrop) backdrop.classList.add('show');
     if (btn) btn.setAttribute('aria-expanded', 'true');
     const closeBtn = document.getElementById('btn-help-close');
-    if (closeBtn) closeBtn.focus();
+    if (closeBtn && !hidden) closeBtn.focus();
   }
 
   function closeOverlay() {
@@ -140,12 +157,14 @@
     const btn = document.getElementById('btn-help');
     const backdrop = document.getElementById('help-overlay-backdrop');
     if (!ov) return;
+    const hidden = syncMotion();
     ov.classList.remove('open');
     if (backdrop) backdrop.classList.remove('show');
     if (btn) {
       btn.setAttribute('aria-expanded', 'false');
-      btn.focus();
+      if (!hidden) btn.focus();
     }
+    if (hidden) { ov.hidden = true; return; }
     // hide after the slide-out transition completes
     const onEnd = () => { if (!isOpen()) ov.hidden = true; ov.removeEventListener('transitionend', onEnd); };
     ov.addEventListener('transitionend', onEnd);
@@ -188,6 +207,7 @@
   }
 
   // Global keyboard: `?` opens, Esc closes. Registered once.
+  document.addEventListener('visibilitychange', syncMotion);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && isOpen()) {
       e.preventDefault();
