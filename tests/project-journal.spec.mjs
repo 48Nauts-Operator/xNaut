@@ -161,3 +161,27 @@ test('recent project work precedes older reviews while live workers stay first',
  expect(await page.locator('[data-continuity-ticket]').evaluateAll(rows=>rows.map(row=>row.dataset.continuityTicket))).toEqual(['DEMO-LIVE','DEMO-RECENT','DEMO-OLD']);
  await expect(page.locator('[data-continuity]')).toContainText('3 recorded work items needing attention');
 });
+
+test('review and repair history keeps source attribution and evidence across refresh and reopen', async ({page}) => {
+ await start(page);
+ await page.evaluate(() => {
+  window.journalData.entries = [
+   {id:'activity:review',kind:'finding',title:'DEMO-1 · findings',ticket:'DEMO-1',run_id:'author-run',actor:'Independent reviewer',at:'2026-10-03T20:00:00Z',preview:'### Review finding\n\nParser loses the last item. Revision: `abc`.',content:'### Review finding\n\nParser loses the last item.\n\n[Source evidence](../../Development/evidence/journal/review.md)'},
+   {id:'activity:repair',kind:'fix',title:'DEMO-1 · repair published',ticket:'DEMO-1',run_id:'repair-run',actor:'Builder',at:'2026-10-03T20:05:00Z',preview:'### Fix recorded\n\nPreserved the last item. Revision: `def`.',content:'### Fix recorded\n\nPreserved the last item.\n\n[Source evidence](../../Development/evidence/journal/repair.md)'},
+  ];
+ });
+ await page.getByRole('button',{name:'Refresh',exact:true}).click();
+ const finding=page.locator('[data-id="activity:review"]');
+ await expect(finding).toContainText('Independent reviewer');
+ await expect(finding).toContainText('Parser loses the last item');
+ await expect(page.locator('[data-id="activity:repair"]')).toContainText('Builder');
+ await finding.getByText('Execution details and evidence',{exact:true}).click();
+ await finding.getByRole('button',{name:'Source evidence'}).click();
+ expect(await page.evaluate(()=>window.openedWiki)).toBe('Development/evidence/journal/review.md');
+ await page.getByRole('button',{name:'Refresh',exact:true}).click();
+ await expect(finding.locator('details')).toHaveAttribute('open');
+ await expect(page.locator('[data-entries] .pj-entry')).toHaveCount(2);
+ await page.evaluate(()=>window.xnautJournal.mount(document.querySelector('#journal'),'DEMO',p=>{window.openedWiki=p;}));
+ await expect(page.locator('[data-entries] .pj-entry')).toHaveCount(2);
+ await expect(page.locator('[data-id="activity:repair"]')).toContainText('Preserved the last item');
+});

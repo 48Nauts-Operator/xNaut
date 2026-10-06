@@ -2,6 +2,7 @@
 //! independent of which project's pane is visible. Markdown in the Vault is
 //! canonical; deterministic entry IDs and Wiki CAS protect concurrent writers.
 use super::*;
+mod activity;
 const MARK: &str = "<!-- xnaut-journal-entry ";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
@@ -297,7 +298,9 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
         .map(|e| {
             let mut value = serde_json::to_value(&e).unwrap();
             if !e.run_id.is_empty() {
-                value["preview"] = json!(run_preview(&e));
+                value["preview"] = json!(if e.id.starts_with("activity:") {
+                    format!("### {}\n\n{}", e.title, e.content.split("\n\n[Source evidence]").next().unwrap_or(&e.content))
+                } else { run_preview(&e) });
             }
             value
         })
@@ -694,6 +697,7 @@ static CAPTURE_WARNING: std::sync::Mutex<String> = std::sync::Mutex::new(String:
 /// A capture failure is retried and exposed in the pane, never silently discarded.
 pub(crate) fn capture_loop() {
     let mut revision = -1;
+    let mut activity = activity::Replay::default();
     loop {
         let mut errors = Vec::new();
         if let Ok(root) = crate::conversation_store::root() {
@@ -734,6 +738,10 @@ pub(crate) fn capture_loop() {
                     }
                 }
             }
+        }
+        match projects() {
+            Ok(ps) => errors.extend(activity.tick(&ps)),
+            Err(e) => errors.push(format!("Project activity: {e}")),
         }
         if let Ok(mut warning) = CAPTURE_WARNING.lock() {
             *warning = errors.into_iter().take(5).collect::<Vec<_>>().join(" · ");
