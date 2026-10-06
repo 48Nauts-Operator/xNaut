@@ -377,6 +377,52 @@ def native_checks(bridge, version, project_root, record):
     record("terminal_roundtrip", value)
 
 
+def seed_profile(config, evidence):
+    config.mkdir(mode=0o700)
+    project_root = evidence / "empty-projects"
+    project_root.mkdir()
+    port, mcp_port = free_port(), free_port()
+    while mcp_port == port:
+        mcp_port = free_port()
+    token = secrets.token_urlsafe(32)
+    settings = {
+        "project_root": str(project_root),
+        "categories": [],
+        "llm": {"provider": "", "endpoint": "", "model": ""},
+        "llm_providers": [],
+        "engram": {"enabled": False},
+        "forges": [],
+        "mcp_servers": [],
+        "mcp_port": mcp_port,
+        "project_management": {"enabled": False},
+        "loops": {"enabled": False, "dispatch_here": False},
+        "core_team": {"enabled": False},
+        "foreign_session_reaper": {"enabled": False},
+        "instance": {"role": "workstation"},
+    }
+    for name, value in [
+        ("settings.json", settings),
+        (
+            "mobile.json",
+            {
+                "enabled": True,
+                "port": port,
+                "token": token,
+                "devices": [],
+                "push_ntfy_topic": "",
+            },
+        ),
+        (
+            "kill-switches.json",
+            {"read_only": True, "freeze_merges": True, "approve_everything": True},
+        ),
+    ]:
+        path = config / name
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+    return project_root, port, token
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
@@ -501,48 +547,7 @@ def main():
                 "dmg_equivalence": dmg_equivalence(dmg, app, args.tag[1:], signing),
             },
         )
-        config.mkdir(mode=0o700)
-        project_root = evidence / "empty-projects"
-        project_root.mkdir()
-        port, mcp_port = free_port(), free_port()
-        while mcp_port == port:
-            mcp_port = free_port()
-        token = secrets.token_urlsafe(32)
-        settings = {
-            "project_root": str(project_root),
-            "categories": [],
-            "llm": {"provider": "", "endpoint": "", "model": ""},
-            "llm_providers": [],
-            "engram": {"enabled": False},
-            "forges": [],
-            "mcp_servers": [],
-            "mcp_port": mcp_port,
-            "project_management": {"enabled": False},
-            "loops": {"enabled": False, "dispatch_here": False},
-            "core_team": {"enabled": False},
-            "foreign_session_reaper": {"enabled": False},
-            "instance": {"role": "workstation"},
-        }
-        for name, value in [
-            ("settings.json", settings),
-            (
-                "mobile.json",
-                {
-                    "enabled": True,
-                    "port": port,
-                    "token": token,
-                    "devices": [],
-                    "push_ntfy_topic": "",
-                },
-            ),
-            (
-                "kill-switches.json",
-                {"read_only": True, "freeze_merges": True, "approve_everything": True},
-            ),
-        ]:
-            path = config / name
-            path.write_text(json.dumps(value))
-            path.chmod(0o600)
+        project_root, port, token = seed_profile(config, evidence)
         child_env = {
             k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")
         }
