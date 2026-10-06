@@ -585,7 +585,10 @@ pub fn load_or_default() -> Settings {
     let path = settings_path();
     let mut settings = match std::fs::read_to_string(&path) {
         Ok(body) => serde_json::from_str(&body).unwrap_or_else(|e| {
-            assert!(!crate::loop_acceptance::ENABLED,"Acceptance settings became invalid; refusing owner defaults");
+            match crate::loop_acceptance::ENABLED {
+                true => panic!("Acceptance settings became invalid; refusing owner defaults"),
+                false => {},
+            }
             eprintln!(
                 "[settings] parse error in {}: {e} — using defaults",
                 path.display()
@@ -593,7 +596,10 @@ pub fn load_or_default() -> Settings {
             Settings::default()
         }),
         Err(_) => {
-            assert!(!crate::loop_acceptance::ENABLED,"Acceptance settings disappeared; refusing owner defaults");
+            match crate::loop_acceptance::ENABLED {
+                true => panic!("Acceptance settings disappeared; refusing owner defaults"),
+                false => {},
+            }
             Settings::default()
         },
     };

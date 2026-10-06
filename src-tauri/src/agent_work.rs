@@ -375,7 +375,7 @@ fn reconcile_prelaunch_in(registry: &Path, root: &Path, project: &str, ticket: &
             transfers.push(transfer);
         }
     }
-    reconcile_initial_prelaunch_in(&registry, &root, project, ticket, &transfers)
+    reconcile_initial_prelaunch_in(registry, root, project, ticket, &transfers)
 }
 
 fn pending_initial_receipt(registry: &Path, root: &Path, project: &str, ticket: &str) -> Result<Option<Value>, String> {

@@ -34,6 +34,8 @@ fn ticket_in(project: &str, ticket: &str) -> bool {
         .strip_prefix(&format!("{project}-"))
         .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
 }
+// One source event carries these independent identity and presentation fields.
+#[allow(clippy::too_many_arguments)]
 fn event(
     project: &str,
     ticket: &str,

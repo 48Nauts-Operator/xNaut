@@ -24,10 +24,11 @@ pub(crate) fn initialize() {
     if !ENABLED {
         return;
     }
-    assert!(
-        crate::FULL_WIKI_PREVIEW && crate::JOURNAL_PREVIEW,
-        "Loop acceptance requires both full-wiki and journal preview build flags"
-    );
+    // Keep this a runtime refusal: ordinary builds need not enable previews.
+    match crate::FULL_WIKI_PREVIEW && crate::JOURNAL_PREVIEW {
+        true => {},
+        false => panic!("Loop acceptance requires both full-wiki and journal preview build flags"),
+    }
     let root = root();
     // Git must use existing trust without modifying the owner's SSH files or sockets.
     std::env::set_var("GIT_SSH_COMMAND","ssh -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o ControlMaster=no -o ControlPath=none");

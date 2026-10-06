@@ -436,10 +436,10 @@ fn admission_from_records(
             .as_ref()
             .is_some_and(|d| d.approved && !d.actor.trim().is_empty())
         || !matches!(record.classification, TriageClassification::Confirmed)
-        || !record
+        || record
             .analysis
             .as_ref()
-            .is_some_and(|a| !a.evidence.is_empty())
+            .is_none_or(|a| a.evidence.is_empty())
     {
         return Err(format!(
             "Finding is not actionable: triage {} ({}) at {}; inspect run {}",

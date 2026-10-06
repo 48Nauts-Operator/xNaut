@@ -1013,6 +1013,7 @@ const MAX_VERIFIES_IN_FLIGHT: usize = 3;
 /// engages `read_only` at the daily cap, and a wake to an ALREADY LIVE session
 /// costs nothing to admit because there is nothing to launch. Inventing a second
 /// number here would be a brake that looks like the ceiling and is not one.
+#[cfg(test)]
 fn plan_fleet(
     tickets: &[crate::project_management::TicketRecord],
     records: &[crate::sandbox_verify::VerifyRecord],
@@ -1025,6 +1026,7 @@ fn plan_fleet(
 /// Which projects the fleet may START work in. Verification is never scoped:
 /// a handback is a handback wherever it comes from.
 pub(crate) enum Fleet {
+    #[cfg(test)]
     Every,
     Only(std::collections::HashSet<String>),
 }
@@ -1032,12 +1034,14 @@ pub(crate) enum Fleet {
 impl Fleet {
     fn allows(&self, ticket_id: &str) -> bool {
         match self {
+            #[cfg(test)]
             Fleet::Every => true,
             Fleet::Only(keys) => keys.contains(project_of(ticket_id)),
         }
     }
 }
 
+#[cfg(test)]
 fn plan_fleet_for(
     tickets: &[crate::project_management::TicketRecord],
     records: &[crate::sandbox_verify::VerifyRecord],
@@ -1409,6 +1413,7 @@ fn is_live_run(
 /// is noise rather than diligence.
 ///
 /// Pure so the policy is testable without a disk or a clock.
+#[cfg(test)]
 fn hold_for(records: &[crate::sandbox_verify::VerifyRecord], ticket_id: &str, now: chrono::DateTime<chrono::Utc>) -> Hold {
     hold_for_candidate(records, ticket_id, now, None)
 }
