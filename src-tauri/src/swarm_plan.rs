@@ -963,9 +963,14 @@ fn recover_member(
         if group.members[i].started.is_none() {
             if let Ok(Some(next)) = crate::run_control::continuation_in(registry, ticket) {
                 if crate::run_control::prelaunch_refused(&next)
-                    && assignments.len() < 3
                     && crate::agent_work::recovery_guard(&serde_json::json!(snapshot), ticket, Some(&next)).is_ok()
                 {
+                    if assignments.len() >= 3 {
+                        transition(group, i, MemberState::Blocked,
+                            "prelaunch retry limit reached; inspect preserved staging evidence before further dispatch".into(),
+                            Some(next.run_id), now);
+                        return true;
+                    }
                     transition(group, i, MemberState::Queued,
                         "native prelaunch refusal proved no worker started; retry preserved workspace".into(),
                         Some(next.run_id), now);
@@ -1734,6 +1739,11 @@ mod tests {
                 group = groups_in(&dir, None).unwrap().remove(0);
             } else {
                 assert!(recover_member(&dir, &mut group, 0, &snapshot, 100));
+                assert_eq!(group.members[0].state, MemberState::Blocked);
+                assert!(group.members[0].reason.contains("retry limit"));
+                save_in(&dir, &group).unwrap();
+                group = groups_in(&dir, None).unwrap().remove(0);
+                assert!(recover_member(&dir, &mut group, 0, &snapshot, 101));
                 assert_eq!(group.members[0].state, MemberState::Blocked);
             }
         }

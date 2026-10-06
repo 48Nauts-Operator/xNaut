@@ -355,6 +355,13 @@ pub(crate) fn reconcile_prelaunch(project: &str, ticket: &str) -> Result<bool, S
     let projects = crate::project_management::list_projects(&control)?;
     let Some(project_record) = projects.iter().find(|p| p.key == project) else { return Ok(false); };
     let root = Path::new(&crate::project_management::local_source_path(project_record)).canonicalize().map_err(|e| e.to_string())?;
+    reconcile_prelaunch_in(&registry, &root, project, ticket)
+}
+
+fn reconcile_prelaunch_in(registry: &Path, root: &Path, project: &str, ticket: &str) -> Result<bool, String> {
+    // Ordinary launches and completed reconciliations have no dependency on
+    // the historical transfer store. Uncertainty matters only for a pending slot.
+    if pending_initial_receipt(registry, root, project, ticket)?.is_none() { return Ok(false); }
     let store = registry.join("repository-transfers");
     let mut transfers = Vec::new();
     if store.exists() {
@@ -371,6 +378,19 @@ pub(crate) fn reconcile_prelaunch(project: &str, ticket: &str) -> Result<bool, S
     reconcile_initial_prelaunch_in(&registry, &root, project, ticket, &transfers)
 }
 
+fn pending_initial_receipt(registry: &Path, root: &Path, project: &str, ticket: &str) -> Result<Option<Value>, String> {
+    let path = launch_receipt_path(registry, root, ticket, None)?;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let pending: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if pending["pending"] != true || pending["ticket"] != ticket || pending["project"] != project
+        || pending["repository_root"].as_str() != root.to_str() || !pending["continuation_run_id"].is_null() { return Ok(None); }
+    Ok(Some(pending))
+}
+
 fn native_request_time(id: &str) -> Option<i64> {
     const ALPHABET: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     if id.len() != 26 || !id.bytes().all(|b| ALPHABET.as_bytes().contains(&b)) { return None; }
@@ -382,14 +402,7 @@ fn native_request_time(id: &str) -> Option<i64> {
 fn reconcile_initial_prelaunch_in(registry: &Path, root: &Path, project: &str, ticket: &str, transfers: &[crate::repository_transfer::Transfer]) -> Result<bool, String> {
     use crate::run_control::{self, PrelaunchPhase, RunManifest};
     let path = launch_receipt_path(registry, root, ticket, None)?;
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error.to_string()),
-    };
-    let mut pending: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if pending["pending"] != true || pending["ticket"] != ticket || pending["project"] != project
-        || pending["repository_root"].as_str() != root.to_str() || !pending["continuation_run_id"].is_null() { return Ok(false); }
+    let Some(mut pending) = pending_initial_receipt(registry, root, project, ticket)? else { return Ok(false); };
     let Some(requested_at) = pending["requested_at"].as_i64() else { return Ok(false); };
     let Some(worktree) = pending["worktree_path"].as_str() else { return Ok(false); };
     let Some(branch) = pending["branch"].as_str().filter(|s| !s.is_empty()) else { return Ok(false); };
@@ -840,6 +853,25 @@ mod tests {
         let receipt = launch_receipt_path(&registry, &root, "TEST-1", None).unwrap();
         reserve(&receipt, &pending).unwrap();
         (temp, root, registry, pending, transfer)
+    }
+
+    #[test]
+    fn no_pending_prelaunch_does_not_read_unrelated_corrupt_transfer_store() {
+        let (_temp, root, registry, pending, _) = prelaunch_fixture();
+        let path = launch_receipt_path(&registry, &root, "TEST-1", None).unwrap();
+        let store = registry.join("repository-transfers");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("unrelated-history.json"), b"{broken").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(!reconcile_prelaunch_in(&registry, &root, "TEST", "TEST-1").unwrap());
+        let mut completed = pending.clone();
+        completed["pending"] = json!(false);
+        save_launch_receipt(&path, &completed).unwrap();
+        assert!(!reconcile_prelaunch_in(&registry, &root, "TEST", "TEST-1").unwrap());
+        save_launch_receipt(&path, &pending).unwrap();
+        assert!(reconcile_prelaunch_in(&registry, &root, "TEST", "TEST-1").is_err(),
+            "an actual pending recovery must fail closed on ambiguous store corruption");
+        assert!(crate::run_control::list_ids_in(&registry).unwrap().is_empty());
     }
 
     #[test]
