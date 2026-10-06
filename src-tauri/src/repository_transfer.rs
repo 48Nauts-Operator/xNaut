@@ -684,6 +684,9 @@ pub(crate) struct ResultRecord {
     source_sha: String,
     pub exit_code: i32,
     pub uncommitted_source: bool,
+    /// Computed from the fetched Git object, never accepted from worker JSON.
+    #[serde(skip)]
+    pub published_head: String,
 }
 
 pub(crate) fn fetch_result(
@@ -706,11 +709,17 @@ fn fetch_result_in(
         return Ok(None);
     }
     git(&dir, &["fetch", "--no-tags", &desktop, &reference])?;
+    let published_head = git(&dir, &["rev-parse", "FETCH_HEAD"])?;
     git(
         &dir,
-        &["merge-base", "--is-ancestor", &t.source_sha, "FETCH_HEAD"],
+        &[
+            "merge-base",
+            "--is-ancestor",
+            &t.source_sha,
+            &published_head,
+        ],
     )?;
-    let result_path = format!("FETCH_HEAD:{}/result.json", t.artifacts);
+    let result_path = format!("{published_head}:{}/result.json", t.artifacts);
     // A metadata branch without a final result is still running.
     if git(&dir, &["cat-file", "-e", &result_path]).is_err() {
         return Ok(None);
@@ -724,12 +733,13 @@ fn fetch_result_in(
         }
         git(&dir, &["show", path])
     };
-    let result: ResultRecord = serde_json::from_str(&read(&result_path)?)
+    let mut result: ResultRecord = serde_json::from_str(&read(&result_path)?)
         .map_err(|e| format!("Invalid run result: {e}"))?;
     if result.run_id != t.run_id || result.source_sha != t.source_sha {
         return Err("Run result does not match its launch receipt".into());
     }
-    let handback_path = format!("FETCH_HEAD:{}/handback.json", t.artifacts);
+    result.published_head = published_head.clone();
+    let handback_path = format!("{published_head}:{}/handback.json", t.artifacts);
     let handback = if git(&dir, &["cat-file", "-e", &handback_path]).is_ok() {
         Some(
             serde_json::from_str(&read(&handback_path)?)
@@ -739,6 +749,39 @@ fn fetch_result_in(
         None
     };
     Ok(Some((result, handback)))
+}
+
+/// Publication is a commit locator, not success or liveness. Keep the exact
+/// fetched revision even when a preceding remote probe saw the pre-publish HEAD.
+fn record_publication_in(
+    registry: &Path,
+    t: &Transfer,
+    result: &ResultRecord,
+) -> Result<(), String> {
+    if !crate::run_control::list_ids_in(registry)?
+        .iter()
+        .any(|id| id == &t.run_id)
+    {
+        return Ok(());
+    }
+    let run = crate::run_control::load_manifest_in(registry, &t.run_id)?;
+    if run.ticket != t.ticket
+        || (!run.project.is_empty() && run.project != t.project)
+        || run.agent_handle != t.handle
+        || run.worktree_path != t.local_path
+    {
+        return Err("Published commit locator does not match its native assignment".into());
+    }
+    if run.last_commit != result.published_head {
+        crate::run_control::update_in(registry, &t.run_id, |run| {
+            run.last_commit = result.published_head.clone();
+            run.last_signal = format!(
+                "Repository publication fetched at {}; verification remains separate",
+                result.published_head
+            );
+        })?;
+    }
+    Ok(())
 }
 
 async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Result<(), String> {
@@ -774,6 +817,7 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
     else {
         return Ok(());
     };
+    record_publication_in(&crate::agents::registry_dir()?, t, &result)?;
     t.state = "pushed".into();
     let mut pr_error = None;
     if t.pr_url.is_none() && t.review_parent.is_none() {
@@ -1247,9 +1291,45 @@ mod tests {
             )
             .unwrap();
         };
-        std::fs::write(&result, serde_json::json!({"run_id":"fixture", "source_sha":source, "exit_code":0, "uncommitted_source":false}).to_string()).unwrap();
+        std::fs::write(&result, serde_json::json!({"run_id":"fixture", "source_sha":source, "exit_code":0, "uncommitted_source":false, "published_head":"fake-worker-claim"}).to_string()).unwrap();
         commit();
-        assert!(fetch_result_in(&cache, &t).unwrap().is_some());
+        let (published, _) = fetch_result_in(&cache, &t).unwrap().unwrap();
+        assert_eq!(
+            published.published_head,
+            git(&worker, &["rev-parse", "HEAD"]).unwrap()
+        );
+        let registry = root.join("registry");
+        let mut native = crate::run_control::RunManifest::requested(
+            &t.handle,
+            "fixture",
+            &t.local_path,
+            t.ticket.clone(),
+            None,
+            &[],
+            1,
+        );
+        native.run_id = t.run_id.clone();
+        native.project = t.project.clone();
+        let native = crate::run_control::request_in(&registry, native, || Ok(())).unwrap();
+        crate::run_control::update_in(&registry, &native.run_id, |run| {
+            run.state = crate::run_control::RunState::Failed;
+            run.last_commit = source.clone();
+        })
+        .unwrap();
+        record_publication_in(&registry, &t, &published).unwrap();
+        let after = crate::run_control::load_manifest_in(&registry, &t.run_id).unwrap();
+        assert_eq!(after.last_commit, published.published_head);
+        assert_eq!(
+            after.state,
+            crate::run_control::RunState::Failed,
+            "publication must never imply success"
+        );
+        let history =
+            std::fs::read_to_string(registry.join(format!("{}.events.jsonl", t.run_id))).unwrap();
+        assert!(
+            history.contains(&source),
+            "the earlier observed revision remains in durable history"
+        );
         let mut wrong = t.clone();
         wrong.source_sha = "0000000000000000000000000000000000000000".into();
         assert!(fetch_result_in(&cache, &wrong).is_err());
