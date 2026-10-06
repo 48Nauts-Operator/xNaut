@@ -191,11 +191,28 @@ fn branch_has_history(repo: &std::path::Path, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
+// XNAUT-465: the xNAUT product's release proof format is not a contract for
+// every project. Other projects use their own checked-in verification plan.
+fn verification_contract(ticket: &crate::project_management::TicketRecord) -> (String, String) {
+    if ticket.project.eq_ignore_ascii_case("XNAUT") {
+        (
+            "Both suites green: `cargo test --manifest-path src-tauri/Cargo.toml` and `XNAUT_TEST_PORT=4291 npx playwright test`. Zero failures. A test you skipped or ignored to get there does not count.".into(),
+            format!("`.xnaut/bundles/{}.md` exists in the worktree with what changed, both suite totals, how to verify by hand, and one line exactly of the form `XNAUT_TEST_TOTALS={{\"rust\":[{{\"passed\":N,\"failed\":0,\"ignored\":M}}],\"ui\":[K]}}` with the numbers from your own runs. Sign-off compares it to the sandbox record and refuses on a mismatch.", ticket.id),
+        )
+    } else {
+        (
+            "Read the project's `.xnaut/verify.json` at the checked-out revision and run every required command exactly as configured, plus the ticket's acceptance checks. Zero failures. Preserve command, exit code, and log evidence. Missing tools or configuration are explicit verification gaps; never substitute another project's suites or invent passing totals.".into(),
+            format!("`.xnaut/bundles/{}.md` records what changed, the actual project checks and their results, how to verify by hand, and any unresolved requirements. Follow the supplied remote delivery contract for artifact location and handback when running in a sandbox.", ticket.id),
+        )
+    }
+}
+
 fn dispatch_prompt(
     ticket: &crate::project_management::TicketRecord,
     docs: &str,
     poc_minutes: u64,
 ) -> String {
+    let (verification, bundle) = verification_contract(ticket);
     // Two agents on tron (XNAUT-303 and 255) spent their run trying to ssh to
     // tron, and reported the rig unreachable. Tell them where they stand.
     let host = match crate::run_control::hostname() {
@@ -216,16 +233,10 @@ fn dispatch_prompt(
          If a ticket names this machine, that is where you are: nothing to ssh to.\n\n\
          ## What done means\n\n\
          {id} is done when every line below is true, and not before.\n\n\
-         - Both suites green: `cargo test --manifest-path src-tauri/Cargo.toml` and \
-           `XNAUT_TEST_PORT=4291 npx playwright test`. Zero failures. A test you skipped \
-           or ignored to get there does not count.\n\
+         - {verification}\n\
          - No TODOs. No partial implementations. Nothing left in the code for somebody else \
            to finish.\n\
-         - `.xnaut/bundles/{id}.md` exists in the worktree with what changed, both suite \
-           totals, how to verify by hand, and one line exactly of the form \
-           `XNAUT_TEST_TOTALS={{\"rust\":[{{\"passed\":N,\"failed\":0,\"ignored\":M}}],\"ui\":[K]}}` \
-           with the numbers from your own runs. Sign-off compares it to the sandbox record \
-           and refuses on a mismatch.\n\
+         - {bundle}\n\
          - The ticket's design document in the work vault{doc_targets} carries a dated \
            `## Shipped {id}` section: what was done, how, the files, the key code in snippets \
            of at most 30 lines, the totals, and what is deliberately not done. Use \
@@ -588,6 +599,21 @@ mod tests {
         assert!(prompt.contains(".xnaut/bundles/XNAUT-1.md"));
         assert!(prompt.contains("move XNAUT-1 to `done`"));
         assert!(prompt.contains("XNAUT_TEST_PORT=4291"));
+    }
+
+    #[test]
+    fn foreign_projects_use_their_own_verification_contract() {
+        let mut foreign = ticket();
+        foreign.id = "MUSIC-1".into();
+        foreign.project = "MUSIC".into();
+        let prompt = dispatch_prompt(&foreign, "", 90);
+        assert!(prompt.contains("`.xnaut/verify.json`"));
+        assert!(prompt.contains("command, exit code, and log evidence"));
+        assert!(prompt.contains(".xnaut/bundles/MUSIC-1.md"));
+        for unrelated in ["cargo test", "playwright test", "XNAUT_TEST_TOTALS"] {
+            assert!(!prompt.contains(unrelated), "foreign project inherited {unrelated}");
+        }
+        assert!(prompt.contains("Missing tools or configuration are explicit verification gaps"));
     }
 
     #[test]
