@@ -517,21 +517,6 @@ pub fn prepare(
     let remote = portable_remote(&configured)?;
     let desktop = desktop_remote(path, &configured)?;
     let review_parent = crate::repository_review::parent_for_workspace(path)?;
-    let base = if let Some(parent) = &review_parent {
-        list()?
-            .into_iter()
-            .find(|t| &t.run_id == parent)
-            .ok_or("Parent review receipt missing")?
-            .base
-    } else {
-        task_base(
-            path,
-            Path::new(&crate::project_management::local_source_path(project)),
-            &desktop,
-            &source_sha,
-        )?
-    };
-    git(path, &["check-ref-format", &format!("refs/heads/{base}")])?;
     let quality = review_parent
         .is_none()
         .then(crate::repository_review::Review::default);
@@ -550,7 +535,7 @@ pub fn prepare(
         worker_remote: None,
         worker: Default::default(),
         source_sha,
-        base,
+        base: String::new(),
         branch: format!("xnaut/runs/{run_id}"),
         workdir: format!("agents/runs/{run_id}"),
         artifacts: format!(".xnaut/runs/{run_id}"),
@@ -559,8 +544,30 @@ pub fn prepare(
         error: None,
         filed: false,
     };
-    inherit_repair_delivery(&mut prepared, &list()?)?;
+    prepare_delivery_base(
+        &mut prepared,
+        Path::new(&crate::project_management::local_source_path(project)),
+        &list()?,
+    )?;
     Ok(prepared)
+}
+
+/// A validated repair continues its existing PR even when its reviewed head
+/// exists only on the native publication branch. Fresh tasks still require a
+/// published public source branch; never relax that rule for arbitrary inputs.
+fn prepare_delivery_base(t: &mut Transfer, source_checkout: &Path, rows: &[Transfer]) -> Result<(), String> {
+    inherit_repair_delivery(t, rows)?;
+    if t.repair_parent.is_none() {
+        t.base = if let Some(parent) = &t.review_parent {
+            rows.iter().find(|row| &row.run_id == parent)
+                .ok_or("Parent review receipt missing")?.base.clone()
+        } else {
+            task_base(Path::new(&t.local_path), source_checkout,
+                t.desktop_remote.as_deref().ok_or("Desktop repository route missing")?, &t.source_sha)?
+        };
+    }
+    git(Path::new(&t.local_path), &["check-ref-format", &format!("refs/heads/{}", t.base)])?;
+    Ok(())
 }
 
 /// Only a persisted, exact repair reservation may inherit publication rights.
@@ -1271,6 +1278,74 @@ mod tests {
             .unwrap_err()
             .contains("Several published branches"));
         assert_eq!(task_base(&task, &root, remote, &source).unwrap(), "feature");
+    }
+    /// XNAUT-465/467: a real published author commit ahead of main must
+    /// resume its reserved PR, while the same commit cannot start a fresh task.
+    #[test]
+    fn reserved_repair_inherits_base_before_fresh_source_branch_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("source");
+        let remote = dir.path().join("remote.git");
+        git(dir.path(), &["init", "--bare", "-b", "main", remote.to_str().unwrap()]).unwrap();
+        git(dir.path(), &["init", "-b", "main", root.to_str().unwrap()]).unwrap();
+        git(&root, &["config", "user.name", "Fixture"]).unwrap();
+        git(&root, &["config", "user.email", "fixture@example.invalid"]).unwrap();
+        git(&root, &["config", "commit.gpgsign", "false"]).unwrap();
+        std::fs::write(root.join("app.txt"), "main\n").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        git(&root, &["commit", "-m", "main"]).unwrap();
+        let base = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        git(&root, &["push", remote.to_str().unwrap(), "main"]).unwrap();
+        git(&root, &["checkout", "-b", "agent/author/task"]).unwrap();
+        std::fs::write(root.join("app.txt"), "author implementation\n").unwrap();
+        git(&root, &["commit", "-am", "author implementation"]).unwrap();
+        let head = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        git(&root, &["push", remote.to_str().unwrap(), "HEAD:refs/heads/xnaut/runs/original"]).unwrap();
+        let parent: Transfer = serde_json::from_value(serde_json::json!({
+            "run_id":"original","project":"TEST","ticket":"TEST-1","handle":"author",
+            "local_path":root,"local_branch":"agent/author/task",
+            "remote":"https://forge.example/team/repo.git","source_sha":base,
+            "base":"main","branch":"xnaut/runs/original","workdir":"worker",
+            "artifacts":".xnaut/runs/original","state":"review",
+            "pr_url":"https://forge.example/team/repo/pulls/17","error":null,
+            "quality": {"state":"repair_reserved","head":head,"base":base,"repair_child":"repair",
+                "reviewer":"ralph","worktree":"review","child":"reviewer","attempts":1,
+                "message":"Reserved author repair","report":null,"jev":null,"comment_url":null}
+        })).unwrap();
+        // Roundtrip persisted receipt: the production seam consumes the same
+        // exact reservation identities, not a caller-provided desired PR.
+        let rows: Vec<Transfer> = serde_json::from_slice(&serde_json::to_vec(std::slice::from_ref(&parent)).unwrap()).unwrap();
+        let candidate = Transfer { run_id:"repair".into(), source_sha:head.clone(), base:String::new(),
+            desktop_remote:Some(remote.to_string_lossy().into()), branch:"xnaut/runs/repair".into(),
+            artifacts:".xnaut/runs/repair".into(), pr_url:None, quality:Some(Default::default()), ..parent.clone() };
+        let mut prepared = candidate.clone();
+        prepare_delivery_base(&mut prepared, &root, &rows).unwrap();
+        assert_eq!(prepared.base, "main"); assert_eq!(prepared.branch, parent.branch);
+        assert_eq!(prepared.pr_url, parent.pr_url); assert_eq!(prepared.source_sha, head);
+        assert_eq!(prepared.repair_parent.as_deref(), Some("original"));
+        assert!(prepared.quality.is_none());
+        assert_eq!(git(&root, &["ls-remote", remote.to_str().unwrap(), "refs/heads/xnaut/runs/original"]).unwrap().split_whitespace().next(), Some(head.as_str()));
+        for mutation in ["missing", "unreserved", "head", "local_branch", "ticket", "remote", "duplicate"] {
+            let mut child = candidate.clone(); let mut altered = rows.clone();
+            match mutation {
+                "missing" => altered.clear(),
+                "unreserved" => altered[0].quality.as_mut().unwrap().state = "blocked".into(),
+                "head" => child.source_sha = base.clone(),
+                "local_branch" => child.local_branch = "other".into(),
+                "ticket" => child.ticket = Some("TEST-2".into()),
+                "remote" => child.remote = "https://forge.example/other/repo.git".into(),
+                "duplicate" => altered.push(parent.clone()),
+                _ => unreachable!(),
+            }
+            assert!(prepare_delivery_base(&mut child, &root, &altered).is_err(), "{mutation}");
+        }
+        let mut fresh = candidate.clone(); fresh.run_id = "new-task".into();
+        assert!(prepare_delivery_base(&mut fresh, &root, &rows).unwrap_err().contains("published source branch"));
+        // The ordinary fresh-task route still accepts the actual public base.
+        fresh.source_sha = base;
+        prepare_delivery_base(&mut fresh, &root, &rows).unwrap();
+        assert_eq!(fresh.base, "main"); assert!(fresh.repair_parent.is_none());
+        assert!(fresh.pr_url.is_none());
     }
     #[test]
     fn repository_must_be_explicit_and_credential_free() {
