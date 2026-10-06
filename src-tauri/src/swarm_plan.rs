@@ -286,6 +286,8 @@ pub struct Group {
     pub plan: SwarmPlan,
     pub approved_at: Option<i64>,
     #[serde(default)]
+    pub requires_findings_triage: bool,
+    #[serde(default)]
     pub stopped_at: Option<i64>,
     pub members: Vec<Member>,
     pub events: Vec<GroupEvent>,
@@ -372,6 +374,7 @@ fn remember_in(registry: &Path, plan: SwarmPlan) -> Result<(), String> {
         &Group {
             plan,
             approved_at: None,
+            requires_findings_triage: false,
             stopped_at: None,
             members,
             events: Vec::new(),
@@ -621,6 +624,7 @@ pub(crate) fn worker_admission_for_ticket_in(
     replacing: Option<&str>,
     review_ticket: Option<&str>,
 ) -> Result<(), String> {
+    crate::agent_work::admit_model_reservation_in(registry,run)?;
     let groups = groups_in(registry, None)?;
     let mut ticket = run
         .ticket
@@ -901,6 +905,43 @@ pub async fn dispatch_plan(
     app: tauri::AppHandle,
     plan_id: &str,
 ) -> Result<SwarmDispatched, String> {
+    dispatch_plan_from(app,plan_id,false).await
+}
+
+pub(crate) async fn dispatch_model_plan(app: tauri::AppHandle, plan_id: &str) -> Result<SwarmDispatched,String> {
+    dispatch_plan_from(app,plan_id,true).await
+}
+
+fn approve_from(group: &mut Group, model_origin: bool, now: i64,
+    mut admit: impl FnMut(&str,&str)->Result<(),String>) -> Result<(),String> {
+    if model_origin {
+        // Validate saved membership, never a subset supplied by a model.
+        // Failure does not create partial approval.
+        for run in &group.plan.runs { admit(&group.plan.project,&run.ticket)?; }
+        if group.approved_at.is_none() { group.requires_findings_triage = true; }
+    } else {
+        // Only the actual owner UI confirmation enters this path.
+        if group.requires_findings_triage {
+            for member in &group.members {
+                group.events.push(GroupEvent { id:uuid::Uuid::new_v4().to_string(),
+                    project:group.plan.project.clone(),ticket:member.ticket.clone(),actor:"owner".into(),
+                    source:format!("swarm-plans/{}.json",group.plan.id),at_ms:now,state:member.state.clone(),
+                    reason:"Owner explicitly confirmed this group; findings disposition override recorded".into(),run_id:member.run_id.clone() });
+            }
+        }
+        group.requires_findings_triage = false;
+    }
+    approve(group,now);
+    Ok(())
+}
+
+pub(crate) fn model_group_requires_triage(project: &str, ticket: &str) -> Result<bool,String> {
+    Ok(groups_in(&crate::agents::registry_dir()?,Some(project))?.iter()
+        .filter(|g|g.approved_at.is_some() && g.stopped_at.is_none() && g.members.iter().any(|m|m.ticket == ticket))
+        .max_by_key(|g|g.approved_at).is_some_and(|g|g.requires_findings_triage))
+}
+
+async fn dispatch_plan_from(app: tauri::AppHandle, plan_id: &str, model_origin: bool) -> Result<SwarmDispatched,String> {
     if crate::switches::load().read_only {
         return Err("the read_only kill-switch is engaged".into());
     }
@@ -914,7 +955,7 @@ pub async fn dispatch_plan(
         if group.stopped_at.is_some() {
             return Err("group was stopped; a new exact scope approval is required".into());
         }
-        approve(&mut group, crate::run_control::now_ms());
+        approve_from(&mut group,model_origin,crate::run_control::now_ms(),crate::ticket_triage::admit_current_ticket)?;
         save_in(&registry, &group)?;
     }
     refill(&app).await?;
@@ -1265,6 +1306,12 @@ async fn refill_in(
                 save_in(registry, &group)?;
                 continue;
             }
+            if group.requires_findings_triage {
+                if let Err(reason) = crate::ticket_triage::dispatch_admission(current.unwrap()) {
+                    block_local(registry,&mut group,i,reason)?;
+                    continue;
+                }
+            }
             if !backend.capacity(registry, &group, i)? {
                 transition(
                     &mut group,
@@ -1374,9 +1421,9 @@ fn stop(group: &mut Group, now: i64) {
 
 /// Confirm a swarm plan from the card in the chat thread.
 ///
-/// The same door NautBot's `swarm_dispatch` tool goes through, because the
-/// owner can answer either way — press the button or say yes — and two
-/// implementations of "start the batch" is how the two would drift apart.
+/// This explicit owner confirmation shares the persisted queue with NautBot's
+/// model tool, while retaining its separate authorization boundary. The model
+/// tool always requires a current findings disposition.
 #[tauri::command]
 pub async fn swarm_plan_dispatch(
     app: tauri::AppHandle,
@@ -1654,6 +1701,37 @@ mod tests {
         assert!(restarted.events.iter().all(|e| e.at_ms == 10));
         assert_eq!(report(&restarted).queued.len(), 3);
         assert!(groups_in(&dir, Some("OTHER")).unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn model_group_checks_every_saved_member_and_retains_gate_until_owner_confirmation() {
+        let dir = scratch();
+        let mut tickets = vec![ticket("XNAUT-1","XNAUT","ready",Some("claude")),
+            ticket("XNAUT-2","XNAUT","ready",Some("codex"))];
+        tickets[1].source_id = "forgejo:team/repo#2".into();
+        let plan = plan_from("model-origin","XNAUT",&[],&board(&tickets,&models(),&HashSet::new()),2,7).unwrap();
+        remember_in(&dir,plan).unwrap();
+        let mut group = groups_in(&dir,None).unwrap().remove(0);
+        let before = serde_json::to_value(&group).unwrap();
+        let admit = |_: &str,id: &str| crate::ticket_triage::admission_from_records(tickets.iter().find(|t|t.id == id).unwrap(),&[]);
+        assert!(approve_from(&mut group,true,10,admit).unwrap_err().contains("no recorded triage"));
+        assert_eq!(serde_json::to_value(&group).unwrap(),before,"no partial model approval or events");
+        // Ordinary spoken batch requests retain their existing behavior.
+        tickets[1].source_id.clear();
+        approve_from(&mut group,true,20,|_,id|crate::ticket_triage::admission_from_records(tickets.iter().find(|t|t.id == id).unwrap(),&[])).unwrap();
+        save_in(&dir,&group).unwrap();
+        let mut restarted = groups_in(&dir,None).unwrap().remove(0);
+        assert!(restarted.requires_findings_triage);
+        let approval = restarted.approved_at;
+        let history = restarted.events.len();
+        // A model retry cannot present an owner-approval flag or erase the gate.
+        assert!(approve_from(&mut restarted,true,30,|_,_|Err("stale finding".into())).is_err());
+        assert!(restarted.requires_findings_triage); assert_eq!(restarted.approved_at,approval);
+        assert_eq!(restarted.events.len(),history);
+        // Only the separate owner UI entry point supplies model_origin=false.
+        approve_from(&mut restarted,false,40,|_,_|panic!("owner confirmation is explicit")).unwrap();
+        assert!(!restarted.requires_findings_triage);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

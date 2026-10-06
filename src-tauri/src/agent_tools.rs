@@ -1092,7 +1092,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 return json!({ "ok": false, "error": "the app is not running" });
             };
             let environment = args.get("environment").and_then(Value::as_str).map(str::to_owned);
-            match crate::dispatch::pm_ticket_dispatch(app.clone(), id.clone(), project, environment).await {
+            match crate::dispatch::model_ticket_dispatch(app.clone(), id.clone(), project, environment).await {
                 Ok(result) => json!({
                     "ok": true,
                     "handle": result.handle,
@@ -1176,7 +1176,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
             let Some(app) = crate::nudge::app() else {
                 return json!({ "ok": false, "error": "the app is not running" });
             };
-            match crate::swarm_plan::dispatch_plan(app.clone(), &plan_id).await {
+            match crate::swarm_plan::dispatch_model_plan(app.clone(), &plan_id).await {
                 Ok(done) => json!({
                     "ok": true,
                     "started": serde_json::to_value(&done.started).unwrap_or(Value::Null),

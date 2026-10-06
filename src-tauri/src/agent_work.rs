@@ -241,6 +241,98 @@ pub(crate) fn launch_receipt_path(
     Ok(dir.join(format!("ticket-{digest:x}.json")))
 }
 
+/// Called inside shared native admission after asynchronous repository staging.
+/// Only an internal model-origin reservation requests this gate; explicit owner
+/// UI launches retain their established authorization path.
+pub(crate) fn admit_model_reservation_in(registry: &Path, run: &crate::run_control::RunManifest) -> Result<(),String> {
+    let Some(reserved_root) = model_reservation_root_in(registry,run)? else { return Ok(()); };
+    let ticket = run.ticket.as_deref().ok_or("Model launch ticket disappeared")?;
+    let control = crate::project_management::repo_now()?;
+    let projects = crate::project_management::list_projects(&control)?;
+    let project = projects.iter().find(|p|p.key == run.project)
+        .ok_or("Model launch project disappeared before admission")?;
+    let root = PathBuf::from(crate::project_management::local_source_path(project));
+    let root = root.canonicalize().map_err(|e|e.to_string())?;
+    admit_reserved_model_root(&reserved_root,&root,||crate::ticket_triage::admit_current_ticket(&run.project,ticket))
+}
+
+pub(crate) fn pin_model_reservation_in(registry: &Path, run: &mut crate::run_control::RunManifest) -> Result<(),String> {
+    run.findings_reservation_root = model_reservation_root_in(registry,run)?.map(|p|p.to_string_lossy().into_owned());
+    Ok(())
+}
+
+fn model_reservation_root_in(registry: &Path, run: &crate::run_control::RunManifest) -> Result<Option<PathBuf>,String> {
+    let Some(ticket) = run.ticket.as_deref() else { return Ok(None); };
+    let entries = match std::fs::read_dir(registry.join("chat-launches")) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && run.findings_reservation_root.is_none() => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut selected = None;
+    for entry in entries {
+        let path = entry.map_err(|e|e.to_string())?.path();
+        if path.extension().and_then(|s|s.to_str()) != Some("json") { continue; }
+        // Shared registry records are scoped before their proof is considered.
+        // Unknown/foreign historical data cannot grant model authorization.
+        let Ok(bytes) = std::fs::read(&path) else { continue; };
+        let Ok(receipt) = serde_json::from_slice::<Value>(&bytes) else { continue; };
+        if receipt["pending"] != true || receipt["requires_findings_triage"] != true
+            || receipt["ticket"] != ticket || receipt["project"] != run.project
+            || receipt["worktree_path"] != run.worktree_path { continue; }
+        let root = PathBuf::from(receipt["repository_root"].as_str().ok_or("Model launch reservation root is missing")?);
+        let continuation = receipt["continuation_run_id"].as_str();
+        if !root.is_absolute() || receipt["branch"] != run.branch
+            || ![None,Some(run.run_id.as_str()),run.previous_run_id.as_deref()].contains(&continuation)
+            || launch_receipt_path(registry,&root,ticket,continuation)? != path
+        { return Err("Model launch reservation identity changed before native admission".into()); }
+        if selected.replace(root).is_some() { return Err("Multiple pending model launch reservations need reconciliation".into()); }
+    }
+    if let Some(expected) = &run.findings_reservation_root {
+        if selected.as_deref() != Some(Path::new(expected)) {
+            return Err("Model launch reservation disappeared or changed during staging".into());
+        }
+    }
+    Ok(selected)
+}
+
+/// GitVM registers capacity before warm-up. Recheck after staging without
+/// registering that admitted ID again or claiming an agent process ran.
+pub(crate) fn admit_staged_model_run_in(registry: &Path, id: &str) -> Result<(),String> {
+    admit_staged_model_run_with(registry,id,|run|admit_model_reservation_in(registry,run))
+}
+
+fn admit_staged_model_run_with(registry: &Path, id: &str,
+    admit: impl FnOnce(&crate::run_control::RunManifest)->Result<(),String>) -> Result<(),String> {
+    let original = crate::run_control::load_manifest_in(registry,id)?;
+    if let Err(error) = admit(&original) {
+        crate::run_control::update_in(registry,id,|run| {
+            if run.revision == original.revision && run.state == crate::run_control::RunState::Starting
+                && run.pid.is_none() && run.process_birth.is_none() && run.pty_session.is_none() && run.zellij_session.is_none()
+                && run.last_hook_at.is_none() && run.capture_bytes == 0 {
+                run.state = crate::run_control::RunState::Failed;
+                run.admission_refused = true;
+                run.prelaunch_failure = Some(crate::run_control::PrelaunchFailure {
+                    phase:crate::run_control::PrelaunchPhase::RepositoryStaging,recorded_at:crate::run_control::now_ms() });
+                run.last_signal = format!("Model findings admission refused after staging: {error}. No agent was started.");
+            }
+        })?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn admit_reserved_model_root(root: &Path, current_root: &Path, admit: impl FnOnce()->Result<(),String>) -> Result<(),String> {
+    if root != current_root { return Err("Model launch project repository changed during staging".into()); }
+    admit()
+}
+
+#[cfg(test)]
+fn admit_model_reservation_at(registry: &Path, run: &crate::run_control::RunManifest, current_root: &Path,
+    admit: impl FnOnce()->Result<(),String>) -> Result<(),String> {
+    let Some(root) = model_reservation_root_in(registry,run)? else { return Ok(()); };
+    admit_reserved_model_root(&root,current_root,admit)
+}
+
 /// Remove a reservation only when we know launch admission was never reached.
 /// Once attempted, even an error can hide a live or partially created worker.
 pub(crate) struct LaunchReservation {
@@ -930,7 +1022,7 @@ async fn execute_inner(
         let pending = json!({"pending":true,"ticket":ticket,"project":project,"repository_root":root,
                 "handle":profile.handle,"branch":branch,"worktree_path":dest,
                 "requested_at":crate::run_control::now_ms(),"environment":environment,
-                "continuation_run_id":continuation.as_ref().map(|run|&run.run_id)});
+                "continuation_run_id":continuation.as_ref().map(|run|&run.run_id),"requires_findings_triage":true});
         if let Some(prior) = reserve(&receipt_path, &pending)? {
             verify_receipt_environment(&prior, args.get("environment"))?;
             return Ok(
@@ -1775,12 +1867,88 @@ mod tests {
         std::fs::write(&evidence,"return 1\n").unwrap();
         assert!(check(std::slice::from_ref(&approved)).unwrap_err().contains("evidence changed"));
         std::fs::write(&evidence,"return 0\n").unwrap();
+        // A context accepted before asynchronous staging is not permission to
+        // launch after the finding/evidence changes. The internal reservation
+        // is read again at shared native worker admission.
+        let registry = temp.path().join("native-admission");
+        let mut run = crate::run_control::tests::run(); run.project = ticket.project.clone();
+        run.ticket = Some(ticket.id.clone()); run.worktree_path = source.join("worker").to_string_lossy().into();
+        run.branch = "model/finding".into();
+        let receipt_path = launch_receipt_path(&registry,&source,&ticket.id,None).unwrap();
+        std::fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
+        let mut receipt = json!({"pending":true,"requires_findings_triage":true,"ticket":ticket.id,
+            "project":ticket.project,"repository_root":source,"worktree_path":run.worktree_path,"branch":run.branch});
+        std::fs::write(&receipt_path,receipt.to_string()).unwrap();
+        pin_model_reservation_in(&registry,&mut run).unwrap();
+        assert!(admit_model_reservation_at(&registry,&run,&source,||check(std::slice::from_ref(&approved)).map(|_|())).is_ok());
+        std::fs::write(&receipt_path,"{").unwrap();
+        assert!(admit_model_reservation_at(&registry,&run,&source,||panic!("corrupt model receipt cannot become owner permission")).unwrap_err().contains("disappeared"));
+        std::fs::remove_file(&receipt_path).unwrap();
+        assert!(admit_model_reservation_at(&registry,&run,&source,||panic!("missing model receipt cannot become owner permission")).unwrap_err().contains("disappeared"));
+        std::fs::write(&receipt_path,receipt.to_string()).unwrap();
+        let moved_root = source.join("different-project-root");
+        assert!(admit_model_reservation_at(&registry,&run,&moved_root,||panic!("changed project root must hold before disposition")).unwrap_err().contains("repository changed"));
+        assert_eq!(model_reservation_root_in(&registry,&run).unwrap(),Some(source.clone()),"reservation remains recoverable without current project metadata");
+        ticket.body.push_str("new scope during staging"); save(&ticket);
+        assert!(admit_model_reservation_at(&registry,&run,&source,||check(std::slice::from_ref(&approved)).map(|_|())).unwrap_err().contains("scope changed"));
+        // Failed-admission retry: the chat slot is keyed to the refused
+        // predecessor while bind_pending_in selects a new native child ID.
+        std::fs::remove_file(&receipt_path).unwrap();
+        run.previous_run_id = Some("refused-predecessor".into());
+        let retry_path = launch_receipt_path(&registry,&source,&ticket.id,run.previous_run_id.as_deref()).unwrap();
+        receipt["continuation_run_id"] = json!("refused-predecessor");
+        std::fs::write(&retry_path,receipt.to_string()).unwrap();
+        assert!(admit_model_reservation_at(&registry,&run,&source,||check(std::slice::from_ref(&approved)).map(|_|())).unwrap_err().contains("scope changed"));
+        let receipt_path = retry_path;
+        receipt["requires_findings_triage"] = json!(false);
+        std::fs::write(&receipt_path,receipt.to_string()).unwrap();
+        assert!(admit_model_reservation_at(&registry,&run,&source,||Ok(())).is_err(),"stored native origin cannot be downgraded through a receipt");
+        run.findings_reservation_root = None;
+        assert!(admit_model_reservation_at(&registry,&run,&source,||panic!("actual owner dispatch retains its separate authorization")).is_ok());
+        receipt["requires_findings_triage"] = json!(true); receipt["branch"] = json!("foreign");
+        std::fs::write(&receipt_path,receipt.to_string()).unwrap();
+        assert!(admit_model_reservation_at(&registry,&run,&source,||Ok(())).unwrap_err().contains("identity changed"));
         ticket.source_id.clear(); save(&ticket);
         // Ordinary owner work retains the production path's early nonfinding
         // admission without loading the user's triage store.
         assert!(ticket_context_in(temp.path(),"APP-1",&source).is_ok());
         assert!(!source.join(".worktrees").exists());
         assert!(!temp.path().join("registry").exists());
+    }
+
+    #[test]
+    fn gitvm_staged_findings_refusal_retains_admitted_identity_without_launching() {
+        let temp = Temp::new();
+        let registry = temp.path().join("registry");
+        let mut run = crate::run_control::tests::run();
+        run.state = crate::run_control::RunState::Requested;
+        run.pty_session = None;
+        run.remote_env = Some("gitvm".into());
+        run.findings_reservation_root = Some("/original/project".into());
+        let admitted = crate::run_control::request_in(&registry,run,||Ok(())).unwrap();
+        assert_eq!(admitted.state,crate::run_control::RunState::Starting);
+        let error = admit_staged_model_run_with(&registry,&admitted.run_id,|current| {
+            assert_eq!(current.findings_reservation_root,admitted.findings_reservation_root);
+            Err("finding evidence changed during warm-up".into())
+        }).unwrap_err();
+        assert!(error.contains("evidence changed"));
+        let refused = crate::run_control::load_manifest_in(&registry,&admitted.run_id).unwrap();
+        assert!(crate::run_control::prelaunch_refused(&refused));
+        assert_eq!(refused.run_id,admitted.run_id);
+        assert!(refused.revision > admitted.revision);
+        assert!(refused.last_signal.contains("No agent was started"));
+        assert_eq!(crate::run_control::list_ids_in(&registry).unwrap(),vec![admitted.run_id]);
+        // A simultaneous actual worker observation is retained, never relabelled
+        // as a proven pre-execution refusal by the final model guard.
+        crate::run_control::update_in(&registry,&refused.run_id,|r| {
+            r.state = crate::run_control::RunState::Running;
+            r.pty_session = Some("worker-view".into()); r.admission_refused = false;
+            r.prelaunch_failure = None;
+        }).unwrap();
+        assert!(admit_staged_model_run_with(&registry,&refused.run_id,|_|Err("stale finding".into())).is_err());
+        let running = crate::run_control::load_manifest_in(&registry,&refused.run_id).unwrap();
+        assert_eq!(running.state,crate::run_control::RunState::Running);
+        assert_eq!(running.pty_session.as_deref(),Some("worker-view"));
     }
     struct Temp(PathBuf);
     impl Temp {

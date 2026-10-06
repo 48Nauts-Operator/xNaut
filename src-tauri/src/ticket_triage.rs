@@ -409,6 +409,13 @@ pub fn dispatch_admission(ticket: &crate::project_management::TicketRecord) -> R
     let records = ticket_triage_records()?;
     admission_from_records(ticket, &records)
 }
+
+pub(crate) fn admit_current_ticket(project: &str, id: &str) -> Result<(),String> {
+    let repo = crate::project_management::repo_now()?;
+    let ticket = crate::project_management::ticket_list_in(&repo,Some(project.into()))?.into_iter()
+        .find(|t| t.id == id && t.project == project).ok_or("Model dispatch ticket is missing from its project")?;
+    dispatch_admission(&ticket)
+}
 pub(crate) fn admission_from_records(
     ticket: &crate::project_management::TicketRecord,
     records: &[TriageRecord],

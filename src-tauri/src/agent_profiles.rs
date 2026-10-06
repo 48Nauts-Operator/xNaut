@@ -2101,6 +2101,7 @@ pub async fn agent_profile_launch(
         // of them, and fails a working agent inside the grace window.
         run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::GitVm.key().to_string());
         crate::run_control::bind_pending_in(&registry, &mut run)?;
+        crate::agent_work::pin_model_reservation_in(&registry, &mut run)?;
         // The spend and lease admissions already ran above; this registration
         // is bookkeeping, not a second gate.
         Some({
@@ -2359,6 +2360,7 @@ async fn launch_on_exe_dev(
     run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::ExeDev.key().into());
     let registry = crate::agents::registry_dir()?;
     crate::run_control::bind_pending_in(&registry, &mut run)?;
+    crate::agent_work::pin_model_reservation_in(&registry, &mut run)?;
     let run_id = run.run_id.clone();
     let path = std::path::PathBuf::from(&req.worktree_path);
     let root = project.to_path_buf();
@@ -2633,6 +2635,15 @@ async fn launch_on_gitvm(
         }
     };
     transfer.worker_remote = Some(remote);
+    if let Some(id) = registry_run.as_deref() {
+        let registry = crate::agents::registry_dir()?;
+        if let Err(error) = crate::agent_work::admit_staged_model_run_in(&registry,id) {
+            transfer.state = "preparation_failed".into();
+            transfer.error = Some(error.clone());
+            crate::repository_transfer::save(&transfer)?;
+            return Err(error);
+        }
+    }
     transfer.state = "running".into();
     crate::repository_transfer::save(&transfer)?;
 

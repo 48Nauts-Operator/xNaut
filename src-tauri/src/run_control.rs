@@ -128,6 +128,9 @@ pub struct RunManifest {
     pub admission_refused: bool,
     #[serde(default)]
     pub prelaunch_failure: Option<PrelaunchFailure>,
+    /// Native-only origin proof retained across asynchronous repository staging.
+    #[serde(default)]
+    pub findings_reservation_root: Option<String>,
     pub started_at: i64,
     pub last_seen_at: i64,
     pub last_progress_at: i64,
@@ -257,6 +260,7 @@ impl RunManifest {
             undead_notified: false,
             admission_refused: false,
             prelaunch_failure: None,
+            findings_reservation_root: None,
             started_at: at,
             last_seen_at: at,
             last_progress_at: at,
@@ -1622,6 +1626,7 @@ pub(crate) mod tests {
             undead_notified: false,
             admission_refused: false,
             prelaunch_failure: None,
+            findings_reservation_root: None,
             started_at: 1_000,
             last_seen_at: 1_000,
             last_progress_at: 1_000,

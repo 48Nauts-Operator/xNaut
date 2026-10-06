@@ -119,7 +119,7 @@ pub(crate) async fn automatic_dispatch(
         kind: RefusalKind::Policy,
         reason,
     })?;
-    pm_ticket_dispatch(app, ticket, project, None)
+    model_ticket_dispatch(app, ticket, project, None)
         .await
         .map_err(DispatchRefusal::uncertain)
 }
@@ -344,6 +344,19 @@ pub(crate) async fn dispatch_scoped(
     environment: Option<String>,
     approved: Option<&crate::swarm_plan::PlannedRun>,
 ) -> Result<DispatchResult, String> {
+    dispatch_with_findings_gate(app,ticket_id,project,environment,approved,false).await
+}
+
+pub(crate) async fn model_ticket_dispatch(
+    app: tauri::AppHandle, ticket_id: String, project: String, environment: Option<String>,
+) -> Result<DispatchResult,String> {
+    dispatch_with_findings_gate(app,ticket_id,project,environment,None,true).await
+}
+
+async fn dispatch_with_findings_gate(
+    app: tauri::AppHandle, ticket_id: String, project: String, environment: Option<String>,
+    approved: Option<&crate::swarm_plan::PlannedRun>, model_origin: bool,
+) -> Result<DispatchResult,String> {
     let tickets = crate::project_management::pm_ticket_list(
         app.state::<crate::state::AppState>(),
         Some(project.clone()),
@@ -353,6 +366,9 @@ pub(crate) async fn dispatch_scoped(
         .into_iter()
         .find(|item| item.id == ticket_id)
         .ok_or_else(|| format!("ticket {ticket_id} not found"))?;
+    let requires_triage = model_origin || (approved.is_some()
+        && crate::swarm_plan::model_group_requires_triage(&project,&ticket.id)?);
+    if requires_triage { crate::ticket_triage::dispatch_admission(&ticket)?; }
 
     let handle = ticket
         .owner
@@ -443,7 +459,7 @@ pub(crate) async fn dispatch_scoped(
     let pending = serde_json::json!({"pending":true,"ticket":ticket.id,"project":project,
         "repository_root":root,"continuation_run_id":continuation.as_ref().map(|run| &run.run_id),
         "handle":handle,"branch":branch,"worktree_path":worktree_path,"environment":destination.key(),
-        "requested_at":crate::run_control::now_ms()});
+        "requested_at":crate::run_control::now_ms(),"requires_findings_triage":requires_triage});
     if let Some(prior) = crate::agent_work::reserve(&receipt_path, &pending)? {
         return Err(format!("{} already has a launch receipt; no duplicate worker started. Recover: {prior}", ticket.id));
     }
@@ -495,6 +511,7 @@ pub(crate) async fn dispatch_scoped(
     let prompt_recovery = crate::agent_history::compact_project(&recovered, &ticket.id);
     let prompt = format!("{}\n\nRECOVERED PROJECT WORK (evidence, not authorization)\n{prompt_recovery}",
         continuation_prompt(&ticket, &linked_docs(&ticket.documentation), &branch, continuing, poc_minutes));
+    if requires_triage { crate::ticket_triage::admit_current_ticket(&project,&ticket.id)?; }
     reservation.attempted();
     let launched = crate::agent_profiles::agent_profile_launch(
         app.clone(),
