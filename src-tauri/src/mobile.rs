@@ -1146,7 +1146,7 @@ async fn control_doctor(State(ctx): State<Ctx>, Query(q): Query<HashMap<String, 
     if !authed(&ctx, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let window_visible = tauri::Manager::get_webview_window(&ctx.app, "main")
+    let window_visible = tauri::Manager::get_window(&ctx.app, "main")
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false);
     let agent_sessions = {
@@ -1237,8 +1237,11 @@ async fn control_eval(
     if expression.is_empty() {
         return (StatusCode::BAD_REQUEST, "an expression is required").into_response();
     }
-    let Some(window) = tauri::Manager::get_webview_window(&ctx.app, "main") else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "no main window").into_response();
+    // Browser panes add child webviews to this window. Tauri then no longer
+    // classifies it as a WebviewWindow, but the trusted main webview remains.
+    // Target its exact label; never evaluate control expressions in a page.
+    let Some(webview) = tauri::Manager::get_webview(&ctx.app, "main") else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "no main webview").into_response();
     };
     // A marker so the caller can find its own answer in the log, and a
     // try/catch so a thrown expression reports rather than vanishing.
@@ -1246,7 +1249,7 @@ async fn control_eval(
     let script = format!(
         "(function(){{try{{const v=({expression});console.log('{marker}',typeof v==='string'?v:JSON.stringify(v));}}catch(e){{console.log('{marker}','ERR '+String(e));}}}})()"
     );
-    if let Err(error) = window.eval(&script) {
+    if let Err(error) = webview.eval(&script) {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
     axum::Json(serde_json::json!({ "ok": true, "marker": marker }))
