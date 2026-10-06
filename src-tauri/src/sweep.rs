@@ -1337,21 +1337,6 @@ fn assignable_owners_for(requirement: &str) -> Vec<String> {
     out.sort();
     out
 }
-const WOKEN_RECENTLY_MINUTES: i64 = 10;
-
-/// Was this owner woken or dispatched, by the sweep or by an agent's tool, in
-/// the last ten minutes? Read from the ledger, so NautBot's wakes count too.
-fn recently_woken(owner: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
-    let cutoff = now - chrono::Duration::minutes(WOKEN_RECENTLY_MINUTES);
-    crate::ledger::ledger_recent(Some(400)).into_iter().any(|e| {
-        e.agent == owner
-            && matches!(e.kind.as_str(), "dispatched" | "nudged" | "sweep_dispatch")
-            && chrono::DateTime::parse_from_rfc3339(&e.at)
-                .map(|t| t.with_timezone(&chrono::Utc) > cutoff)
-                .unwrap_or(false)
-    })
-}
-
 fn ready_with_owner(
     tickets: &[crate::project_management::TicketRecord],
 ) -> Vec<&crate::project_management::TicketRecord> {
