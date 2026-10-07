@@ -676,7 +676,7 @@ fn has_origin(tree: &Path) -> bool {
 /// remote's branch after a fetch: the integration branch LIVES on Forgejo,
 /// and every checkout of it (the served worktree, tron's main checkout) is a
 /// follower. Without one, the local ref.
-fn integration_base(tree: &Path, reference: &str) -> Result<String, String> {
+pub(crate) fn integration_base(tree: &Path, reference: &str) -> Result<String, String> {
     if has_origin(tree) {
         let branch = reference.trim_start_matches("refs/heads/");
         git(tree, &["fetch", "--no-tags", "origin", branch])?;
@@ -723,6 +723,90 @@ fn publish(
     git(tree, &["update-ref", reference, sha, expected])?;
     Ok(())
 }
+/// Restore only a recorded compensation for this ticket/source lineage. All
+/// edits occur in the private clone, before the single guarded publication.
+fn restore_recorded_reverts(
+    repo: &Path, tree: &Path, clone: &Path, base: &str, job: &Job,
+) -> Result<Vec<RevertRestoration>, String> {
+    let current = ticket(repo, &job.ticket)?;
+    let signoffs: Vec<_> = current.approval.jury_reviews.iter()
+        .filter(|old| old.ticket == job.ticket && old.project == job.project)
+        .filter_map(|old| old.signoff.as_ref())
+        .chain(current.approval.signoff.as_ref()).chain(job.signoff.as_ref()).collect();
+    let mut restored = std::collections::BTreeMap::new();
+    for evidence in signoffs.iter().flat_map(|s| &s.restorations) {
+        if git(tree, &["merge-base", "--is-ancestor", &evidence.restoration_sha, base]).is_ok() {
+            let parents = git(tree, &["show", "-s", "--format=%P", &evidence.restoration_sha])?;
+            let inverse = git(tree, &["diff", "--binary", &evidence.revert_sha, &format!("{}^", evidence.revert_sha)])?;
+            if parents.split_whitespace().count() != 1 || inverse.is_empty()
+                || git(tree, &["diff", "--binary", parents.trim(), &evidence.restoration_sha])? != inverse
+                || git(tree, &["merge-base", "--is-ancestor", &evidence.revert_sha, parents.trim()]).is_err()
+                || git(tree, &["show", "-s", "--format=%s", &evidence.revert_sha])? != format!("XNAUT jury revert {}", evidence.jury_id)
+            {
+                return Err("Recorded jury restoration does not match its actual Git patch; owner reconciliation required".into());
+            }
+            restored.insert(evidence.revert_sha.clone(), evidence.clone());
+        }
+    }
+    let mut pending = std::collections::BTreeMap::new();
+    for signoff in signoffs {
+        let Some(revert) = &signoff.revert_sha else { continue };
+        if restored.contains_key(revert) { continue; }
+        let parents = git(tree, &["show", "-s", "--format=%P", &signoff.merge_sha])?;
+        let parents: Vec<_> = parents.split_whitespace().collect();
+        if parents.len() < 2 {
+            return Err("Recorded jury revert has no source merge parent; restore it with owner review before remerging".into());
+        }
+        if git(tree, &["merge-base", "--is-ancestor", parents[1], &job.source_sha]).is_err() {
+            continue;
+        }
+        if !signoff.revoked
+            || git(tree, &["merge-base", "--is-ancestor", &signoff.merge_sha, revert]).is_err()
+            || git(tree, &["merge-base", "--is-ancestor", revert, base]).is_err()
+            || git(tree, &["show", "-s", "--format=%s", revert])? != format!("XNAUT jury revert {}", signoff.jury_id)
+        {
+            return Err("Recorded jury revert does not match current integration history; owner reconciliation required".into());
+        }
+        let revert_parents = git(tree, &["show", "-s", "--format=%P", revert])?;
+        if revert_parents.split_whitespace().count() != 1 {
+            return Err("Recorded compensation is not a single-parent revert; owner reconciliation required".into());
+        }
+        // A marker alone is not proof: require the exact inverse patch.
+        let original = git(tree, &["diff", "--binary", parents[0], &signoff.merge_sha])?;
+        let inverse = git(tree, &["diff", "--binary", revert, revert_parents.trim()])?;
+        if original.is_empty() || original != inverse {
+            return Err("Recorded jury compensation differs from the reviewed merge; restore it with owner review".into());
+        }
+        if let Some(previous) = pending.insert(revert.clone(), (*signoff).clone()) {
+            if previous.merge_sha != signoff.merge_sha || previous.jury_id != signoff.jury_id {
+                return Err("Conflicting jury revert receipts require owner reconciliation".into());
+            }
+        }
+    }
+    if pending.len() > 1 {
+        return Err("Multiple unrestored jury reverts require explicit owner reconciliation before merging".into());
+    }
+    // Without a bound receipt an ancestor plus a revert marker is not proof
+    // that the source contents are present (the original XNAUT-445 trap).
+    let common = git(tree, &["merge-base", &job.source_sha, base])?;
+    if pending.is_empty() && restored.is_empty()
+        && reverted_after(tree, &common, base)
+    {
+        return Err("Source is already an ancestor after a jury revert, but its restoration receipt is missing; owner reconciliation required".into());
+    }
+    for (revert, signoff) in pending {
+        if let Err(error) = git(clone, &["-c", "user.name=NautBot", "-c", "user.email=nautbot@xnaut.local", "revert", "--no-edit", &revert]) {
+            let _ = git(clone, &["revert", "--abort"]);
+            return Err(format!("Restoring recorded jury revert conflicts; integration was not published: {error}"));
+        }
+        restored.insert(revert.clone(), RevertRestoration {
+            jury_id: signoff.jury_id, merge_sha: signoff.merge_sha, revert_sha: revert,
+            restoration_sha: git(clone, &["rev-parse", "HEAD"])?,
+        });
+    }
+    Ok(restored.into_values().collect())
+}
+
 pub fn merge_and_verify(
     app: Option<&AppHandle>,
     repo: &Path,
@@ -790,6 +874,8 @@ pub fn merge_and_verify(
         ],
     )?;
     git(&clone, &["checkout", "--detach", &base])?;
+    let restorations = restore_recorded_reverts(repo, &tree, &clone, &base, job)?;
+    let restored_head = git(&clone, &["rev-parse", "HEAD"])?;
     if let Err(e) = git(
         &clone,
         &[
@@ -806,7 +892,17 @@ pub fn merge_and_verify(
         let _ = git(&clone, &["merge", "--abort"]);
         return Err(format!("integration merge conflict: {e}"));
     }
-    let sha = git(&clone, &["rev-parse", "HEAD"])?;
+    let mut sha = git(&clone, &["rev-parse", "HEAD"])?;
+    if restored_head != base {
+        // First parent must remain the pre-restoration integration tip: a red
+        // verification must compensate BOTH restoration and new branch work.
+        // Retain the private history as a third parent for durable evidence.
+        let tree_sha = git(&clone, &["rev-parse", "HEAD^{tree}"])?;
+        sha = git(&clone, &["-c", "user.name=NautBot", "-c", "user.email=nautbot@xnaut.local",
+            "commit-tree", &tree_sha, "-p", &base, "-p", &job.source_sha, "-p", &sha,
+            "-m", &format!("Restore jury compensation and integrate {}", job.ticket)])?;
+        git(&clone, &["checkout", "--detach", &sha])?;
+    }
     // A merge that produced nothing means the integration ref already holds
     // the source: an owner merged the branch by hand, or an earlier attempt
     // published and died before it recorded. That is the state sign-off
@@ -833,6 +929,7 @@ pub fn merge_and_verify(
         integration_verify_run: None,
         revoked: false,
         revert_sha: None,
+        restorations,
     });
     job.state = "merge_prepared".into();
     write_job(root, job)?;
@@ -865,6 +962,88 @@ pub(crate) fn integrated_version(job: &Job) -> Option<String> {
         .find_map(|l| l.trim().strip_prefix("version"))
         .and_then(|rest| rest.split('"').nth(1))
         .map(str::to_string)
+}
+
+fn verifier_unavailable(exit: i32, log: &str, execution_error: Option<&str>) -> Option<&'static str> {
+    if exit < 0 || execution_error.is_some() {
+        return Some("the verification process could not start or finish");
+    }
+    let text = log.to_ascii_lowercase();
+    // An observed failed assertion is still red, even if its diagnostic
+    // quotes one of the environment messages below.
+    if text.contains("test result: failed") || text.contains("assertion failed:")
+        || regex::Regex::new(r"(?m)^\s*[1-9][0-9]* failed(?:\s|$)").unwrap().is_match(&text)
+    { return None; }
+    if text.contains("no space left on device") || text.contains("enospc") {
+        return Some("disk space is exhausted");
+    }
+    if text.contains("verifier unavailable: playwright")
+        || text.contains("no playwright browser is installed")
+        || (text.contains("executable doesn't exist") && (text.contains("playwright") || text.contains("chromium")))
+    { return Some("the Playwright browser is unavailable"); }
+    if (exit == 127 && (text.contains("not found") || text.contains("not recognized")))
+        || (text.contains("toolchain") && text.contains("is not installed"))
+        || text.contains("rustup could not choose a version")
+    { return Some("the required verification toolchain is unavailable"); }
+    None
+}
+
+fn verification_log_tail(path: &Path) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(128 * 1024))).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Restart recovery may compensate a published merge only for actual bound
+/// failed checks, not because its verifier never ran or its process vanished.
+pub(crate) fn recorded_integration_red(registry: &Path, root: &Path, job: &Job) -> bool {
+    let Some(id) = job.signoff.as_ref().and_then(|s| s.integration_verify_run.as_ref()) else { return false; };
+    let Ok(run) = run_control::load_manifest_in(registry, id) else { return false; };
+    if run.state != RunState::Failed || run.kind != RunKind::Verify
+        || run.ticket.as_deref() != Some(job.ticket.as_str())
+        || Path::new(&run.worktree_path) != checkout(root, job)
+        || git(&checkout(root, job), &["rev-parse", "HEAD"]).ok().as_deref()
+            != job.signoff.as_ref().map(|s| s.merge_sha.as_str())
+    { return false; }
+    let Ok(raw) = std::fs::read(root.join(format!("{}-{id}-integration-proof.json", job.id))) else { return false; };
+    let Ok(proof) = serde_json::from_slice::<serde_json::Value>(&raw) else { return false; };
+    if serde_json::from_str::<serde_json::Value>(&run.last_signal).ok().as_ref() != Some(&proof) { return false; }
+    let Some(steps) = proof.as_array() else { return false; };
+    if steps.is_empty() || steps.len() > job.policy.integration_commands.len() { return false; }
+    for (index, step) in steps.iter().enumerate() {
+        if step["command"].as_str() != Some(job.policy.integration_commands[index].as_str()) { return false; }
+        let Some(exit) = step["exit_code"].as_i64().and_then(|n| i32::try_from(n).ok()) else { return false; };
+        if exit == 0 { continue; }
+        if exit < 0 || step["attempts"].as_array().is_some_and(|attempts|
+            attempts.iter().any(|a| !a["execution_error"].is_null())) { return false; }
+        if !step["unavailable"].is_null() { return false; }
+        let Some(path) = step["log"].as_str().map(Path::new) else { return false; };
+        let expected = format!("{}-{id}-verify-{index}", job.id);
+        if path.parent() != Some(root) || !path.file_name().and_then(|p| p.to_str())
+            .is_some_and(|p| p == format!("{expected}.log") || p == format!("{expected}-retry1.log"))
+        { return false; }
+        let Ok(log) = verification_log_tail(path) else { return false; };
+        return index + 1 == steps.len() && verifier_unavailable(exit, &log, None).is_none();
+    }
+    false
+}
+
+pub(crate) fn park_unavailable_verifier(
+    app: Option<&AppHandle>, repo: &Path, root: &Path, job: &mut Job, reason: &str,
+) -> Result<(), String> {
+    job.state = "owner_required".into();
+    job.decision = Some(Decision::Owner);
+    job.owner_approved = false;
+    job.reason = format!("Verifier unavailable: {reason}. Merge retained without verified success; restore the environment and explicitly retry verification. See preserved integration proof and logs.");
+    job.inbox_id = None;
+    write_job(root, job)?;
+    crate::project_management::attach_jury_in(repo, job, Some("blocked"))?;
+    crate::jury_runtime::announce_job(app, root, job)?;
+    Ok(())
 }
 
 pub fn verify_integration(
@@ -901,6 +1080,7 @@ pub fn verify_integration(
     write_job(root, job)?;
     let mut green = true;
     let mut results = vec![];
+    let mut unavailable = None;
     for (index, command) in job.policy.integration_commands.iter().enumerate() {
       // One retry per step, as the sandbox plan has. The integration build
       // runs on the supervisor's own machine beside the fleet, and a step
@@ -909,6 +1089,7 @@ pub fn verify_integration(
       // first pass). A step red twice is red.
       let mut exit = -1;
       let mut path = PathBuf::new();
+      let mut attempts = vec![];
       for attempt in 0..2 {
         path = root.join(format!("{}-{}-verify-{index}{}.log", job.id, run.run_id, if attempt == 0 { String::new() } else { format!("-retry{attempt}") }));
         let output = std::fs::File::create(&path).map_err(|e| e.to_string())?;
@@ -958,13 +1139,23 @@ pub fn verify_integration(
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         })();
-        exit = outcome.unwrap_or(-1);
+        exit = outcome.as_ref().copied().unwrap_or(-1);
+        let log = verification_log_tail(&path);
+        let execution_error = outcome.as_ref().err().or(log.as_ref().err());
+        unavailable = if exit != 0 || execution_error.is_some() {
+            verifier_unavailable(exit, log.as_deref().unwrap_or(""), execution_error.map(String::as_str))
+        } else { None };
+        attempts.push(serde_json::json!({"attempt":attempt + 1,"exit_code":exit,"log":path,
+            "execution_error":execution_error,"unavailable":unavailable}));
         if exit == 0 {
             break;
         }
+        // Environment repair requires an explicit decision, not another
+        // expensive build. Ordinary red checks retain their bounded retry.
+        if unavailable.is_some() { break; }
       }
-        green &= exit == 0;
-        results.push(serde_json::json!({"command":command,"exit_code":exit,"log":path}));
+        green &= exit == 0 && unavailable.is_none();
+        results.push(serde_json::json!({"command":command,"exit_code":exit,"log":path,"attempts":attempts,"unavailable":unavailable}));
         if !green {
             break;
         }
@@ -972,6 +1163,8 @@ pub fn verify_integration(
     run_control::update_in(registry, &run.run_id, |r| {
         r.state = if green {
             RunState::Done
+        } else if unavailable.is_some() {
+            RunState::Blocked
         } else {
             RunState::Failed
         };
@@ -991,6 +1184,11 @@ pub fn verify_integration(
         .any(|j| j.id == job.id && ["revoke_requested", "revoked"].contains(&j.state.as_str()))
     {
         green = false;
+        unavailable = None; // Explicit revocation still compensates the merge.
+    }
+    if let Some(reason) = unavailable {
+        drop(publication);
+        return park_unavailable_verifier(app, repo, root, job, reason);
     }
     if !green {
         job.reason = "integration build failed or revoked; see integration proof".into();
@@ -1091,6 +1289,15 @@ pub fn isolated_test_env(cmd: &mut Command, state: &Path) -> Result<(), String> 
     cmd.env("GIT_CEILING_DIRECTORIES", state)
         .env("RUST_TEST_THREADS", "1")
         .env("ZELLIJ_SOCKET_DIR", "../.xnaut/test-state/sockets");
+    // XNAUT-443: the macOS cache is purgeable. Keep fleet browser binaries
+    // in application data across disposable integration clones. An explicit
+    // operator/CI path remains authoritative; setup installs only if missing.
+    let browsers = std::env::var_os("PLAYWRIGHT_BROWSERS_PATH")
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::loop_acceptance::platform_data_local_dir().map(|p| p.join("xnaut/playwright-browsers")))
+        .ok_or("persistent Playwright browser location unavailable")?;
+    cmd.env("PLAYWRIGHT_BROWSERS_PATH", browsers);
     // The PATH an agent launch gets, ahead of the app's own. A Finder-launched
     // app has a minimal PATH and the integration verify ran `npm ci` through
     // /bin/sh into "npm: command not found", which reverted an approved
@@ -1321,6 +1528,11 @@ pub(crate) mod tests {
             .map(|v| v.to_string_lossy().into_owned())
             .expect("PATH is set on the verify shell");
         assert!(path.contains("/opt/homebrew/bin"), "homebrew missing: {path}");
+        let browsers = cmd.get_envs().find(|(k, _)| *k == "PLAYWRIGHT_BROWSERS_PATH")
+            .and_then(|(_, value)| value).expect("persistent browser path is set");
+        let expected = std::env::var_os("PLAYWRIGHT_BROWSERS_PATH").filter(|v| !v.is_empty())
+            .unwrap_or_else(|| crate::loop_acceptance::platform_data_local_dir().unwrap().join("xnaut/playwright-browsers").into_os_string());
+        assert_eq!(browsers, expected);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1899,6 +2111,170 @@ pub(crate) mod tests {
             after,
             "recovery duplicated revert"
         );
+    }
+
+    #[test]
+    fn unavailable_integration_verifier_keeps_merge_and_parks_without_restart_loop() {
+        for (name, command) in [
+            ("browser", "printf 'No Playwright browser is installed\\n' >&2; exit 1"),
+            ("disk", "printf 'No space left on device\\n' >&2; exit 1"),
+            ("toolchain", "printf 'cargo: command not found\\n' >&2; exit 127"),
+        ] {
+            let (_root, control, registry, store, _, mut job) = fixture_with_env(name, false);
+            job.policy.integration_commands = vec![command.into()];
+            std::fs::write(control.join("projects/XNAUT/approval.toml"), toml::to_string(&job.policy).unwrap()).unwrap();
+            merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
+            assert_eq!(job.state, "owner_required", "{name}");
+            assert!(job.reason.starts_with("Verifier unavailable:"));
+            assert!(job.inbox_id.is_some());
+            let signoff = job.signoff.as_ref().unwrap();
+            assert!(!signoff.revoked && signoff.revert_sha.is_none());
+            assert_eq!(git(Path::new(&job.worktree), &["show", "dev:feature.txt"]).unwrap(), "reviewed implementation");
+            let run = signoff.integration_verify_run.as_ref().unwrap();
+            assert_eq!(run_control::load_manifest_in(&registry, run).unwrap().state, RunState::Blocked);
+            let proof: serde_json::Value = serde_json::from_slice(&std::fs::read(store.join(format!("{}-{run}-integration-proof.json", job.id))).unwrap()).unwrap();
+            assert_eq!(proof[0]["attempts"].as_array().unwrap().len(), 1);
+            assert_ne!(proof[0]["exit_code"], 0);
+            let revision = ticket(&control, &job.ticket).unwrap().revision;
+            let ids = run_control::list_ids_in(&registry).unwrap();
+            for _ in 0..2 { crate::jury_runtime::reconcile(None, &control, &registry, &store).unwrap(); }
+            assert_eq!(run_control::list_ids_in(&registry).unwrap(), ids);
+            assert_eq!(ticket(&control, &job.ticket).unwrap().revision, revision);
+            assert_eq!(ticket(&control, &job.ticket).unwrap().status, "blocked");
+        }
+        assert_eq!(verifier_unavailable(1, "test result: FAILED.\nNo Playwright browser is installed", None), None,
+            "a failed test quoting the environment message remains red");
+    }
+
+    #[test]
+    fn interrupted_published_integration_compensates_only_bound_actual_red_checks() {
+        for case in ["actual_red", "environment", "wrong_run", "legacy_unknown_exit", "execution_error"] {
+            let (_root, control, registry, store, _, mut job) = fixture_with_env(case, false);
+            job.policy.integration_commands = vec!["printf 'actual failing command\\n'; exit 17".into()];
+            std::fs::write(control.join("projects/XNAUT/approval.toml"), toml::to_string(&job.policy).unwrap()).unwrap();
+            merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
+            assert_eq!(job.state, "reverted");
+            // Reconstruct the interruption immediately before compensation in
+            // this owned Git fixture; retain the real executor's failed proof.
+            let signoff = job.signoff.as_mut().unwrap();
+            let merged = signoff.merge_sha.clone();
+            let run_id = signoff.integration_verify_run.clone().unwrap();
+            signoff.revoked = false;
+            signoff.revert_sha = None;
+            git(Path::new(&job.worktree), &["update-ref", "refs/heads/dev", &merged]).unwrap();
+            git(&checkout(&store, &job), &["checkout", "--detach", &merged]).unwrap();
+            job.state = "merged".into();
+            if case == "environment" {
+                std::fs::write(store.join(format!("{}-{run_id}-verify-0-retry1.log", job.id)), "No Playwright browser is installed\n").unwrap();
+            } else if case == "wrong_run" {
+                run_control::update_in(&registry, &run_id, |r| r.ticket = Some("XNAUT-999".into())).unwrap();
+            } else if ["legacy_unknown_exit", "execution_error"].contains(&case) {
+                let path = store.join(format!("{}-{run_id}-integration-proof.json", job.id));
+                let mut proof: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                if case == "legacy_unknown_exit" {
+                    proof[0]["exit_code"] = (-1).into();
+                    proof[0].as_object_mut().unwrap().remove("attempts");
+                    std::fs::write(store.join(format!("{}-{run_id}-verify-0-retry1.log", job.id)), "").unwrap();
+                } else {
+                    proof[0]["attempts"][0]["execution_error"] = "process did not finish".into();
+                }
+                crate::project_management::write_json_atomic(&path, &proof).unwrap();
+                run_control::update_in(&registry, &run_id, |r| r.last_signal = serde_json::to_string(&proof).unwrap()).unwrap();
+            }
+            write_job(&store, &job).unwrap();
+            crate::jury_runtime::reconcile(None, &control, &registry, &store).unwrap();
+            let recovered = read_job(&store, &job.id).unwrap();
+            assert_eq!(recovered.state, if case == "actual_red" { "reverted" } else { "owner_required" }, "{case}");
+            assert_eq!(git(Path::new(&job.worktree), &["show", "dev:feature.txt"]).unwrap(),
+                if case == "actual_red" { "baseline" } else { "reviewed implementation" });
+        }
+    }
+
+    fn fresh_remerge(control: &Path, previous: &Job, command: &str) -> Job {
+        let current = ticket(control, &previous.ticket).unwrap();
+        let mut policy = previous.policy.clone();
+        policy.integration_commands = vec![command.into()];
+        std::fs::write(control.join("projects/XNAUT/approval.toml"), toml::to_string(&policy).unwrap()).unwrap();
+        let mut job = crate::jury_runtime::new_job(Gate::Signoff, &current, Path::new(&previous.worktree),
+            "Fresh independent approval after compensation".into(), policy, None, None).unwrap();
+        job.reviews = crate::jury::tests::reviews(&job.input_hash);
+        job.decision = Some(Decision::Approved);
+        job.state = "signed".into();
+        job
+    }
+
+    #[test]
+    fn remerge_restores_recorded_revert_content_and_keeps_compensation_history() {
+        for (new_work, red_after_restore) in [(false, false), (true, false), (true, true)] {
+            let (_root, control, registry, store, _, mut first) = fixture_with_env("remerge-content", false);
+            merge_and_verify(None, &control, &registry, &store, &mut first).unwrap();
+            rollback(&control, &store, &mut first).unwrap();
+            let revert = first.signoff.as_ref().unwrap().revert_sha.clone().unwrap();
+            let tree = Path::new(&first.worktree);
+            assert_eq!(git(tree, &["show", "dev:feature.txt"]).unwrap(), "baseline");
+            // Cover both unchanged branch reapproval and a repair adding new
+            // work; ancestry alone used to drop the original feature in both.
+            if new_work {
+                std::fs::write(tree.join("repair.txt"), "follow-up repair\n").unwrap();
+                git(tree, &["add", "repair.txt"]).unwrap();
+                git(tree, &["commit", "-m", "repair reviewed branch"]).unwrap();
+            }
+            let mut next = fresh_remerge(&control, &first, if red_after_restore { "exit 17" } else {
+                "test \"$(cat feature.txt)\" = 'reviewed implementation'"
+            });
+            merge_and_verify(None, &control, &registry, &store, &mut next).unwrap();
+            let evidence = &next.signoff.as_ref().unwrap().restorations;
+            assert_eq!(evidence.len(), 1);
+            assert_eq!(evidence[0].revert_sha, revert);
+            assert_eq!(read_job(&store, &first.id).unwrap().signoff.unwrap().revert_sha.as_deref(), Some(revert.as_str()));
+            assert_eq!(git(tree, &["show", "dev:feature.txt"]).unwrap(), if red_after_restore { "baseline" } else { "reviewed implementation" });
+            assert_eq!(next.state, if red_after_restore { "reverted" } else { "integrated" });
+            assert_eq!(git(tree, &["cat-file", "-e", "dev:repair.txt"]).is_ok(), new_work && !red_after_restore,
+                "rollback must remove both restored and newly merged work");
+            if !red_after_restore {
+                let tip = git(tree, &["rev-parse", "dev"]).unwrap();
+                let mut again = fresh_remerge(&control, &next, "test -f feature.txt");
+                merge_and_verify(None, &control, &registry, &store, &mut again).unwrap();
+                assert_eq!(git(tree, &["rev-parse", "dev"]).unwrap(), tip, "already restored work must not be applied again");
+            }
+        }
+    }
+
+    #[test]
+    fn remerge_refuses_conflicting_or_unproved_restoration_without_publication() {
+        for case in ["conflict", "missing_receipt", "missing_receipt_with_repair", "wrong_revert"] {
+            let (_root, control, registry, store, _, mut first) = fixture_with_env(case, false);
+            merge_and_verify(None, &control, &registry, &store, &mut first).unwrap();
+            rollback(&control, &store, &mut first).unwrap();
+            let tree = Path::new(&first.worktree);
+            if case == "conflict" {
+                git(tree, &["checkout", "dev"]).unwrap();
+                std::fs::write(tree.join("feature.txt"), "owner changed integration\n").unwrap();
+                git(tree, &["commit", "-am", "owner integration change"]).unwrap();
+                git(tree, &["checkout", "agent/codex/xnaut-930"]).unwrap();
+            } else {
+                let mut current = ticket(&control, &first.ticket).unwrap();
+                current.approval.jury_reviews.clear();
+                current.approval.signoff = if case.starts_with("missing_receipt") { None } else {
+                    let mut receipt = first.signoff.clone().unwrap();
+                    receipt.revert_sha = Some(receipt.merge_sha.clone()); Some(receipt)
+                };
+                crate::project_management::write_json_atomic(&control.join("projects/XNAUT/tickets/XNAUT-930.json"), &current).unwrap();
+                if case == "missing_receipt_with_repair" {
+                    std::fs::write(tree.join("repair.txt"), "new branch work\n").unwrap();
+                    git(tree, &["add", "repair.txt"]).unwrap();
+                    git(tree, &["commit", "-m", "repair after lost receipt"]).unwrap();
+                }
+            }
+            let before = git(tree, &["rev-parse", "dev"]).unwrap();
+            let author = git(tree, &["rev-parse", "HEAD"]).unwrap();
+            let mut next = fresh_remerge(&control, &first, "test -f feature.txt");
+            let error = merge_and_verify(None, &control, &registry, &store, &mut next).unwrap_err();
+            assert!(error.contains("conflict") || error.contains("reconciliation"), "{case}: {error}");
+            assert_eq!(git(tree, &["rev-parse", "dev"]).unwrap(), before);
+            assert_eq!(git(tree, &["rev-parse", "HEAD"]).unwrap(), author);
+            assert_eq!(git(tree, &["status", "--porcelain"]).unwrap(), "");
+        }
     }
     #[test]
     fn the_reviewed_diff_starts_at_the_merge_base_not_the_moving_tip() {

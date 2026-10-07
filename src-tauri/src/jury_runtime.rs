@@ -893,8 +893,8 @@ pub fn reconcile(
                     job.reason = "integration verifier absent after restart; verifying again".into();
                     write_job(root, &job)?;
                     if let Err(e) = crate::jury_signoff::verify_integration(app, repo, registry, root, &mut job) {
-                        job.reason = format!("integration re-verification could not start: {e}");
-                        crate::jury_signoff::rollback(repo, root, &mut job)?;
+                        crate::jury_signoff::park_unavailable_verifier(app, repo, root, &mut job,
+                            &format!("integration re-verification could not start: {e}"))?;
                     }
                 }
             }
@@ -903,19 +903,25 @@ pub fn reconcile(
             if let Some(signoff) = &job.signoff {
                 let tree = Path::new(&job.worktree);
                 let reference = format!("refs/heads/{}", job.policy.integration_branch);
+                let published = crate::jury_signoff::integration_base(tree, &reference)?;
                 if git(
                     tree,
                     &[
                         "merge-base",
                         "--is-ancestor",
                         &signoff.merge_sha,
-                        &reference,
+                        &published,
                     ],
                 )
                 .is_ok()
                 {
-                    job.reason = "supervisor interrupted integration before verified green".into();
-                    crate::jury_signoff::rollback(repo, root, &mut job)?;
+                    if signoff.revoked || crate::jury_signoff::recorded_integration_red(registry, root, &job) {
+                        job.reason = "interrupted integration has recorded failed checks or explicit revocation".into();
+                        crate::jury_signoff::rollback(repo, root, &mut job)?;
+                    } else {
+                        crate::jury_signoff::park_unavailable_verifier(app, repo, root, &mut job,
+                            "supervisor interrupted the published integration before completed verification")?;
+                    }
                     continue;
                 }
             }
@@ -1077,20 +1083,22 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_published_merge_is_compensated() {
+    fn interrupted_published_merge_without_red_evidence_is_held_for_verification() {
         let (_root, control, registry, store, _, mut job) =
             crate::jury_signoff::tests::fixture("merge-recovery");
         let tree = PathBuf::from(&job.worktree);
-        let before = git(&tree, &["rev-parse", "dev"]).unwrap();
         crate::jury_signoff::merge_and_verify(None, &control, &registry, &store, &mut job).unwrap();
+        let published = git(&tree, &["rev-parse", "dev"]).unwrap();
         job.state = "merged".into();
+        job.signoff.as_mut().unwrap().integration_verify_run = None;
         write_job(&store, &job).unwrap();
         reconcile(None, &control, &registry, &store).unwrap();
         let recovered = read_job(&store, &job.id).unwrap();
-        assert_eq!(recovered.state, "reverted");
-        assert!(git(&tree, &["diff", &before, "dev"])
-            .unwrap()
-            .is_empty());
+        assert_eq!(recovered.state, "owner_required");
+        assert!(!recovered.signoff.as_ref().unwrap().revoked);
+        assert!(recovered.reason.starts_with("Verifier unavailable:"));
+        assert_eq!(git(&tree, &["rev-parse", "dev"]).unwrap(), published);
+        assert_eq!(git(&tree, &["show", "dev:feature.txt"]).unwrap(), "reviewed implementation");
     }
     #[test]
     fn native_sandbox_blocks_peer_reads_and_outside_writes() {

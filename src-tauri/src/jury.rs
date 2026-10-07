@@ -315,6 +315,17 @@ pub struct Signoff {
     pub integration_verify_run: Option<String>,
     pub revoked: bool,
     pub revert_sha: Option<String>,
+    /// Exact compensation restored by a later integration (XNAUT-445).
+    /// Keep the old revert identity even when this signoff is not revoked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restorations: Vec<RevertRestoration>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevertRestoration {
+    pub jury_id: String,
+    pub merge_sha: String,
+    pub revert_sha: String,
+    pub restoration_sha: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
