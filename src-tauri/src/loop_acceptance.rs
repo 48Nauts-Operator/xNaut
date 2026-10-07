@@ -265,6 +265,7 @@ mod tests {
 pub fn loop_acceptance_plan(
     project: String,
     tickets: Vec<String>,
+    environment: Option<String>,
 ) -> Result<crate::swarm_plan::SwarmPlan, String> {
     if !ENABLED {
         return Err("Native loop acceptance is not enabled in this build".into());
@@ -275,7 +276,7 @@ pub fn loop_acceptance_plan(
     if !repo.starts_with(root()) {
         return Err("Acceptance PM escaped its marked root".into());
     }
-    let plan = crate::swarm_plan::build(&project, &tickets)?;
+    let plan = crate::swarm_plan::build_with_environment(&project, &tickets, environment.as_deref())?;
     crate::swarm_plan::remember(plan.clone())?;
     Ok(plan)
 }
