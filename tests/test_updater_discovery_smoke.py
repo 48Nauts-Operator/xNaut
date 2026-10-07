@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location(
     "updater_smoke", Path(__file__).parents[1] / "scripts/updater-discovery-smoke.py"
@@ -50,6 +50,123 @@ class DiscoveryTests(unittest.TestCase):
                 module.validate_discovery(value, feed, "48Nauts/xnaut", target),
                 feed["platforms"][target],
             )
+
+    def test_utf8_native_discovery_survives_windows_default_encoding(self):
+        value, feed = self.values("windows-x86_64")
+        feed["notes"] = "Owner’s review — Zürich / 東京 / 🚀"
+        value["rawJson"] = copy.deepcopy(feed)
+        original_open = Path.open
+
+        def windows_open(
+            path, mode="r", buffering=-1, encoding=None, errors=None, newline=None
+        ):
+            return original_open(
+                path,
+                mode,
+                buffering,
+                encoding
+                if encoding not in (None, "locale") or "b" in mode
+                else "cp1252",
+                errors,
+                newline,
+            )
+
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            config = root / "config"
+            config.mkdir()
+            log = config / "debug.log"
+            marker = "release-smoke-fixed"
+            log.write_text(
+                marker
+                + " "
+                + json.dumps({"ok": True, "value": value}, ensure_ascii=False)
+                + "\ncredential fixture-token\n",
+                encoding="utf-8",
+            )
+            bridge = module.smoke.Bridge(
+                1, "fixture-token", log, Mock(poll=lambda: None)
+            )
+            report = {"status": "passed"}
+            with (
+                patch.object(Path, "open", windows_open),
+                patch.object(module.smoke.secrets, "token_hex", return_value="fixed"),
+                patch.object(bridge, "request"),
+            ):
+                actual = bridge.evaluate("native check")
+                self.assertEqual(actual, value)
+                self.assertEqual(
+                    module.record_discovery(
+                        root, report, actual, feed, "48Nauts/xnaut", "windows-x86_64"
+                    ),
+                    feed["platforms"]["windows-x86_64"],
+                )
+                module.finalize_report(root, report, config, "fixture-token")
+            self.assertEqual(
+                json.loads((root / "discovery.json").read_text(encoding="utf-8")), value
+            )
+            self.assertEqual(
+                json.loads((root / "run.json").read_text(encoding="utf-8"))[
+                    "discovery"
+                ],
+                value,
+            )
+            copied = (root / "debug.log").read_text(encoding="utf-8")
+            self.assertIn(feed["notes"], copied)
+            self.assertNotIn("fixture-token", copied)
+
+    def test_rejected_payload_and_original_failure_survive_diagnostic_copy_errors(self):
+        value, feed = self.values()
+        value["rawJson"]["notes"] = "Unexpected — 東京"
+        for operation in ("read", "write"):
+            with (
+                self.subTest(operation=operation),
+                tempfile.TemporaryDirectory() as scratch,
+            ):
+                root = Path(scratch)
+                config = root / "config"
+                config.mkdir()
+                (config / "debug.log").write_text("native diagnostic", encoding="utf-8")
+                report = {"status": "failed"}
+                with self.assertRaisesRegex(
+                    RuntimeError, "differs from public feed"
+                ) as failure:
+                    module.record_discovery(
+                        root, report, value, feed, "48Nauts/xnaut", "darwin-aarch64"
+                    )
+                report["error"] = str(failure.exception)
+                self.assertEqual(
+                    json.loads((root / "discovery.json").read_text(encoding="utf-8")),
+                    value,
+                )
+                original_open = Path.open
+
+                def denied(path, *args, **kwargs):
+                    blocked = (
+                        config / "debug.log"
+                        if operation == "read"
+                        else root / "debug.log"
+                    )
+                    if path == blocked:
+                        raise PermissionError("fixture diagnostic denial")
+                    return original_open(path, *args, **kwargs)
+
+                with (
+                    patch.object(Path, "open", denied),
+                    self.assertRaisesRegex(RuntimeError, "see run.json"),
+                ):
+                    module.finalize_report(root, report, config, "fixture-token")
+                saved = json.loads((root / "run.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["discovery"], value)
+                self.assertEqual(
+                    saved["error"], "Native response differs from public feed"
+                )
+                self.assertEqual(saved["status"], "failed")
+                self.assertEqual(
+                    saved["diagnostic_copy_errors"],
+                    [{"file": "debug.log", "error_type": "PermissionError"}],
+                )
+                self.assertTrue(saved["finished"])
 
     def test_no_fallback_wrong_version_or_unclosed_resource(self):
         for key, invalid in [

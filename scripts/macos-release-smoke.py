@@ -82,7 +82,7 @@ def verify_assets(release, tag, arch, distribution):
 
 
 def verify_updater(distribution, tag, arch, config, openssl):
-    manifest = json.loads((distribution / "latest.json").read_text())
+    manifest = json.loads((distribution / "latest.json").read_text(encoding="utf-8"))
     require(
         manifest.get("version") == tag[1:], "Updater version differs from candidate"
     )
@@ -94,7 +94,7 @@ def verify_updater(distribution, tag, arch, config, openssl):
         entry["url"] == expected_url,
         "Updater points outside the exact candidate artifact",
     )
-    encoded = (distribution / (archive + ".sig")).read_text().strip()
+    encoded = (distribution / (archive + ".sig")).read_text(encoding="utf-8").strip()
     require(
         encoded == entry["signature"].strip(),
         "Manifest and detached updater signatures differ",
@@ -218,11 +218,15 @@ def fresh_runner(config, environ, system):
 def runtime_errors(config):
     panic = config / "rust-panics.log"
     require(
-        not panic.exists() or not panic.read_text().strip(),
+        not panic.exists() or not panic.read_text(encoding="utf-8").strip(),
         "Native background panic during production smoke",
     )
     log = config / "debug.log"
-    for line in log.read_text(errors="replace").splitlines() if log.exists() else []:
+    for line in (
+        log.read_text(encoding="utf-8", errors="replace").splitlines()
+        if log.exists()
+        else []
+    ):
         if re.search(r"\[(uncaught|rejection)\]", line):
             require(
                 "Tauri IPC bootstrap fell back to postMessage" in line,
@@ -348,7 +352,7 @@ class Bridge:
                 "Production process exited while waiting for native IPC",
             )
             for line in (
-                self.log.read_text(errors="replace").splitlines()
+                self.log.read_text(encoding="utf-8", errors="replace").splitlines()
                 if self.log.exists()
                 else []
             ):
@@ -514,12 +518,14 @@ def main():
             platform.machine() == {"aarch64": "arm64", "x64": "x86_64"}[args.arch],
             "Runner architecture mismatch",
         )
-        release = json.loads((distribution / "release.json").read_text())
+        release = json.loads(
+            (distribution / "release.json").read_text(encoding="utf-8")
+        )
         report["harness_source_commit"] = command("git", "rev-parse", "HEAD")
         tauri_config = application_identity(
             args.application_source.resolve(),
             args.application_sha,
-            (distribution / "source-sha.txt").read_text(),
+            (distribution / "source-sha.txt").read_text(encoding="utf-8"),
             args.tag,
         )
         report["source_commit"] = args.application_sha
@@ -665,7 +671,7 @@ def main():
             for name in ("debug.log", "rust-panics.log"):
                 path = config / name
                 if path.exists():
-                    text = path.read_text(errors="replace")
+                    text = path.read_text(encoding="utf-8", errors="replace")
                     (evidence / name).write_text(
                         text.replace(token, "[REDACTED]") if token else text
                     )
