@@ -1862,10 +1862,15 @@ pub(crate) mod tests {
         git(&control, &["add", "."]).unwrap();
         git(&control, &["commit", "-m", "dispatch second ticket"]).unwrap();
         // Each real verifier announces its clone, then waits for the test to
-        // release it. A bounded timeout also makes lock mutations fail safely.
-        first.policy.integration_commands = vec![
-            "pwd > \"$PWD.started\"; n=0; while ! test -f \"$PWD.release\"; do n=$((n+1)); test $n -lt 200 || exit 18; sleep 0.05; done; test ! -f \"$PWD.red\"".into()
-        ];
+        // release it. XNAUT-443: its watchdog must outlast the controller's
+        // second-clone entry window plus revocation/publication and first-join
+        // windows. The old 10s watchdog manufactured red builds during a valid
+        // 60s controller wait. A timeout still fails explicitly below.
+        const ENTER_SECONDS: u64 = 60;
+        let hold_polls = ENTER_SECONDS * 3 * 20; // three windows, 50ms per poll
+        first.policy.integration_commands = vec![format!(
+            "pwd > \"$PWD.started\"; n=0; while ! test -f \"$PWD.release\"; do n=$((n+1)); test $n -lt {hold_polls} || exit 18; sleep 0.05; done; test ! -f \"$PWD.red\""
+        )];
         first.policy.promote_branch = "uat".into();
         std::fs::write(control.join("projects/XNAUT/approval.toml"), toml::to_string(&first.policy).unwrap()).unwrap();
         let mut second = crate::jury_runtime::new_job(
@@ -1886,7 +1891,7 @@ pub(crate) mod tests {
         // to reach its command. Release is gated on a marker this test
         // writes, so a longer wait cannot manufacture a false overlap.
         let entered = |clone: &Path| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(ENTER_SECONDS);
             while std::time::Instant::now() < deadline {
                 if marker(clone, "started").exists() { return true; }
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1928,6 +1933,18 @@ pub(crate) mod tests {
             (first, second, overlap)
         });
         assert!(overlap, "both integration commands must start before either is released");
+        for job in [&first, &second] {
+            let run = job.signoff.as_ref().unwrap().integration_verify_run.as_ref().unwrap();
+            let proof: serde_json::Value = serde_json::from_slice(&std::fs::read(
+                store.join(format!("{}-{run}-integration-proof.json", job.id)),
+            ).unwrap()).unwrap();
+            for step in proof.as_array().unwrap() {
+                for attempt in step["attempts"].as_array().unwrap() {
+                    assert_ne!(attempt["exit_code"], 18,
+                        "{} exhausted the fixture barrier before release; a retry must not conceal a failed overlap/revocation proof", job.ticket);
+                }
+            }
+        }
         assert_ne!(first_clone, second_clone);
         // The command writes its resolved working directory. On macOS the
         // temp dir is a symlink, /var -> /private/var, so compare against
