@@ -1490,7 +1490,7 @@ mod tests {
 
         // Replay historical liveness failures only after the exact collected
         // publication and parent-bound handback establish task completion.
-        for case in ["stall", "missing", "exit", "exit_receipt", "unknown", "wrong_head", "changed_identity", "successor",
+        for case in ["stall", "stall_with_cpu", "missing", "exit", "exit_receipt", "unknown", "wrong_head", "changed_identity", "successor",
             "admission", "retired", "uncollected", "no_journal", "wrong_handback", "wrong_parent", "dirty", "before_publication"] {
             let registry = std::env::temp_dir().join(format!("xnaut-review-recovery-{}",uuid::Uuid::new_v4()));
             let mut native = completed.clone(); native.state = RunState::Requested; native.last_commit = child.source_sha.clone();
@@ -1503,6 +1503,7 @@ mod tests {
             run_control::update_in(&registry,&child.run_id,|run| {
                 run.state = if case == "retired" { RunState::Retired } else { RunState::Failed };
                 run.last_signal = match case {
+                    "stall_with_cpu" => run_control::STALLED_NO_PROGRESS,
                     "missing" => "pid does not answer; zellij session absent; capture has not grown; no recent hook",
                     "exit" => "process exited with status 137",
                     "unknown" => "cancelled by owner",
@@ -1535,7 +1536,7 @@ mod tests {
             let recovered = accept_reviewer_handback_in(&registry,&receipt,&bound,&publication,Some(&evidence));
             let after = run_control::load_manifest_in(&registry,&child.run_id).unwrap();
             let sessions = vec![("interactive-reviewer".into(),"reviewer".into(),Some("exe-dev".into()))];
-            if ["stall", "missing"].contains(&case) {
+            if ["stall", "stall_with_cpu", "missing"].contains(&case) {
                 assert!(recovered.unwrap(),"{case}");
                 assert_eq!(after.state,RunState::Done,"{case}");
                 assert_eq!(after.pid,Some(123),"completion is not a process-exit assertion");

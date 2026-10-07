@@ -9,7 +9,7 @@
 // Every file operation takes an explicit directory. No helper selects HOME.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -138,18 +138,12 @@ pub struct RunManifest {
     pub waiting_on: Option<String>,
     pub capture_bytes: u64,
     pub last_commit: String,
-    /// High-water accumulated CPU of the run's children (XNAUT-439).
-    ///
-    /// HIGH-WATER, not last-seen. A subtree's total falls when a child exits —
-    /// rustc finishes and its time leaves the process table — so storing the
-    /// latest reading would let the next idle tick clear the old mark and read
-    /// as fresh progress, and the detector would never fire again.
-    ///
-    /// `serde(default)` for the same reason as `instance`: every manifest on
-    /// tron predates these three fields, and a registry that cannot read its
-    /// own records is a worse failure than the stall window being wrong.
+    /// Monotonic observed child CPU work, accumulated from identity-bound deltas.
     #[serde(default)]
     pub cpu_ms: u64,
+    /// Last valid sample, retained across unreadable process tables and restart.
+    #[serde(default)]
+    pub cpu_samples: BTreeMap<u32, ProcessCpuSample>,
     /// High-water revision of the run's ticket (XNAUT-439).
     #[serde(default)]
     pub ticket_revision: u64,
@@ -291,6 +285,7 @@ impl RunManifest {
             // baselines costs one advance of `last_progress_at` inside the
             // grace window, which changes no verdict.
             cpu_ms: 0,
+            cpu_samples: BTreeMap::new(),
             ticket_revision: 0,
             verify_log_bytes: 0,
             last_signal: "requested".into(),
@@ -805,10 +800,11 @@ pub struct Proofs {
     pub pid: Option<u32>,
     pub process_birth: Option<String>,
     pub exit_code: Option<i32>,
-    /// Accumulated CPU of the run's CHILD processes — cargo, rustc, node,
-    /// playwright (XNAUT-439). A ten-minute compile moves nothing else this
-    /// struct records, and reading that silence as abandonment is the bug.
+    /// Observed child work accumulated from birth-bound CPU deltas (XNAUT-439).
+    /// A ten-minute compile may move none of the other progress readings.
     pub cpu_ms: u64,
+    /// None means unknown; Some(empty) is a proven root with no children.
+    pub cpu_samples: Option<BTreeMap<u32, ProcessCpuSample>>,
     /// The revision of the run's own ticket, so an agent writing its progress
     /// into the ticket body counts as progress (XNAUT-439).
     pub ticket_revision: u64,
@@ -843,6 +839,7 @@ pub enum Verdict {
     Done,
     Failed(String),
 }
+pub(crate) const STALLED_NO_PROGRESS: &str = "stalled: alive but capture, hooks, commits, child CPU, ticket revision and verify log show no progress beyond the window; waiting_on empty";
 /// Pure: no filesystem, process, app, repository, agent, or clock lookup.
 pub fn verdict(run: &RunManifest, proof: &Proofs, at: i64) -> Verdict {
     if run.state.terminal()
@@ -917,7 +914,7 @@ pub fn verdict(run: &RunManifest, proof: &Proofs, at: i64) -> Verdict {
     // writes its results into, and the verify evidence growing in the
     // worktree. A run whose children burn CPU is not stalled.
     if !proof.progressed(run) && at.saturating_sub(run.last_progress_at) > PROGRESS_WINDOW_MS {
-        return Verdict::Failed("stalled: alive but capture, hooks, commits, child CPU, ticket revision and verify log show no progress beyond the window; waiting_on empty".into());
+        return Verdict::Failed(STALLED_NO_PROGRESS.into());
     }
     Verdict::Running
 }
@@ -1065,14 +1062,22 @@ pub fn remote_proofs(run: &RunManifest, at: i64) -> Proofs {
         // say nothing about them; reporting a local zero would read as a fall
         // from the stored mark, which is silence the beacon has not claimed.
         cpu_ms: run.cpu_ms,
+        cpu_samples: None,
         ticket_revision: run.ticket_revision,
         verify_log_bytes: run.verify_log_bytes,
     }
 }
 
 /// One row of the process table: enough to walk a subtree and read its work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProcessCpuSample {
+    pub birth: String,
+    pub cpu_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcRow {
+    pub birth: String,
     pub pid: u32,
     pub ppid: u32,
     pub cpu_ms: u64,
@@ -1112,11 +1117,12 @@ pub fn parse_cpu_time(raw: &str) -> Option<u64> {
 
 pub fn parse_proc_row(line: &str) -> Option<ProcRow> {
     let mut field = line.split_whitespace();
-    Some(ProcRow {
-        pid: field.next()?.parse().ok()?,
-        ppid: field.next()?.parse().ok()?,
-        cpu_ms: parse_cpu_time(field.next()?)?,
-    })
+    let pid = field.next()?.parse().ok()?;
+    let ppid = field.next()?.parse().ok()?;
+    let cpu_ms = parse_cpu_time(field.next()?)?;
+    let birth = field.collect::<Vec<_>>().join(" ");
+    if birth.is_empty() { return None; }
+    Some(ProcRow { pid, ppid, cpu_ms, birth })
 }
 
 /// Pure: accumulated CPU of everything BELOW `root`, root itself excluded.
@@ -1127,30 +1133,53 @@ pub fn parse_proc_row(line: &str) -> Option<ProcRow> {
 /// one, because a genuinely abandoned run would then hold its ticket for good.
 /// What proves work is a CHILD burning CPU: cargo, rustc, node, playwright. An
 /// idle shell under the session accumulates nothing, so including it is free.
-pub fn descendant_cpu_ms(rows: &[ProcRow], root: u32) -> u64 {
-    // pid 0 is the kernel's, and `ppid == 0` is every orphan on the box: taking
-    // it as a root would sum the entire process table and call it progress.
-    if root == 0 {
-        return 0;
-    }
+#[cfg(test)]
+fn descendant_cpu_ms(rows: &[ProcRow], root: u32) -> u64 {
+    descendant_cpu_samples(rows, root, "birth").unwrap_or_default().values()
+        .fold(0u64, |total, sample| total.saturating_add(sample.cpu_ms))
+}
+
+/// Bind the whole subtree to the recorded root birth in this same snapshot.
+/// A reused PID or unreadable table is not an empty, valid baseline.
+fn descendant_cpu_samples(
+    rows: &[ProcRow], root: u32, birth: &str,
+) -> Option<BTreeMap<u32, ProcessCpuSample>> {
+    let birth = birth.split_whitespace().collect::<Vec<_>>().join(" ");
+    if root == 0 || birth.is_empty()
+        || !rows.iter().any(|row| row.pid == root && row.birth == birth)
+    { return None; }
+    let mut samples = BTreeMap::new();
     let mut frontier = vec![root];
     let mut seen = BTreeSet::from([root]);
-    let mut total = 0u64;
     while let Some(parent) = frontier.pop() {
         for row in rows.iter().filter(|r| r.ppid == parent) {
-            if !seen.insert(row.pid) {
-                continue; // reparented into a cycle, or its own ancestor
-            }
-            total = total.saturating_add(row.cpu_ms);
+            if !seen.insert(row.pid) { continue; }
+            samples.insert(row.pid, ProcessCpuSample { birth: row.birth.clone(), cpu_ms: row.cpu_ms });
             frontier.push(row.pid);
         }
     }
-    total
+    Some(samples)
+}
+
+fn child_cpu_progress(
+    run: &RunManifest, rows: &[ProcRow], pid: Option<u32>, birth: Option<&str>, alive: bool,
+) -> (u64, Option<BTreeMap<u32, ProcessCpuSample>>) {
+    let current = if alive {
+        pid.zip(birth).and_then(|(pid, birth)| descendant_cpu_samples(rows, pid, birth))
+    } else { None };
+    let delta = current.as_ref().map_or(0, |samples| {
+        samples.iter().fold(0u64, |total, (pid, sample)| {
+            let before = run.cpu_samples.get(pid).filter(|old| old.birth == sample.birth)
+                .map_or(0, |old| old.cpu_ms);
+            total.saturating_add(sample.cpu_ms.saturating_sub(before))
+        })
+    });
+    (run.cpu_ms.saturating_add(delta), current)
 }
 
 pub fn process_table() -> Vec<ProcRow> {
     let Ok(out) = std::process::Command::new("ps")
-        .args(["-axo", "pid=,ppid=,time="])
+        .args(["-axo", "pid=,ppid=,time=,lstart="])
         .output()
     else {
         return Vec::new();
@@ -1183,9 +1212,6 @@ impl Machine {
             rows: process_table(),
             control_repo: crate::project_management::repo_path_now(),
         }
-    }
-    fn cpu_ms(&self, pid: Option<u32>) -> u64 {
-        pid.map_or(0, |p| descendant_cpu_ms(&self.rows, p))
     }
     fn ticket_revision(&self, project: &str, ticket: Option<&str>) -> u64 {
         match (self.control_repo.as_deref(), ticket) {
@@ -1350,11 +1376,13 @@ pub fn observe_with(
     // one cannot — `verdict` returns `Keep` and `reconcile_in` reads only its
     // capture baseline — and skipping those is most of the saving: 109 of the
     // 211 manifests on this machine's registry are already failed.
-    let (cpu_ms, ticket_revision, verify_log_bytes) = if run.state.terminal() {
-        (0, 0, 0)
+    let (cpu_ms, cpu_samples) = if run.state.terminal() { (0, None) } else {
+        child_cpu_progress(run, &machine.rows, pid, birth.as_deref(), alive)
+    };
+    let (ticket_revision, verify_log_bytes) = if run.state.terminal() {
+        (0, 0)
     } else {
         (
-            machine.cpu_ms(pid),
             machine.ticket_revision(&run.project, run.ticket.as_deref()),
             verify_log_bytes_in(Path::new(&run.worktree_path)),
         )
@@ -1403,6 +1431,7 @@ pub fn observe_with(
             .ok()
             .and_then(|s| s.trim().parse().ok()),
         cpu_ms,
+        cpu_samples,
         ticket_revision,
         verify_log_bytes,
         pid,
@@ -1437,12 +1466,12 @@ pub fn reconcile_in(
             }
             run.capture_bytes = proof.capture_bytes;
             run.last_commit = proof.commit.clone();
-            // High-water marks (XNAUT-439): all three readings fall back as
-            // well as rise — a child exits, a bundle is rewritten shorter, a
-            // ticket is read from a repo that is briefly unreachable and reads
-            // 0. Taking the max means a fall is silence rather than progress,
-            // and silence is what the window is there to measure.
+            // CPU is already accumulated from per-process deltas. Other
+            // counters retain high-water marks across temporarily absent data.
             run.cpu_ms = run.cpu_ms.max(proof.cpu_ms);
+            if let Some(samples) = &proof.cpu_samples {
+                run.cpu_samples = samples.clone();
+            }
             run.ticket_revision = run.ticket_revision.max(proof.ticket_revision);
             run.verify_log_bytes = run.verify_log_bytes.max(proof.verify_log_bytes);
             run.pid = proof.pid;
@@ -1638,6 +1667,7 @@ fn reviewer_liveness_failure_in(dir: &Path, run: &RunManifest, head: &str) -> Re
         if observed.state == RunState::Failed {
             if observed.last_commit != head || !matches!(observed.last_signal.as_str(),
                 "stalled: alive but capture, hooks and commits show no progress beyond the window; waiting_on empty"
+                | STALLED_NO_PROGRESS
                 | "pid does not answer; zellij session absent; capture has not grown; no recent hook")
             { return Ok(None); }
             if failure.is_none() {
@@ -1952,6 +1982,7 @@ pub(crate) mod tests {
             capture_bytes: 0,
             last_commit: "first".into(),
             cpu_ms: 0,
+            cpu_samples: BTreeMap::new(),
             ticket_revision: 0,
             verify_log_bytes: 0,
             last_signal: "test".into(),
@@ -2427,73 +2458,91 @@ pub(crate) mod tests {
         }
     }
 
-    /// Why `cpu_ms` is a high-water mark and not the latest reading.
-    ///
-    /// A subtree's accumulated CPU FALLS when a child exits: rustc finishes and
-    /// its time leaves the process table. Storing the latest reading would let
-    /// the next tick's small accrual beat the lowered mark and read as fresh
-    /// progress forever, so the detector would never fire again — an abandoned
-    /// run would hold its ticket for good. The max means a fall is silence.
+    fn cpu_row(pid: u32, ppid: u32, birth: &str, cpu_ms: u64) -> ProcRow {
+        ProcRow { pid, ppid, birth: birth.into(), cpu_ms }
+    }
+
     #[test]
-    fn a_child_exiting_lowers_the_cpu_reading_without_counting_as_progress() {
-        let dir = std::env::temp_dir()
-            .join(format!("xnaut-439-cpu-water-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn child_cpu_churn_survives_restart_without_a_historical_peak_stalling_work() {
+        let dir = std::env::temp_dir().join(format!("xnaut-439-cpu-{}", uuid::Uuid::new_v4()));
         let mut run = run();
         run.started_at = 1_000;
         run.last_progress_at = 1_000;
-        run.last_commit = String::new();
-        std::fs::write(
-            dir.join(format!("{}.run.json", run.run_id)),
-            serde_json::to_string(&run).unwrap(),
-        )
-        .unwrap();
-
-        // A compile runs: the children's accumulated CPU climbs.
-        let busy = |run: &RunManifest| Proofs {
-            pid_alive: true,
-            cpu_ms: 600_000,
-            commit: run.last_commit.clone(),
-            worktree_exists: true,
-            branch_matches: true,
-            ..Default::default()
+        run.last_commit.clear();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{}.run.json", run.run_id)), serde_json::to_vec(&run).unwrap()).unwrap();
+        let sample = |at, rows: &[ProcRow]| {
+            reconcile_in(&dir, at, |current| {
+                let (cpu_ms, cpu_samples) = child_cpu_progress(current, rows, Some(100), Some("root"), true);
+                Proofs { pid_alive: true, cpu_ms, cpu_samples, worktree_exists: true,
+                    branch_matches: true, commit: current.last_commit.clone(), ..Default::default() }
+            }).unwrap();
+            load_manifest_in(&dir, &run.run_id).unwrap()
         };
-        reconcile_in(&dir, 2_000, busy).unwrap();
-        let after_compile = load_manifest_in(&dir, &run.run_id).unwrap();
-        assert_eq!(after_compile.cpu_ms, 600_000);
-        assert_eq!(
-            after_compile.last_progress_at, 2_000,
-            "the compile moved the progress clock"
-        );
-
-        // The compile ends. Its children leave the table, so the reading falls,
-        // and the agent then sits idle past the window.
-        let idle = |run: &RunManifest| Proofs {
-            pid_alive: true,
-            cpu_ms: 12,
-            commit: run.last_commit.clone(),
-            worktree_exists: true,
-            branch_matches: true,
-            ..Default::default()
-        };
-        let at = 2_000 + PROGRESS_WINDOW_MS + 1;
-        reconcile_in(&dir, at, idle).unwrap();
-        let after_idle = load_manifest_in(&dir, &run.run_id).unwrap();
-        assert_eq!(
-            after_idle.cpu_ms, 600_000,
-            "the high-water mark stands against a fall"
-        );
-        assert_eq!(
-            after_idle.last_progress_at, 2_000,
-            "a fall is silence, not progress"
-        );
-        assert_eq!(
-            after_idle.state,
-            RunState::Failed,
-            "an idle run past the window is still caught"
-        );
+        let root = cpu_row(100, 1, "root", 900_000);
+        let first = sample(2_000, &[root.clone(), cpu_row(200, 100, "first", 600_000)]);
+        assert_eq!(first.cpu_ms, 600_000);
+        assert_eq!(first.last_progress_at, 2_000);
+        // Every call reloads persisted samples. Smaller replacement children
+        // must move progress even after the large compile has left the table.
+        let mut at = 2_000;
+        for n in 1..=4 {
+            at += PROGRESS_WINDOW_MS / 2;
+            let current = sample(at, &[root.clone(), cpu_row(200, 100, &format!("child-{n}"), 12)]);
+            assert_eq!(current.cpu_ms, 600_000 + n * 12);
+            assert_eq!(current.last_progress_at, at);
+            assert_eq!(current.state, RunState::Running);
+        }
+        let gone = sample(at + 1, std::slice::from_ref(&root));
+        assert_eq!(gone.last_progress_at, at, "child exit alone is not progress");
+        assert!(gone.cpu_samples.is_empty());
+        let idle = sample(at + PROGRESS_WINDOW_MS + 1, &[root]);
+        assert_eq!(idle.state, RunState::Failed);
+        assert_eq!(idle.last_signal, STALLED_NO_PROGRESS);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn child_cpu_requires_live_root_birth_and_preserves_unknown_sample_baseline() {
+        let mut run = run();
+        run.cpu_ms = 600_000;
+        run.cpu_samples.insert(200, ProcessCpuSample { birth: "child".into(), cpu_ms: 12 });
+        let rows = [cpu_row(100, 1, "root", 9_000), cpu_row(200, 100, "child", 15)];
+        for (pid, birth, alive) in [
+            (Some(100), Some("root"), false),
+            (Some(100), Some("reused-root"), true),
+            (Some(100), None, true), (None, Some("root"), true),
+            (Some(0), Some("root"), true),
+        ] {
+            assert_eq!(child_cpu_progress(&run, &rows, pid, birth, alive), (600_000, None));
+        }
+        assert_eq!(child_cpu_progress(&run, &[], Some(100), Some("root"), true), (600_000, None));
+        let (total, samples) = child_cpu_progress(&run, &rows, Some(100), Some("root"), true);
+        assert_eq!(total, 600_003, "unknown observations cannot reset or double-count the previous sample");
+        run.cpu_ms = total;
+        run.cpu_samples = samples.unwrap();
+        assert_eq!(child_cpu_progress(&run, &rows, Some(100), Some("root"), true).0, total);
+        let replaced = [rows[0].clone(), cpu_row(200, 100, "new-child", 2)];
+        assert_eq!(child_cpu_progress(&run, &replaced, Some(100), Some("root"), true).0, total + 2);
+    }
+
+    #[test]
+    fn observe_rejects_cpu_from_a_reused_pid_even_when_its_viewport_is_live() {
+        let registry = std::env::temp_dir().join(format!("xnaut-439-birth-{}", uuid::Uuid::new_v4()));
+        let mut run = run();
+        run.pid = Some(std::process::id());
+        run.process_birth = Some("not this process birth".into());
+        run.zellij_session = Some("still-open".into());
+        run.cpu_ms = 100;
+        let machine = Machine { control_repo: None, rows: vec![
+            cpu_row(std::process::id(), 1, "not this process birth", 0),
+            cpu_row(u32::MAX, std::process::id(), "foreign-child", 500_000),
+        ] };
+        let proof = observe_with(&machine, &registry, &run, &["still-open".into()]);
+        assert!(proof.session_alive);
+        assert!(!proof.pid_alive);
+        assert_eq!(proof.cpu_ms, run.cpu_ms);
+        assert!(proof.cpu_samples.is_none());
     }
 
     /// The reconciler and the verdict must agree about what progress means.
@@ -2548,11 +2597,11 @@ pub(crate) mod tests {
     #[test]
     fn the_cpu_walk_sums_children_and_grandchildren_but_never_the_run_itself() {
         let rows = [
-            ProcRow { pid: 100, ppid: 1, cpu_ms: 9_000 },   // the agent CLI
-            ProcRow { pid: 200, ppid: 100, cpu_ms: 50 },    // its shell
-            ProcRow { pid: 300, ppid: 200, cpu_ms: 400_000 }, // cargo
-            ProcRow { pid: 400, ppid: 300, cpu_ms: 600_000 }, // rustc
-            ProcRow { pid: 500, ppid: 1, cpu_ms: 777 },     // someone else's
+            ProcRow { birth: "birth".into(), pid: 100, ppid: 1, cpu_ms: 9_000 },   // the agent CLI
+            ProcRow { birth: "birth".into(), pid: 200, ppid: 100, cpu_ms: 50 },    // its shell
+            ProcRow { birth: "birth".into(), pid: 300, ppid: 200, cpu_ms: 400_000 }, // cargo
+            ProcRow { birth: "birth".into(), pid: 400, ppid: 300, cpu_ms: 600_000 }, // rustc
+            ProcRow { birth: "birth".into(), pid: 500, ppid: 1, cpu_ms: 777 },     // someone else's
         ];
         assert_eq!(descendant_cpu_ms(&rows, 100), 50 + 400_000 + 600_000);
         assert_eq!(descendant_cpu_ms(&rows, 300), 600_000);
@@ -2562,8 +2611,8 @@ pub(crate) mod tests {
         assert_eq!(descendant_cpu_ms(&rows, 0), 0);
         // A reparenting cycle must not hang the sweep.
         let cyclic = [
-            ProcRow { pid: 10, ppid: 20, cpu_ms: 1 },
-            ProcRow { pid: 20, ppid: 10, cpu_ms: 2 },
+            ProcRow { birth: "birth".into(), pid: 10, ppid: 20, cpu_ms: 1 },
+            ProcRow { birth: "birth".into(), pid: 20, ppid: 10, cpu_ms: 2 },
         ];
         assert_eq!(descendant_cpu_ms(&cyclic, 10), 2);
     }
@@ -2571,8 +2620,8 @@ pub(crate) mod tests {
     #[test]
     fn a_process_table_row_parses_and_junk_is_dropped() {
         assert_eq!(
-            parse_proc_row(" 80149 32641   1:02.50 "),
-            Some(ProcRow { pid: 80_149, ppid: 32_641, cpu_ms: 62_500 })
+            parse_proc_row(" 80149 32641   1:02.50 birth "),
+            Some(ProcRow { birth: "birth".into(), pid: 80_149, ppid: 32_641, cpu_ms: 62_500 })
         );
         for junk in ["", "80149", "80149 32641", "a b 0:00.00", "1 2 nope"] {
             assert_eq!(parse_proc_row(junk), None, "{junk:?}");
@@ -2688,6 +2737,7 @@ pub(crate) mod tests {
 
         let mut run = run();
         run.pid = Some(std::process::id());
+        run.process_birth = process_birth(std::process::id());
         run.worktree_path = tree.to_string_lossy().into();
         run.branch = String::new(); // no git repo here; branch is not under test
         run.ticket = Some("XNAUT-439".into());
@@ -2751,7 +2801,7 @@ pub(crate) mod tests {
         let original = run();
         let mut trimmed =
             serde_json::to_value(&original).unwrap().as_object().unwrap().clone();
-        for field in ["cpu_ms", "ticket_revision", "verify_log_bytes"] {
+        for field in ["cpu_ms", "cpu_samples", "ticket_revision", "verify_log_bytes"] {
             assert!(trimmed.remove(field).is_some(), "{field} must be written");
         }
         let parsed: RunManifest = serde_json::from_value(trimmed.into()).unwrap();
