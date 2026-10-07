@@ -7,7 +7,7 @@ All notable changes to xNAUT are documented in this file.
 ### Added
 - Approved work groups retain a durable ticket-bound queue, refill available capacity within configured limits, and reconcile existing runs after restart. Stop further dispatch preserves running work and its evidence.
 - Evidence-backed findings triage records repository references, related issue candidates and a proposed disposition. Approval is bound to the current finding scope and evidence before automatic or agent-requested dispatch.
-- Independent review can send a failed implementation through bounded repair on the same branch and pull request, followed by fresh verification of the new commit. Missing checks, unfinished work and exhausted retries remain visibly blocked.
+- Independent review can send defects and repairable unfinished code through bounded repair on the same branch and pull request, followed by fresh verification of the new commit. Unavailable prerequisites, missing checks and exhausted retries remain visibly blocked; unfinished work cannot pass verification.
 - Project continuity combines saved conversations, tickets, worker receipts and repository evidence. The Journal records coordinator, triage, review and repair outcomes with attribution and links, and reconstructs current work after restart.
 
 ### Fixed
