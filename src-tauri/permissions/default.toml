@@ -740,6 +740,8 @@ commands.allow = [
   "pm_project_ticket_count",
   "pm_ticket_create",
   "pm_ticket_update",
+  "pm_mutation_diagnose",
+  "pm_mutation_recover",
   "pm_ticket_delete",
   "pm_event_list",
   "debug_log_append",

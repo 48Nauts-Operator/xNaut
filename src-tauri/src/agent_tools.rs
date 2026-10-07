@@ -352,11 +352,21 @@ pub fn tool_specs() -> Vec<Value> {
                 }
             }
         }),
+        json!({"type":"function","function":{
+            "name":"pm_mutation_diagnose",
+            "description":"NautBot: inspect interrupted native PM mutations for one project, including unknown index locks and unattributed edits. Read-only and available while writes are paused. Never remove a lock, stage arbitrary files, or repeat create/update to recover a failed commit.",
+            "parameters":{"type":"object","properties":{"project":{"type":"string"}},"required":["project"],"additionalProperties":false}
+        }}),
+        json!({"type":"function","function":{
+            "name":"pm_mutation_recover",
+            "description":"NautBot: recover one exact app-owned PM mutation ID returned by pm_mutation_diagnose. Verifies branch, HEAD, committed proof, file bytes and staged entries; normal Git hooks remain enabled. Paused writes, unknown receipts and changed content are refused. Inspect the returned state; this does not launch any worker.",
+            "parameters":{"type":"object","properties":{"project":{"type":"string"},"mutation_id":{"type":"string"}},"required":["project","mutation_id"],"additionalProperties":false}
+        }}),
         json!({
             "type": "function",
             "function": {
                 "name": "create_ticket",
-                "description": "File a new ticket. Writes the ticket JSON, an event and a git commit, exactly as the app does. Use it for work that outlives this conversation; do not file a duplicate of something list_tickets already shows.",
+                "description": "File a new ticket. Writes the ticket JSON, an event and a git commit, exactly as the app does. Use it for work that outlives this conversation; do not file a duplicate of something list_tickets already shows. If the result retains a native mutation UUID, diagnose/recover that UUID and reload the ticket instead of repeating create_ticket; the original ticket may already exist.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -376,7 +386,7 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "update_ticket",
-                "description": "Change a ticket's status, priority or owner, and append to its body. The body is only ever APPENDED to, so a ticket's history cannot be overwritten. Set done when the work is actually finished: the ticket goes back to NautBot, who tests it and is the only one who can set complete.",
+                "description": "Change a ticket's status, priority or owner, and append to its body. The body is only ever APPENDED to, so a ticket's history cannot be overwritten. Set done when the work is actually finished: the ticket goes back to NautBot, who tests it and is the only one who can set complete. If a native mutation UUID was retained, diagnose/recover it and reload the ticket before any new edit; never blindly repeat an append or claim this PM write launched a worker.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -908,6 +918,26 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
         // The agent writes tickets through the same functions the app's own
         // commands use, so a ticket it files is indistinguishable from one a
         // person filed: JSON + event + commit, via record_mutation.
+        "pm_mutation_diagnose" | "pm_mutation_recover" => {
+            if !canvas_key.trim().eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE) {
+                return json!({"ok":false,"error":"PM mutation recovery tools are reserved for NautBot; no write attempted"});
+            }
+            let repo = match crate::project_management::repo_now() { Ok(repo)=>repo,Err(error)=>return json!({"ok":false,"error":error}) };
+            let project=args.get("project").and_then(Value::as_str).unwrap_or("").to_owned();
+            let id=args.get("mutation_id").and_then(Value::as_str).unwrap_or("").to_owned();
+            let recover=name=="pm_mutation_recover";
+            match tokio::task::spawn_blocking(move || {
+                if recover {
+                    crate::project_management::mutation_recovery::recover(&repo,&project,&id).map(|result|json!({"ok":matches!(result.state.as_str(),"committed"|"already_committed"),"mutation":result}))
+                } else {
+                    crate::project_management::mutation_recovery::diagnose(&repo,&project).map(|result|json!({"ok":true,"diagnosis":result}))
+                }
+            }).await {
+                Ok(Ok(result))=>result,
+                Ok(Err(error))=>json!({"ok":false,"error":error}),
+                Err(_)=>json!({"ok":false,"error":"Native PM recovery task unavailable; inspect durable diagnosis before retrying"}),
+            }
+        }
         "list_tickets" => {
             let repo = match crate::project_management::repo_now() {
                 Ok(repo) => repo,
@@ -1852,7 +1882,7 @@ fn preparation_only(performed: &[String]) -> bool {
         let local=name.rsplit("__").next().unwrap_or(name);
         crate::agent_tool_catalog::is_catalog_call(name) || matches!(local,
             "attach_session" | "list_sessions" | "list_agents" | "list_tickets" |
-            "create_ticket" | "prepare_repository_ticket" | "update_ticket" | "read_handback" | "list_repository_files" | "read_project_work" |
+            "pm_mutation_diagnose" | "pm_mutation_recover" | "create_ticket" | "prepare_repository_ticket" | "update_ticket" | "read_handback" | "list_repository_files" | "read_project_work" |
             "connect_plugin" | "repair_plugin" | "inspect_package" | "search_packages" |
             "aikido_login" | "swarm_plan" | "create_worktree" | "request_repository_review")
     })
@@ -3138,6 +3168,18 @@ mod tests {
         let parameters = &dispatch["function"]["parameters"];
         assert_eq!(parameters["properties"]["environment"]["enum"], json!(["local", "exe-dev", "gitvm"]));
         assert_eq!(parameters["required"], json!(["id", "project"]));
+    }
+
+    #[tokio::test]
+    async fn pm_recovery_tools_are_routed_and_refuse_non_coordinator_callers() {
+        for name in ["pm_mutation_diagnose","pm_mutation_recover"] {
+            let specs=tool_specs();
+            let spec=specs.iter().find(|s|s["function"]["name"]==name).expect("native tool advertised");
+            assert_eq!(spec["function"]["parameters"]["additionalProperties"],false);
+            let result=execute(name,&json!({"project":"TEST","mutation_id":"00000000-0000-0000-0000-000000000000"}),"foreign-worker").await;
+            assert_eq!(result["ok"],false);
+            assert!(result["error"].as_str().unwrap().contains("reserved for NautBot"),"{result}");
+        }
     }
 
     #[test]

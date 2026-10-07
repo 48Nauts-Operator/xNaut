@@ -605,6 +605,8 @@ async fn main() {
             project_management::pm_project_ticket_count,
             project_management::pm_ticket_create,
             project_management::pm_ticket_update,
+            project_management::pm_mutation_diagnose,
+            project_management::pm_mutation_recover,
             project_management::pm_ticket_delete,
             project_management::pm_event_list,
             project_management::pm_ticket_owner_history,

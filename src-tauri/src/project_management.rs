@@ -8,6 +8,7 @@ use tauri::State;
 
 mod write_guard;
 mod deferred;
+pub(crate) mod mutation_recovery;
 #[cfg(test)]
 mod write_guard_tests;
 pub(crate) use write_guard::{owner_action, ControlWriteLease};
@@ -416,7 +417,7 @@ const NO_AUTO_MAINTENANCE: [&str; 4] = ["-c", "gc.auto=0", "-c", "maintenance.au
 
 fn git_command(repo: &Path) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(NO_AUTO_MAINTENANCE).env("GIT_OPTIONAL_LOCKS", "0");
+    cmd.arg("-C").arg(repo).args(NO_AUTO_MAINTENANCE).env("GIT_OPTIONAL_LOCKS", "0").env("LC_ALL", "C");
     cmd
 }
 
@@ -501,6 +502,7 @@ pub(crate) fn maintenance_due(
 /// was due. The interval is claimed BEFORE the task runs, so a slow task and
 /// the next tick cannot start a second one.
 pub fn maintain_control_repo(repo: &Path) -> Result<Option<&'static str>, String> {
+    mutation_recovery::recover_automatic(repo, None)?;
     deferred::replay(repo)?;
     let task = {
         let mut state = maintenance_state()
@@ -929,7 +931,7 @@ fn inspect(settings: &ProjectManagementSettings) -> ModuleStatus {
     status.git_repository = path.join(".git").is_dir();
     status.valid = status.git_repository && path.join(MANIFEST_NAME).is_file();
     if status.valid {
-        status.warning = deferred::warning(&path).unwrap_or_else(|e| format!("Control repository evidence status unavailable: {e}"));
+        status.warning = [deferred::warning(&path), mutation_recovery::warning(&path)].into_iter().map(|r| r.unwrap_or_else(|e| format!("Control repository evidence status unavailable: {e}"))).filter(|v| !v.is_empty()).collect::<Vec<_>>().join(" ");
         status.project_count = std::fs::read_dir(path.join("projects"))
             .map(|entries| {
                 entries
@@ -1085,47 +1087,23 @@ pub(crate) fn record_mutation(
     message: &str,
 ) -> Result<(), String> {
     let _lease = ControlWriteLease::acquire(repo)?;
+    let mutation_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     let event_path = repo.join("events").join(deferred::replay_id().map(|id| format!("deferred-{id}.json")).unwrap_or_else(|| format!(
         "{}-{}.json",
         chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ"),
         uuid::Uuid::new_v4()
     )));
+    let mut commit_paths = paths.to_vec();
+    commit_paths.push(event_path.clone());
+    mutation_recovery::ensure_no_overlap(repo, &commit_paths)?;
     let mut event = json!({
         "version": 1, "event": event_type, "subject": subject,
-        "timestamp": now, "details": details,
+        "timestamp": now, "details": details, "pm_mutation_id": mutation_id,
     });
     if let Some(id) = deferred::replay_id() { event["deferred_pending_sha256"] = id.into(); }
     write_json_atomic(&event_path, &event)?;
-    let mut commit_paths = paths.to_vec();
-    commit_paths.push(event_path);
-    let relative: Result<Vec<String>, String> = commit_paths
-        .iter()
-        .map(|path| {
-            path.strip_prefix(repo)
-                .map(|rel| rel.to_string_lossy().into_owned())
-                .map_err(|_| "mutation path escaped repository".into())
-        })
-        .collect();
-    let relative = relative?;
-    let mut add_args = vec!["add".to_string(), "--".into()];
-    add_args.extend(relative.iter().cloned());
-    let add_refs: Vec<&str> = add_args.iter().map(String::as_str).collect();
-    run_git(repo, &add_refs)?;
-    let mut args = vec![
-        "-c".to_string(),
-        "user.name=xNaut".into(),
-        "-c".into(),
-        "user.email=xnaut@local".into(),
-        "commit".into(),
-        "--only".into(),
-        "-m".into(),
-        message.into(),
-        "--".into(),
-    ];
-    args.extend(relative);
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_git(repo, &refs)?;
+    mutation_recovery::commit(repo, &mutation_id, event_type, subject, &event_path, &commit_paths, message)?;
     publish(repo);
     Ok(())
 }
@@ -2422,6 +2400,17 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
         .map_err(|_| "Project Management mutation lock is unavailable")?;
     let _lease = ControlWriteLease::acquire(&repo)?;
 
+    if crate::switches::automatic_pm_write_hold_strict().is_none() {
+        let recovered = mutation_recovery::recover_automatic(repo, Some(&request.id))?;
+        for item in &recovered {
+            if !matches!(item.state.as_str(), "committed" | "already_committed") {
+                return Err(format!("native mutation {} remains {}: {}. {}", item.id, item.state, item.reason, item.next_action));
+            }
+        }
+        if !recovered.is_empty() {
+            return Err("The prior native mutation was recovered. This new update was not applied: reload the ticket and reconcile the original request before submitting another edit; do not blindly repeat an append.".into());
+        }
+    }
     // XNAUT-297: reconcile committed fleet edits before reading the revision.
     // Local-only control repos still work. Never stash, reset, or choose a side
     // of a conflict: a committed handback must remain recoverable on its branch.
@@ -4335,4 +4324,13 @@ key: "AYUS".into(),
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[tauri::command]
+pub fn pm_mutation_diagnose(project: String) -> Result<mutation_recovery::Diagnosis, String> {
+    mutation_recovery::diagnose(&repo_now()?, &project)
+}
+#[tauri::command]
+pub fn pm_mutation_recover(project: String, mutation_id: String) -> Result<mutation_recovery::MutationStatus, String> {
+    mutation_recovery::recover(&repo_now()?, &project, &mutation_id)
 }
