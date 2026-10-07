@@ -404,9 +404,33 @@ fn raw_git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 fn commit_proof(repo: &Path, intent: &Intent) -> Result<Option<String>, String> {
-    if head(repo)?.is_empty() {
+    let current = head(repo)?;
+    // A new UUID cannot have committed while HEAD is still the saved base.
+    // In particular, do not grep the entire existing PM history on each write.
+    if current.is_empty() || current == intent.base {
         return Ok(None);
     }
+    let range = if intent.base.is_empty() {
+        // Only a first commit can satisfy an unborn intent. Limit this unusual
+        // recovery case explicitly instead of scanning unrelated old history.
+        let window = run_git(repo, &["rev-list", "--max-count=257", &current])?;
+        if window.lines().count() > 256 {
+            return Err("Unborn mutation proof exceeds the bounded history window; retain the receipt for explicit history reconciliation".into());
+        }
+        current.clone()
+    } else {
+        let ancestry = git_command(repo)
+            .args(["merge-base", "--is-ancestor", &intent.base, &current])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !ancestry.status.success() {
+            return Err(
+                "Saved mutation base is not a verified ancestor of HEAD; original receipt retained"
+                    .into(),
+            );
+        }
+        format!("{}..{}", intent.base, current)
+    };
     let marker = format!("XNAUT-PM-Mutation: {}", intent.id);
     let commits = run_git(
         repo,
@@ -416,7 +440,7 @@ fn commit_proof(repo: &Path, intent: &Intent) -> Result<Option<String>, String> 
             "--format=%H",
             "--fixed-strings",
             &format!("--grep={marker}"),
-            "HEAD",
+            &range,
         ],
     )?;
     let rows: Vec<_> = commits.lines().filter(|s| !s.is_empty()).collect();
@@ -1136,6 +1160,85 @@ mod tests {
         assert_eq!(f.git(&["rev-parse", "HEAD"]), before);
         assert_eq!(pending(&f.repo).unwrap().len(), 1);
     }
+    #[test]
+    fn proof_range_ignores_prebase_markers_and_recovers_after_later_commits_but_rejects_duplicates()
+    {
+        let f = Fixture::new();
+        let id = uuid::Uuid::new_v4().to_string();
+        let marker = format!("XNAUT-PM-Mutation: {id}");
+        f.git(&[
+            "commit",
+            "--allow-empty",
+            "-m",
+            &format!("historical lookalike\n\n{marker}"),
+        ]);
+        let base = f.git(&["rev-parse", "HEAD"]);
+        std::fs::write(f.target(), b"native intended\n").unwrap();
+        let event = f.repo.join("events/range-proof.json");
+        write_json_atomic(
+            &event,
+            &json!({"event":"ticket_update","subject":"TEST-1","pm_mutation_id":id}),
+        )
+        .unwrap();
+        let lock = f.own_unknown_lock();
+        assert!(commit(
+            &f.repo,
+            &id,
+            "ticket_update",
+            "TEST-1",
+            &event,
+            &[event.clone(), f.target()],
+            "native mutation"
+        )
+        .unwrap_err()
+        .contains("index_contention"));
+        let intent = f.only_pending();
+        assert_eq!(intent.base, base);
+        // The old matching marker cannot claim this intent while HEAD==base.
+        assert!(commit_proof(&f.repo, &intent).unwrap().is_none());
+        std::fs::remove_file(lock).unwrap();
+        assert_eq!(recover(&f.repo, "TEST", &id).unwrap().state, "committed");
+        let committed = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["commit", "--allow-empty", "-m", "later unrelated history"]);
+        let later = f.git(&["rev-parse", "HEAD"]);
+        // Restart after the actual commit but before receipt acknowledgment,
+        // even though another ordinary commit has since moved HEAD.
+        persist(&f.repo, &intent, false).unwrap();
+        let recovered = recover(&f.repo, "TEST", &id).unwrap();
+        assert_eq!(recovered.state, "already_committed");
+        assert_eq!(recovered.commit.as_deref(), Some(committed.as_str()));
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), later);
+        f.git(&[
+            "commit",
+            "--allow-empty",
+            "-m",
+            &format!("later duplicate\n\n{marker}"),
+        ]);
+        persist(&f.repo, &intent, false).unwrap();
+        let refused = recover(&f.repo, "TEST", &id).unwrap();
+        assert_eq!(refused.state, "proof_mismatch");
+        assert!(refused.reason.contains("multiple commits"));
+        assert_eq!(pending(&f.repo).unwrap().len(), 1);
+    }
+    #[test]
+    fn proof_range_refuses_a_saved_base_outside_current_ancestry() {
+        let f = Fixture::new();
+        let lock = f.own_unknown_lock();
+        f.write().unwrap_err();
+        let mut intent = f.only_pending();
+        std::fs::remove_file(lock).unwrap();
+        // Make a real unrelated root object without changing HEAD, index, or
+        // the pending working files. No reset/stash or fabricated hash.
+        let tree = f.git(&["rev-parse", "HEAD^{tree}"]);
+        let other = f.git(&["commit-tree", &tree, "-m", "unrelated root"]);
+        intent.base = other;
+        persist(&f.repo, &intent, false).unwrap();
+        let refused = recover(&f.repo, "TEST", &intent.id).unwrap();
+        assert_eq!(refused.state, "proof_mismatch");
+        assert!(refused.reason.contains("ancestor"));
+        assert_eq!(pending(&f.repo).unwrap().len(), 1);
+    }
+
     #[test]
     fn automatic_recovery_reloads_saved_contention_without_repeating_logical_edit() {
         let f = Fixture::new();
