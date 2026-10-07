@@ -11,6 +11,8 @@ All notable changes to xNAUT are documented in this file.
 - Project continuity combines saved conversations, tickets, worker receipts and repository evidence. The Journal records coordinator, triage, review and repair outcomes with attribution and links, and reconstructs current work after restart.
 
 ### Fixed
+- Retry transient PM Git contention and retain exact native mutation receipts for interrupted commits. NautBot can diagnose and recover a matching write without deleting unknown locks, overwriting newer staged content or committing unrelated edits. Unattributed legacy edits remain held for reconciliation.
+- Preserve owner-supplied repository paths independently of checkout availability. Agent tools distinguish missing, empty and invalid checkouts from missing authorization, and do not infer a company project from a repository URL or path segment.
 - Reconcile committed PM history around unrelated pending ticket edits without stashing or discarding them. Conflicting edits to the target ticket still require resolution.
 - Count verified child-process CPU activity, ticket changes and verification-log growth as worker progress, preserving process identity across child turnover.
 - Hold automatic PM mutations while paused, retain deferred receipts for replay and expose pending publication faults. Coordinate cooperating writers and maintenance through a shared process lock.
