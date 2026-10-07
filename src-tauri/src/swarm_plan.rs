@@ -49,6 +49,10 @@ pub struct PlannedRun {
     pub runtime_id: Option<String>,
     #[serde(default)]
     pub environment: Option<String>,
+    /// An explicit per-plan destination takes precedence over the profile default.
+    /// Older plans keep checking their resolved profile destination.
+    #[serde(default)]
+    pub requested_environment: Option<String>,
     #[serde(default)]
     pub repository_remote: Option<String>,
 }
@@ -70,6 +74,8 @@ pub struct SwarmPlan {
     /// The cap this plan was built under, after clamping.
     pub max_parallel: usize,
     pub created_at: i64,
+    #[serde(default)]
+    pub dispatch_hold: Option<String>,
 }
 
 /// What the plan is built against: the board, who can run, and what is
@@ -196,6 +202,7 @@ pub fn plan_from(
             repository_root: None,
             runtime_id: None,
             environment: None,
+            requested_environment: None,
             repository_remote: None,
         });
     }
@@ -219,6 +226,7 @@ pub fn plan_from(
         skipped,
         max_parallel: cap,
         created_at: now,
+        dispatch_hold: None,
     })
 }
 
@@ -527,10 +535,11 @@ fn current_pins(run: &PlannedRun, project: &str) -> Result<bool, String> {
     let root = Path::new(crate::project_management::local_source_path(p).trim())
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    let environment = crate::sandbox::launch_env::resolve(
-        profile.execution.pinned_environment(),
+    let environment = resolve_environment(
+        run.requested_environment.as_deref(),
+        profile.execution,
         &crate::settings::load_or_default().sandboxes,
-    );
+    )?;
     Ok(!p.owner_only
         && pins_match(
             run,
@@ -787,6 +796,37 @@ impl Drop for GroupLease {
 /// NautBot's cap. Nothing is stored: the caller decides whether this plan is
 /// worth asking about.
 pub fn build(project: &str, requested: &[String]) -> Result<SwarmPlan, String> {
+    build_with_environment(project, requested, None)
+}
+
+fn resolve_environment(
+    requested: Option<&str>,
+    execution: crate::agent_profiles::AgentExecution,
+    sandboxes: &[crate::settings::SandboxProviderSettings],
+) -> Result<crate::sandbox::launch_env::LaunchEnv, String> {
+    use crate::sandbox::launch_env::{resolve, LaunchEnv};
+    let explicit = requested.map(|key| LaunchEnv::from_key(key)
+        .ok_or_else(|| format!("Unknown execution environment: {key}. Choose local, exe-dev or gitvm.")))
+        .transpose()?;
+    let destination = resolve(explicit.or_else(|| execution.pinned_environment()), sandboxes);
+    // A requested remote destination must never silently fall back to local.
+    destination.route(sandboxes)?;
+    Ok(destination)
+}
+
+fn ensure_dispatch_role(role: crate::instance::Role) -> Result<(), String> {
+    if role.dispatches() {
+        Ok(())
+    } else {
+        Err(format!("This instance has the {} role, so its swarm queue cannot dispatch. No new approval or worker was created. Dispatch from a Fleet instance with this plan available; do not change roles or regenerate the plan to bypass this restriction.", role.as_str()))
+    }
+}
+
+pub fn build_with_environment(
+    project: &str,
+    requested: &[String],
+    environment: Option<&str>,
+) -> Result<SwarmPlan, String> {
     let repo = crate::project_management::repo_now()?;
     let tickets = crate::project_management::ticket_list_in(&repo, None)?;
     let registry = crate::agents::registry_dir()?;
@@ -837,19 +877,14 @@ pub fn build(project: &str, requested: &[String]) -> Result<SwarmPlan, String> {
         let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())?;
         run.repository_root = Some(root.clone());
         run.runtime_id = Some(profile.runtime_id.clone());
-        run.environment = Some(
-            crate::sandbox::launch_env::resolve(
-                profile.execution.pinned_environment(),
-                &settings.sandboxes,
-            )
-            .key()
-            .into(),
-        );
+        run.environment = Some(resolve_environment(environment, profile.execution, &settings.sandboxes)?.key().into());
+        run.requested_environment = environment.map(str::to_owned);
         run.repository_remote = projects
             .iter()
             .find(|p| p.key == project)
             .map(|p| p.forge_remote.clone());
     }
+    plan.dispatch_hold = ensure_dispatch_role(crate::instance::role()).err();
     Ok(plan)
 }
 
@@ -865,19 +900,42 @@ pub struct Started {
 
 /// What a confirm did. `failed` is not an error: the runs before it are
 /// already working, and a caller that saw only an error would not know that.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SwarmDispatched {
     pub plan_id: String,
     pub project: String,
     pub started: Vec<Started>,
     pub failed: Vec<Skipped>,
     pub queued: Vec<String>,
+    pub total: usize,
+    pub members: Vec<Member>,
+}
+
+impl SwarmDispatched {
+    pub(crate) fn tool_result(&self) -> serde_json::Value {
+        serde_json::json!({
+            "ok": true,
+            "plan_id": self.plan_id,
+            "project": self.project,
+            "started": self.started,
+            "queued": self.queued,
+            "failed": self.failed,
+            "total": self.total,
+            "members": self.members,
+            "note": format!(
+                "Started {}; queued {}; blocked {}; {} total planned for {}. Queued members retain their approval and await refill; this plan is durable, not consumed. Inspect member states and reasons before recovery. Do not create a replacement merely because zero workers started, and do not claim queued work is running or completed.",
+                self.started.len(), self.queued.len(), self.failed.len(), self.total, self.project
+            )
+        })
+    }
 }
 
 fn report(group: &Group) -> SwarmDispatched {
     SwarmDispatched {
         plan_id: group.plan.id.clone(),
         project: group.plan.project.clone(),
+        total: group.plan.runs.len(),
+        members: group.members.clone(),
         started: group
             .members
             .iter()
@@ -945,6 +1003,7 @@ async fn dispatch_plan_from(app: tauri::AppHandle, plan_id: &str, model_origin: 
     if crate::switches::load().read_only {
         return Err("the read_only kill-switch is engaged".into());
     }
+    ensure_dispatch_role(crate::instance::role())?;
     let registry = crate::agents::registry_dir()?;
     {
         let _lease = GroupLease::acquire(&registry)?;
@@ -1166,7 +1225,7 @@ impl RefillBackend for NativeRefill<'_> {
                 self.0.clone(),
                 run.ticket.clone(),
                 project,
-                None,
+                run.requested_environment.clone(),
                 Some(&run),
             )
             .await
@@ -1438,6 +1497,80 @@ pub async fn swarm_plan_dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_swarm_destination_survives_storage_and_overrides_local_profile() {
+        use crate::agent_profiles::AgentExecution;
+        use crate::sandbox::launch_env::LaunchEnv;
+        let providers = vec![crate::settings::SandboxProviderSettings {
+            kind: "exe-dev".into(), base_url: String::new(), api_key: None,
+        }];
+        let tickets = [ticket("FORCASTER-2", "FORCASTER", "ready", Some("codex"))];
+        let mut plan = plan_from("destination", "FORCASTER", &[],
+            &board(&tickets, &models(), &HashSet::new()), 3, 0).unwrap();
+        let run = &mut plan.runs[0];
+        run.requested_environment = Some("exe-dev".into());
+        run.environment = Some(resolve_environment(run.requested_environment.as_deref(),
+            AgentExecution::Local, &providers).unwrap().key().into());
+        let stored: SwarmPlan = serde_json::from_slice(&serde_json::to_vec(&plan).unwrap()).unwrap();
+        let run = &stored.runs[0];
+        assert_eq!(run.environment.as_deref(), Some("exe-dev"));
+        assert_eq!(resolve_environment(run.requested_environment.as_deref(),
+            AgentExecution::Local, &providers).unwrap(), LaunchEnv::ExeDev);
+        assert_eq!(resolve_environment(None, AgentExecution::Local, &providers).unwrap(), LaunchEnv::Local);
+        assert!(resolve_environment(Some("unknown"), AgentExecution::Local, &providers).is_err());
+        assert!(resolve_environment(Some("gitvm"), AgentExecution::Local, &providers).is_err());
+        let mut legacy = serde_json::to_value(&stored).unwrap();
+        legacy["runs"][0].as_object_mut().unwrap().remove("requested_environment");
+        legacy.as_object_mut().unwrap().remove("dispatch_hold");
+        let legacy: SwarmPlan = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.runs[0].requested_environment, None);
+        assert_eq!(legacy.dispatch_hold, None);
+    }
+
+    #[test]
+    fn five_queued_members_are_reported_as_five_and_remain_approved() {
+        let dir = scratch();
+        let tickets: Vec<_> = (2..=6).map(|n|
+            ticket(&format!("FORCASTER-{n}"), "FORCASTER", "ready", Some("codex"))).collect();
+        let plan = plan_from("queued", "FORCASTER", &[],
+            &board(&tickets, &models(), &HashSet::new()), 3, 0).unwrap();
+        remember_in(&dir, plan).unwrap();
+        let mut group = groups_in(&dir, None).unwrap().remove(0);
+        approve(&mut group, 1);
+        save_in(&dir, &group).unwrap();
+        let mut restarted = groups_in(&dir, None).unwrap().remove(0);
+        approve(&mut restarted, 2);
+        let result = report(&restarted).tool_result();
+        assert_eq!(result["total"], 5);
+        assert_eq!(result["queued"].as_array().unwrap().len(), 5);
+        assert!(result["started"].as_array().unwrap().is_empty());
+        assert_eq!(result["members"][0]["reason"], "approved; waiting for capacity");
+        assert!(result["note"].as_str().unwrap().contains("Started 0; queued 5; blocked 0; 5 total"));
+        assert_eq!(restarted.approved_at, Some(1));
+        assert_eq!(restarted.events.len(), 5);
+        restarted.members[0].state = MemberState::Tracking;
+        restarted.members[0].reason = "existing assignment; tracking without replacement".into();
+        restarted.members[0].run_id = Some("existing".into());
+        let tracking = report(&restarted).tool_result();
+        assert_eq!(tracking["total"], 5);
+        assert_eq!(tracking["members"][0]["state"], "tracking");
+        assert_eq!(tracking["members"][0]["run_id"], "existing");
+        assert_eq!(tracking["queued"].as_array().unwrap().len(), 4);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn non_dispatching_roles_return_an_actionable_refusal() {
+        use crate::instance::Role;
+        assert!(ensure_dispatch_role(Role::Fleet).is_ok());
+        for role in [Role::Workstation, Role::Sandbox] {
+            let error = ensure_dispatch_role(role).unwrap_err();
+            assert!(error.contains(role.as_str()));
+            assert!(error.contains("No new approval or worker"));
+            assert!(error.contains("Fleet"));
+        }
+    }
 
     fn ticket(id: &str, project: &str, status: &str, owner: Option<&str>) -> TicketRecord {
         let mut record: TicketRecord = serde_json::from_value(serde_json::json!({

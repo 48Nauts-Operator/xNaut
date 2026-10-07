@@ -955,16 +955,15 @@
     // asked for is worse than one that refuses.
     //
     // Nothing has started when this appears. The plan id on the button is the
-    // only thing that can start it, and the backend consumes the plan on the
-    // first yes, so pressing this twice, or pressing it after telling NautBot
-    // to go ahead in the chat, cannot dispatch the batch twice.
+    // only thing that can approve it. The backend persists exact membership,
+    // so repeated confirmation cannot duplicate workers.
     const swarmCard = (message) => {
       const plan = message.plan || {};
       const runs = Array.isArray(plan.runs) ? plan.runs : [];
       const skipped = Array.isArray(plan.skipped) ? plan.skipped : [];
       const rows = runs.map((run, i) => `<div class="as-swarm-run"><span class="n">${i + 1}</span>
         <span class="id">${esc(run.ticket)}</span><span class="ti">${esc(run.title || '')}</span>
-        <span class="who">@${esc(run.owner)} · ${esc(run.model || 'runtime default')}</span></div>`).join('');
+        <span class="who">@${esc(run.owner)} · ${esc(run.model || 'runtime default')} · ${esc(run.environment || 'destination unavailable')}</span></div>`).join('');
       const left = skipped.length
         ? `<div class="as-swarm-skipped">${skipped.map((s) => `<span>○ ${esc(s.ticket)} — ${esc(s.reason)}</span>`).join('')}</div>`
         : '';
@@ -976,6 +975,7 @@
         <div class="as-swarm-head"><b>Swarm plan · ${esc(plan.project || '')}</b>
           <span>${runs.length} runs · max ${esc(String(plan.max_parallel || ''))} parallel · ${esc(plan.id || '')}</span></div>
         ${rows}${left}
+        ${plan.dispatch_hold ? `<div class="as-swarm-skipped">${esc(plan.dispatch_hold)}</div>` : ''}
         <div class="as-swarm-actions">${state}</div>
       </div>`;
     };

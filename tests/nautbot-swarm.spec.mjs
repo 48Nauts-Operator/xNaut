@@ -22,8 +22,8 @@ const PLAN = {
   max_parallel: 3,
   created_at: 1757793600000,
   runs: [
-    { ticket: 'SMOKE-1', title: 'First project ticket', owner: 'builder', model: 'gpt-5.6-codex', branch: 'agent/builder/smoke-1' },
-    { ticket: 'SMOKE-2', title: 'Second project ticket', owner: 'codex', model: 'gpt-5.6-codex', branch: 'agent/codex/smoke-2' },
+    { ticket: 'SMOKE-1', title: 'First project ticket', owner: 'builder', model: 'gpt-5.6-codex', branch: 'agent/builder/smoke-1', environment: 'exe-dev' },
+    { ticket: 'SMOKE-2', title: 'Second project ticket', owner: 'codex', model: 'gpt-5.6-codex', branch: 'agent/codex/smoke-2', environment: 'gitvm' },
   ],
   skipped: [{ ticket: 'SMOKE-9', reason: 'not a ticket the PM has' }],
 };
@@ -51,6 +51,8 @@ test('a swarm plan arrives as a card and dispatches nothing until it is confirme
   await expect(card.locator('.as-swarm-run')).toHaveCount(2);
   await expect(card.locator('.as-swarm-run .id').first()).toHaveText('SMOKE-1');
   await expect(card.locator('.as-swarm-run .who').first()).toContainText('@builder');
+  await expect(card.locator('.as-swarm-run .who').first()).toContainText('exe-dev');
+  await expect(card.locator('.as-swarm-run .who').last()).toContainText('gitvm');
   // Only tickets the PM has. The one that was asked for and is not here says
   // why, rather than vanishing.
   await expect(card.locator('.as-swarm-skipped')).toContainText('SMOKE-9 — not a ticket the PM has');
@@ -72,6 +74,15 @@ test('a swarm plan arrives as a card and dispatches nothing until it is confirme
   await expect(card).toContainText('Started 2; queued 0; blocked 0');
   await expect(card.getByRole('button', { name: /Dispatch/ })).toHaveCount(0);
   expect(await page.evaluate(() => window.__xnautErrors)).toEqual([]);
+});
+
+test('the plan exposes a workstation dispatch hold before confirmation', async ({ page }) => {
+  await openNautbot(page);
+  await page.evaluate(() => { window.__xnautInvokes.length = 0; });
+  await page.evaluate((plan) => window.__xnautEmit('swarm-plan-proposed', { agent_id: 'nautbot', plan }),
+    { ...PLAN, dispatch_hold: 'This instance has the workstation role, so its swarm queue cannot dispatch.' });
+  await expect(page.locator('.as-swarm')).toContainText('workstation role');
+  expect(await page.evaluate(() => window.__xnautInvokes.some((i) => i.cmd === 'swarm_plan_dispatch'))).toBe(false);
 });
 
 test('the Observatory reads dispatched runs from the registry, grouped by project', async ({ page }) => {

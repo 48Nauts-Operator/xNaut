@@ -612,7 +612,8 @@ pub fn tool_specs() -> Vec<Value> {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "The ticket ids to put agents on. Omit it for every open ticket the project has."
-                        }
+                        },
+                        "environment": { "type": "string", "enum": ["local", "exe-dev", "gitvm"], "description": "Explicit destination for every member of this plan. Preserve the owner's requested exe.dev or GitVM destination when replanning by passing exe-dev or gitvm. Omit only to use each owner's saved Compute setting. Never substitute local for a requested remote destination." }
                     },
                     "required": ["project"]
                 }
@@ -622,7 +623,7 @@ pub fn tool_specs() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "swarm_dispatch",
-                "description": "Start every run in a swarm plan the owner has CONFIRMED, through the same dispatch each single ticket goes through: a worktree, the assigned agent, the run registry. Takes the plan_id swarm_plan returned. Never call it on your own judgment — the plan is the question and this is the owner's answer — and never twice for one plan: a dispatched plan is consumed. Only NautBot.",
+                "description": "Approve and advance the exact swarm plan the owner has confirmed. Its approval and queued members are durable; repeated confirmation does not duplicate workers. Report started, queued, blocked and total separately. Zero started does not mean stale or consumed. Inspect the returned member reasons before recovery; never generate a replacement solely because members are queued. Only NautBot.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1154,7 +1155,8 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 .and_then(Value::as_array)
                 .map(|ids| ids.iter().filter_map(Value::as_str).map(str::to_string).collect())
                 .unwrap_or_default();
-            let plan = match crate::swarm_plan::build(&project, &requested) {
+            let environment = args.get("environment").and_then(Value::as_str);
+            let plan = match crate::swarm_plan::build_with_environment(&project, &requested, environment) {
                 Ok(plan) => plan,
                 Err(error) => return json!({ "ok": false, "error": error }),
             };
@@ -1172,19 +1174,22 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 // into a swarm question.
                 crate::swarm_plan::Offer::Single(ticket) => json!({
                     "ok": true, "single": true, "ticket": ticket, "skipped": skipped,
+                    "environment": plan.runs[0].environment,
                     "note": format!(
-                        "{ticket} is the only runnable ticket, so this is not a swarm. Call dispatch_ticket for it now and do not ask about a swarm."
+                        "{ticket} is the only runnable ticket, so this is not a swarm. Preserve the returned environment when calling dispatch_ticket; do not ask about a swarm."
                     )
                 }),
                 crate::swarm_plan::Offer::Swarm => {
                     let count = plan.runs.len();
+                    let note = match &plan.dispatch_hold {
+                        Some(reason) => format!("{count} runs planned, but dispatch is unavailable: {reason} Report this hold instead of asking for repeated approval."),
+                        None => format!("{count} runs planned. The owner is looking at this plan as a card; nothing has started. Say what it covers in one line and wait — call swarm_dispatch only when they say yes."),
+                    };
                     let value = serde_json::to_value(&plan).unwrap_or(Value::Null);
                     if let Err(error) = crate::swarm_plan::remember(plan) { return json!({"ok":false,"error":error}); }
                     json!({
                         "ok": true, "plan": value,
-                        "note": format!(
-                            "{count} runs planned. The owner is looking at this plan as a card; nothing has started. Say what it covers in one line and wait — call swarm_dispatch only when they say yes."
-                        )
+                        "note": note
                     })
                 }
             }
@@ -1207,17 +1212,7 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 return json!({ "ok": false, "error": "the app is not running" });
             };
             match crate::swarm_plan::dispatch_model_plan(app.clone(), &plan_id).await {
-                Ok(done) => json!({
-                    "ok": true,
-                    "started": serde_json::to_value(&done.started).unwrap_or(Value::Null),
-                    "failed": serde_json::to_value(&done.failed).unwrap_or(Value::Null),
-                    "note": format!(
-                        "{} of {} runs started; every one is in the run registry and on the Observatory under {}. Each agent moves its own ticket to done. Name any failure rather than rounding it off.",
-                        done.started.len(),
-                        done.started.len() + done.failed.len(),
-                        done.project
-                    )
-                }),
+                Ok(done) => done.tool_result(),
                 Err(error) => json!({ "ok": false, "error": error }),
             }
         }
@@ -2637,6 +2632,18 @@ async fn run_turn_with_roots(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn swarm_tools_expose_destination_and_durable_queue_contract() {
+        let specs = super::tool_specs();
+        let plan = specs.iter().find(|s| s["function"]["name"] == "swarm_plan").unwrap();
+        assert_eq!(plan["function"]["parameters"]["properties"]["environment"]["enum"],
+            serde_json::json!(["local", "exe-dev", "gitvm"]));
+        let dispatch = specs.iter().find(|s| s["function"]["name"] == "swarm_dispatch").unwrap();
+        let description = dispatch["function"]["description"].as_str().unwrap();
+        assert!(description.contains("queued"));
+        assert!(!description.contains("a dispatched plan is consumed"));
+    }
+
     /// The wire shape, taken verbatim off a live OpenAI-compatible route
     /// (LM Studio, qwen3.8-27b-mlx, 2026-09-05). A tool call arrives in
     /// fragments: the id and the name once, the arguments split across as many
