@@ -2,7 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.30.1] - 2026-10-07
+## [1.30.2] - 2026-10-07
 
 ### Added
 - Approved work groups retain a durable ticket-bound queue, refill available capacity within configured limits, and reconcile existing runs after restart. Stop further dispatch preserves running work and its evidence.
@@ -11,6 +11,11 @@ All notable changes to xNAUT are documented in this file.
 - Project continuity combines saved conversations, tickets, worker receipts and repository evidence. The Journal records coordinator, triage, review and repair outcomes with attribution and links, and reconstructs current work after restart.
 
 ### Fixed
+- Reconcile committed PM history around unrelated pending ticket edits without stashing or discarding them. Conflicting edits to the target ticket still require resolution.
+- Count verified child-process CPU activity, ticket changes and verification-log growth as worker progress, preserving process identity across child turnover.
+- Hold automatic PM mutations while paused, retain deferred receipts for replay and expose pending publication faults. Coordinate cooperating writers and maintenance through a shared process lock.
+- Keep integration visibly blocked when verification tooling is unavailable instead of treating missing browsers or toolchains as failed code. Browser provisioning uses persistent application data and a bounded setup attempt.
+- Restore the recorded compensation before remerging a previously reverted implementation, with content and ancestry checks; ambiguous or conflicting histories are held for resolution.
 - Enforce cross-process launch, group and review locks on Windows as well as macOS. Preserve typed launch refusals and retry history without treating refused launches as running workers or completed repair attempts.
 - Recover project and worker context when returning to Agent conversations, keeping historical claims distinct from current verification evidence.
 - Prevent hidden native Browser views from waiting indefinitely for animation frames. Closing or switching tabs during creation cannot leave invalid entries or reactivate an older selection.
