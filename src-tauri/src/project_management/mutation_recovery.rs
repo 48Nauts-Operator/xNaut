@@ -511,13 +511,23 @@ fn commit_proof(repo: &Path, intent: &Intent) -> Result<Option<String>, String> 
     Ok(Some(commit.into()))
 }
 fn finish(repo: &Path, intent: &mut Intent, commit: String) -> Result<(), String> {
-    intent.committed = Some(commit);
-    intent.last_failure = None;
-    intent.last_outcome = "committed".into();
-    for path in &mut intent.paths {
-        path.content_base64 = None;
+    let completed = receipt_path(repo, &intent.id, true)?;
+    if completed.exists() {
+        if completed_commit(repo, intent)?.as_deref() != Some(commit.as_str()) {
+            return Err("Completed mutation proof disagrees; original receipts retained".into());
+        }
+        // A stale pending crash copy must not overwrite the already completed
+        // receipt's attempt count or other retained native provenance.
+        *intent = read_json(&completed)?;
+    } else {
+        intent.committed = Some(commit);
+        intent.last_failure = None;
+        intent.last_outcome = "committed".into();
+        for path in &mut intent.paths {
+            path.content_base64 = None;
+        }
+        persist(repo, intent, true)?;
     }
-    persist(repo, intent, true)?;
     match std::fs::remove_file(receipt_path(repo, &intent.id, false)?) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -568,12 +578,62 @@ fn index_contention(repo: &Path, out: &std::process::Output) -> Result<bool, Str
     };
     same_index_lock(repo, path)
 }
+fn completed_commit(repo: &Path, intent: &Intent) -> Result<Option<String>, String> {
+    let path = receipt_path(repo, &intent.id, true)?;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(intent.committed.clone()),
+        Err(_) => {
+            return Err("Completed native receipt is unreadable; no new commit attempted".into())
+        }
+    };
+    let saved: Intent = serde_json::from_slice(&bytes)
+        .map_err(|_| "Completed native receipt is malformed; no new commit attempted")?;
+    let same_paths = saved
+        .paths
+        .iter()
+        .map(|p| (&p.path, &p.sha256, &p.mode))
+        .eq(intent.paths.iter().map(|p| (&p.path, &p.sha256, &p.mode)));
+    if saved.version != intent.version
+        || saved.id != intent.id
+        || saved.worktree != intent.worktree
+        || saved.git_dir != intent.git_dir
+        || saved.branch != intent.branch
+        || saved.base != intent.base
+        || saved.projects != intent.projects
+        || saved.subject != intent.subject
+        || saved.event_type != intent.event_type
+        || saved.event_path != intent.event_path
+        || saved.message != intent.message
+        || saved.created_at != intent.created_at
+        || saved.original_index != intent.original_index
+        || saved.intended_index != intent.intended_index
+        || !same_paths
+        || saved.committed.is_none()
+        || intent
+            .committed
+            .as_ref()
+            .is_some_and(|c| Some(c) != saved.committed.as_ref())
+    {
+        return Err(
+            "Pending and completed native mutation identity/proof disagree; both retained".into(),
+        );
+    }
+    Ok(saved.committed)
+}
 fn resume(repo: &Path, intent: &mut Intent, initial: bool) -> Result<MutationStatus, String> {
     if let Err(reason) = identity(repo, intent) {
         return Ok(status(intent, "scope_mismatch", reason));
     }
+    let completed = match completed_commit(repo, intent) {
+        Ok(c) => c,
+        Err(reason) => return Ok(status(intent, "proof_mismatch", reason)),
+    };
     match commit_proof(repo, intent) {
         Ok(Some(commit)) => {
+            if completed.as_ref().is_some_and(|saved|saved!=&commit) {
+                return Ok(status(intent,"proof_mismatch","Reachable commit differs from the recorded completed mutation; no new commit attempted"));
+            }
             finish(repo, intent, commit)?;
             return Ok(status(
                 intent,
@@ -582,6 +642,7 @@ fn resume(repo: &Path, intent: &mut Intent, initial: bool) -> Result<MutationSta
             ));
         }
         Err(reason) => return Ok(status(intent, "proof_mismatch", reason)),
+        Ok(None) if completed.is_some() => return Ok(status(intent,"proof_mismatch","Recorded completed mutation is no longer reachable from this history; acknowledgment only, never recommit")),
         Ok(None) => {}
     }
     if let Err(reason) = unchanged(repo, intent) {
@@ -695,8 +756,13 @@ fn inspect_intent(repo: &Path, intent: &Intent) -> MutationStatus {
     if let Err(reason) = identity(repo, intent) {
         return status(intent, "scope_mismatch", reason);
     }
+    let completed = match completed_commit(repo, intent) {
+        Ok(c) => c,
+        Err(reason) => return status(intent, "proof_mismatch", reason),
+    };
     match commit_proof(repo, intent) {
         Ok(Some(commit)) => {
+            if completed.as_ref().is_some_and(|saved|saved!=&commit) { return status(intent,"proof_mismatch","Reachable commit differs from the recorded completed mutation"); }
             let mut found = intent.clone();
             found.committed = Some(commit);
             return status(
@@ -706,6 +772,7 @@ fn inspect_intent(repo: &Path, intent: &Intent) -> MutationStatus {
             );
         }
         Err(reason) => return status(intent, "proof_mismatch", reason),
+        Ok(None) if completed.is_some() => return status(intent,"proof_mismatch","Recorded completed mutation is no longer reachable; retain the receipt without recommitting"),
         Ok(None) => {}
     }
     if let Err(reason) = unchanged(repo, intent) {
@@ -1057,6 +1124,8 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(f.repo.join("events")).unwrap().count(), 1);
         // Simulate a crash after Git commit, before the pending receipt was acknowledged.
+        let completed_path = receipt_path(&f.repo, &original.id, true).unwrap();
+        let archived = std::fs::read(&completed_path).unwrap();
         persist(&f.repo, &original, false).unwrap();
         assert_eq!(
             recover(&f.repo, "TEST", &original.id).unwrap().state,
@@ -1064,6 +1133,7 @@ mod tests {
         );
         assert_eq!(f.git(&["rev-parse", "HEAD"]), committed);
         assert!(pending(&f.repo).unwrap().is_empty());
+        assert_eq!(std::fs::read(completed_path).unwrap(), archived);
     }
     #[test]
     fn changed_worktree_or_staged_only_content_refuses_recovery() {
@@ -1220,6 +1290,56 @@ mod tests {
         assert!(refused.reason.contains("multiple commits"));
         assert_eq!(pending(&f.repo).unwrap().len(), 1);
     }
+    #[test]
+    fn completed_receipt_never_recommits_after_history_is_rewound_even_with_pending_copy() {
+        let f = Fixture::new();
+        let lock = f.own_unknown_lock();
+        f.write().unwrap_err();
+        let intent = f.only_pending();
+        std::fs::remove_file(lock).unwrap();
+        assert_eq!(
+            recover(&f.repo, "TEST", &intent.id).unwrap().state,
+            "committed"
+        );
+        // Deliberate fixture-only history edit leaves exactly the native bytes
+        // and staged entries that previously made a blind retry look safe.
+        f.git(&["reset", "--soft", &intent.base]);
+        let index = raw_git(&f.repo, &["ls-files", "--stage", "-z"]).unwrap();
+        let target = std::fs::read(f.target()).unwrap();
+        let event = std::fs::read(f.repo.join(&intent.event_path)).unwrap();
+        assert_eq!(
+            recover(&f.repo, "TEST", &intent.id).unwrap().state,
+            "proof_mismatch"
+        );
+        // Also cover process failure after completed receipt persistence but
+        // before pending cleanup: that old copy must never become retryable.
+        persist(&f.repo, &intent, false).unwrap();
+        assert_eq!(
+            recover(&f.repo, "TEST", &intent.id).unwrap().state,
+            "proof_mismatch"
+        );
+        assert_eq!(
+            recover_automatic(&f.repo, None).unwrap()[0].state,
+            "proof_mismatch"
+        );
+        assert_eq!(
+            diagnose(&f.repo, "TEST").unwrap().mutations[0].state,
+            "proof_mismatch"
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), intent.base);
+        assert_eq!(
+            raw_git(&f.repo, &["ls-files", "--stage", "-z"]).unwrap(),
+            index
+        );
+        assert_eq!(std::fs::read(f.target()).unwrap(), target);
+        assert_eq!(
+            std::fs::read(f.repo.join(&intent.event_path)).unwrap(),
+            event
+        );
+        assert!(receipt_path(&f.repo, &intent.id, true).unwrap().is_file());
+        assert!(receipt_path(&f.repo, &intent.id, false).unwrap().is_file());
+    }
+
     #[test]
     fn proof_range_refuses_a_saved_base_outside_current_ancestry() {
         let f = Fixture::new();
