@@ -107,6 +107,44 @@ def validate_discovery(value, manifest, repo, target):
     return entry
 
 
+def record_discovery(evidence, report, result, manifest, repo, target):
+    # Preserve the actual native payload even when strict comparison rejects it.
+    report["discovery"] = result
+    (evidence / "discovery.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return validate_discovery(result, manifest, repo, target)
+
+
+def finalize_report(evidence, report, config, token):
+    copy_errors = []
+    try:
+        if config and token:
+            for name in ("debug.log", "rust-panics.log"):
+                try:
+                    path = config / name
+                    if path.exists():
+                        (evidence / name).write_text(
+                            path.read_text(encoding="utf-8", errors="replace").replace(
+                                token, "[REDACTED]"
+                            ),
+                            encoding="utf-8",
+                        )
+                except Exception as error:
+                    copy_errors.append(
+                        {"file": name, "error_type": type(error).__name__}
+                    )
+        if copy_errors:
+            report["status"] = "failed"
+            report["diagnostic_copy_errors"] = copy_errors
+    finally:
+        report["finished"] = smoke.timestamp()
+        (evidence / "run.json").write_text(
+            json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    require(not copy_errors, "Failed to preserve diagnostic logs; see run.json")
+
+
 def powershell(script, **values):
     env = dict(os.environ, **{key: str(value) for key, value in values.items()})
     return subprocess.check_output(
@@ -211,9 +249,9 @@ def main():
             )
             report["release_source_commits"][version] = commit
         for name, value in [("old-release.json", old), ("latest-release.json", latest)]:
-            (evidence / name).write_text(json.dumps(value, indent=2))
+            (evidence / name).write_text(json.dumps(value, indent=2), encoding="utf-8")
         feed = asset(latest, "latest.json", distribution, repo)
-        manifest = json.loads(feed.read_text())
+        manifest = json.loads(feed.read_text(encoding="utf-8"))
         if system == "Darwin":
             arch = "aarch64" if args.target.endswith("aarch64") else "x64"
             archive = asset(old, f"xNAUT-macos-{arch}.app.tar.gz", distribution, repo)
@@ -235,7 +273,7 @@ def main():
                 "Old binary architecture mismatch",
             )
             smoke.command("codesign", "--verify", "--deep", "--strict", str(app))
-            signing = smoke.command("codesign", "-dvv", str(app))
+            signing = smoke.command("codesign", "-d", "--verbose=4", str(app))
             require("TeamIdentifier=" + smoke.TEAM in signing, "Wrong signing team")
             smoke.command("spctl", "-a", "-vvv", "-t", "execute", str(app))
             smoke.command("xcrun", "stapler", "validate", str(dmg))
@@ -260,7 +298,7 @@ def main():
             p.name: smoke.digest(p) for p in distribution.iterdir() if p.is_file()
         }
         project, port, token = smoke.seed_profile(config, evidence)
-        with (evidence / "process.log").open("w") as output:
+        with (evidence / "process.log").open("w", encoding="utf-8") as output:
             process = subprocess.Popen(
                 [str(binary)],
                 cwd=project,
@@ -291,16 +329,15 @@ def main():
                     )
                     time.sleep(0.5)
             result = bridge.evaluate(discovery_expression(), timeout=60)
-            report["discovery"] = result
-            report["expected_platform_entry"] = validate_discovery(
-                result, manifest, repo, args.target
+            report["expected_platform_entry"] = record_discovery(
+                evidence, report, result, manifest, repo, args.target
             )
             signature_name = (
                 report["expected_platform_entry"]["url"].rsplit("/", 1)[1] + ".sig"
             )
             signature = asset(latest, signature_name, distribution, repo)
             require(
-                signature.read_text().strip()
+                signature.read_text(encoding="utf-8").strip()
                 == report["expected_platform_entry"]["signature"].strip(),
                 "Native updater signature differs from the exact published signature asset",
             )
@@ -336,17 +373,7 @@ def main():
             report["status"], report["cleanup_error"] = "failed", str(error)
             raise
         finally:
-            if config and token:
-                for name in ("debug.log", "rust-panics.log"):
-                    path = config / name
-                    if path.exists():
-                        (evidence / name).write_text(
-                            path.read_text(errors="replace").replace(
-                                token, "[REDACTED]"
-                            )
-                        )
-            report["finished"] = smoke.timestamp()
-            (evidence / "run.json").write_text(json.dumps(report, indent=2) + "\n")
+            finalize_report(evidence, report, config, token)
 
 
 if __name__ == "__main__":
