@@ -30,6 +30,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check through the old production Tauri updater
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python scripts/updater-discovery-smoke.py --target ${{ matrix.target }} --evidence evidence
       - name: Preserve actual discovery and cleanup evidence
         if: always()

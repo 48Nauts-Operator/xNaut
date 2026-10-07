@@ -30,7 +30,14 @@ NEW = "1.30.4"
 
 
 def fetch(url):
-    with urllib.request.urlopen(url, timeout=60) as response:
+    # Hosted runners share unauthenticated GitHub API quotas. Authenticate only
+    # metadata requests; release downloads and the old app's updater stay public.
+    headers = {}
+    token = os.environ.get("GH_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = "Bearer " + token
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=60) as response:
         return response.read()
 
 

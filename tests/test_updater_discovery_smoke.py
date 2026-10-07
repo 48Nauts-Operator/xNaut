@@ -18,6 +18,46 @@ spec.loader.exec_module(module)
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_ci_token_only_authenticates_github_api_metadata(self):
+        urls = [
+            ("https://api.github.com/repos/48Nauts/xnaut/releases/latest", True),
+            ("https://api.github.com/repos/48Nauts/xnaut/commits/v1.30.4", True),
+            (
+                "https://github.com/48Nauts/xnaut/releases/download/v1.30.4/latest.json",
+                False,
+            ),
+            ("https://api.github.com.example.test/releases/latest", False),
+            ("http://api.github.com/repos/48Nauts/xnaut/releases/latest", False),
+        ]
+        for url, authenticated in urls:
+            with (
+                self.subTest(url=url),
+                patch.dict(os.environ, {"GH_TOKEN": "fixture-ci-token"}, clear=True),
+                patch.object(module.urllib.request, "urlopen") as open_url,
+            ):
+                open_url.return_value.__enter__.return_value.read.return_value = b"body"
+                self.assertEqual(module.fetch(url), b"body")
+                request = open_url.call_args.args[0]
+                self.assertEqual(request.full_url, url)
+                self.assertEqual(
+                    request.get_header("Authorization"),
+                    "Bearer fixture-ci-token" if authenticated else None,
+                )
+
+    def test_public_metadata_remains_available_without_ci_token(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(module.urllib.request, "urlopen") as open_url,
+        ):
+            open_url.return_value.__enter__.return_value.read.return_value = b"public"
+            self.assertEqual(
+                module.fetch(
+                    "https://api.github.com/repos/48Nauts/xnaut/releases/latest"
+                ),
+                b"public",
+            )
+            self.assertIsNone(open_url.call_args.args[0].get_header("Authorization"))
+
     def values(self, target="darwin-aarch64"):
         filename = {
             "darwin-aarch64": "xNAUT-macos-aarch64.app.tar.gz",
