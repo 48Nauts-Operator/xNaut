@@ -3830,13 +3830,22 @@ mod tests {
     #[test]
     fn done_hands_back_and_complete_is_nautbots_word_at_the_shared_write() {
         let source = include_str!("project_management.rs");
+        let wrapper = source
+            .split_once("\npub fn ticket_update_in(")
+            .expect("ticket_update_in exists").1
+            .split_once("\n}\n").expect("public wrapper ends").0;
+        assert!(
+            wrapper.contains("ticket_update_with_registry_in(repo, &crate::agents::registry_dir()?, request)"),
+            "the public write stopped delegating to the guarded shared write"
+        );
+        // Bound this to the actual implementation and its persistence call,
+        // not a byte window that moves when reconciliation helpers grow.
         let body = source
-            .split("pub fn ticket_update_in")
-            .nth(1)
-            .expect("ticket_update_in exists");
-        // The window only has to cover the shared write's guard block; it
-        // grew when the reconcile gained its XNAUT-412 and -414 comments.
-        let head = &body[..body.len().min(6000)];
+            .split_once("\nfn ticket_update_with_registry_in(")
+            .expect("shared write exists").1
+            .split_once("\n}\n").expect("shared write ends").0;
+        let head = body.split_once("write_json_atomic(&path, &record)?")
+            .expect("shared write persists its guarded record").0;
         assert!(
             head.contains("RESERVED_NAUTBOT_HANDLE"),
             "the rails left the shared write"
@@ -3844,6 +3853,11 @@ mod tests {
         assert!(
             head.contains("foreign_complete_refusal"),
             "the complete guard left the shared write"
+        );
+        assert!(
+            head.contains(r#"Some("done") | Some("review") if is_agent && !is_nautbot"#)
+                && head.contains("handed_back = true"),
+            "the shared write stopped handing agent claims back before persistence"
         );
         // The refusal text itself lives in exactly one place, the shared
         // foreign_complete_refusal, so the two paths cannot drift.
