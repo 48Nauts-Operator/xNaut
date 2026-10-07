@@ -1349,6 +1349,11 @@ run `gitvm stop` there by hand if it is still up",
                 std::env::var_os("XNAUT_TEST_BASH").unwrap_or_else(|| "bash".into()));
             command.args(["--noprofile", "--norc"])
                 .current_dir(workdir).env("HOME", home).env("USERPROFILE", home);
+            // Preserve the remote Unix trust key when Git Bash invokes native
+            // Python; MSYS would otherwise rewrite XNAUT_SEED_DIR to a drive path.
+            command.env("MSYS2_ENV_CONV_EXCL", "XNAUT_SEED_DIR");
+            #[cfg(windows)]
+            command.env("HOME", home.to_string_lossy().replace('\\', "/"));
             command
         }
         fn run_seed(seed: &str, home: &std::path::Path, workdir: &std::path::Path) -> std::process::Output {
