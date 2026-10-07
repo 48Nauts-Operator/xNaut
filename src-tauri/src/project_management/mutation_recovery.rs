@@ -1273,22 +1273,26 @@ mod tests {
         assert!(index_lock(&f.repo).unwrap().exists());
         let repo = f.repo.clone();
         let release = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let mut observed_contention = false;
             while std::time::Instant::now() < deadline {
                 if pending(&repo).unwrap_or_default().iter().any(|(_, r)| {
                     r.as_ref()
                         .is_ok_and(|i| i.last_outcome == "index_contention")
                 }) {
+                    observed_contention = true;
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             std::fs::write(repo.join(".git/release-holder"), b"release fixture holder").unwrap();
+            observed_contention
         });
         let result = f.write();
-        release.join().unwrap();
+        let observed_contention = release.join().unwrap();
         assert!(!holder.child.wait().unwrap().success());
         result.unwrap();
+        assert!(observed_contention,"holder must be released only after the native retry path recorded actual index contention");
         assert!(pending(&f.repo).unwrap().is_empty());
         assert_eq!(
             std::fs::read_to_string(f.repo.join(".git/hook-invocations"))
