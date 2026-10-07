@@ -232,7 +232,12 @@ pub fn admit_review_launch(live_sessions: usize) -> Result<(), String> {
 /// setting the same env var without one shared lock is a race that shows up as
 /// somebody else's flaky failure.
 #[cfg(test)]
-pub(crate) fn scratch(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
+pub(crate) struct ScratchGuard {
+    _switches: crate::switches::TestScope,
+    _spend: std::sync::MutexGuard<'static, ()>,
+}
+#[cfg(test)]
+pub(crate) fn scratch(name: &str) -> (ScratchGuard, PathBuf) {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let dir = std::env::temp_dir().join(format!("xnaut-spend-{name}"));
@@ -240,10 +245,11 @@ pub(crate) fn scratch(name: &str) -> (std::sync::MutexGuard<'static, ()>, PathBu
     std::fs::create_dir_all(&dir).unwrap();
     std::env::set_var("XNAUT_SPEND_DIR", &dir);
     // The hard stop writes through switches::store; keep that INSIDE the
-    // scratch dir. Flipping the owner's real read_only from a unit test
+    // scratch dir, with thread-local attribution rather than process-global
+    // environment mutation. Flipping the owner's real read_only from a unit test
     // happened once and poisoned every later PM test in the process.
-    std::env::set_var("XNAUT_SWITCHES_DIR", &dir);
-    (guard, dir)
+    let switches = crate::switches::TestScope::in_dir(dir.clone(), crate::switches::KillSwitches::default());
+    (ScratchGuard { _switches: switches, _spend: guard }, dir)
 }
 
 #[cfg(test)]
@@ -307,7 +313,7 @@ mod tests {
         let refused = admit_launch(0).unwrap_err();
         assert!(refused.contains("daily cap of 3"), "{refused}");
         // The hard stop really engaged the switch — in the SCRATCH dir,
-        // which XNAUT_SWITCHES_DIR guarantees.
+        // which the scoped fixture root guarantees.
         assert!(refused.contains("read_only"), "{refused}");
         let switches: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("kill-switches.json")).unwrap())

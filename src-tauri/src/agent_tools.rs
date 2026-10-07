@@ -3496,7 +3496,7 @@ mod tests {
         // switches file means "nothing engaged".
         let switches = std::env::temp_dir().join(format!("xnaut-words-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&switches).unwrap();
-        std::env::set_var("XNAUT_SWITCHES_DIR", &switches);
+        let _switch_scope = crate::switches::TestScope::in_dir(switches, crate::switches::KillSwitches::default());
         let refused = execute(
             "update_ticket",
             &json!({ "id": "XNAUT-1", "status": "complete" }),

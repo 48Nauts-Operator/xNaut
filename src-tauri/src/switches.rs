@@ -56,7 +56,44 @@ impl KillSwitches {
     }
 }
 
+// Tests that exercise process-wide switch readers bind actual files to their
+// own thread. This changes no production path or admission rule; unlike a
+// process environment variable, one spending fixture cannot pause another test.
+#[cfg(test)]
+thread_local! { static TEST_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) }; }
+#[cfg(test)]
+pub(crate) struct TestScope {
+    previous: Option<PathBuf>,
+    root: PathBuf,
+    remove: bool,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+#[cfg(test)]
+impl TestScope {
+    pub(crate) fn in_dir(root: PathBuf, switches: KillSwitches) -> Self {
+        std::fs::create_dir_all(&root).unwrap();
+        store_at(&root.join("kill-switches.json"), &root.join("kill-switches.log"), &switches).unwrap();
+        let previous = TEST_ROOT.with(|v| v.replace(Some(root.clone())));
+        Self { previous, root, remove: false, _thread: std::marker::PhantomData }
+    }
+    pub(crate) fn unpaused(name: &str) -> Self {
+        let root = std::env::temp_dir().join(format!("xnaut-switch-fixture-{name}-{}", uuid::Uuid::new_v4()));
+        let mut scope = Self::in_dir(root, KillSwitches::default());
+        scope.remove = true;
+        scope
+    }
+}
+#[cfg(test)]
+impl Drop for TestScope {
+    fn drop(&mut self) {
+        TEST_ROOT.with(|v| *v.borrow_mut() = self.previous.take());
+        if self.remove { let _ = std::fs::remove_dir_all(&self.root); }
+    }
+}
+
 fn config_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(root) = TEST_ROOT.with(|v| v.borrow().clone()) { return root; }
     // Test redirect, same pattern as XNAUT_LEASE_DIR / XNAUT_SPEND_DIR: a
     // test that engages a switch must never write the OWNER'S real file — a
     // spend-ceiling test once flipped the real read_only overnight.
@@ -179,6 +216,21 @@ pub fn kill_switches_set(switches: KillSwitches) -> Result<KillSwitches, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_scope_restores_outer_actual_switch_file() {
+        let outer = TestScope::unpaused("outer");
+        let mut paused = KillSwitches::default(); paused.read_only = true;
+        store(&paused).unwrap();
+        assert!(automatic_pm_write_hold_strict().unwrap().contains("read_only"));
+        {
+            let _inner = TestScope::unpaused("inner");
+            assert!(!load().read_only);
+            assert!(automatic_pm_write_hold_strict().is_none());
+        }
+        assert!(load().read_only);
+        assert_eq!(store_path(), outer.root.join("kill-switches.json"));
+    }
 
     #[test]
     fn strict_merge_switch_reader_distinguishes_absence_from_invalid_authority() {

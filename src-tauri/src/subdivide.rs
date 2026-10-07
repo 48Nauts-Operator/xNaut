@@ -176,6 +176,7 @@ mod tests {
 
     #[test]
     fn a_parents_handback_waits_for_its_children_through_the_real_filing_path() {
+        let _switches = crate::switches::TestScope::unpaused("a_parents_handback_waits_for_its_children_through_the_real_filing_path");
         // The upward flow of a planner tree, for free: the handoff that
         // matters is the one that arrives after everything under it has.
         use crate::project_management::{file_handback_with_registry_in, ticket_create_in, TicketCreateRequest};

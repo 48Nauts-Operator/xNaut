@@ -2205,6 +2205,7 @@ pub(crate) mod tests {
 
     #[test]
     fn remerge_restores_recorded_revert_content_and_keeps_compensation_history() {
+        let _switches = crate::switches::TestScope::unpaused("remerge_restores_recorded_revert_content_and_keeps_compensation_history");
         for (new_work, red_after_restore) in [(false, false), (true, false), (true, true)] {
             let (_root, control, registry, store, _, mut first) = fixture_with_env("remerge-content", false);
             merge_and_verify(None, &control, &registry, &store, &mut first).unwrap();

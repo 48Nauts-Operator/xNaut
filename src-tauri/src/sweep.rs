@@ -3495,6 +3495,7 @@ mod registry_tests {
     }
     #[test]
     fn accepted_handback_marks_done_before_reconcile_and_recovers_interruption() {
+        let _switches = crate::switches::TestScope::unpaused("accepted_handback_marks_done_before_reconcile_and_recovers_interruption");
         let root = directory("handback-completion");
         let record = seed(&root, 1_000);
         let registry = root.join("registry");
@@ -3551,6 +3552,7 @@ mod registry_tests {
 
     #[test]
     fn another_runs_handback_does_not_hide_a_dead_process() {
+        let _switches = crate::switches::TestScope::unpaused("another_runs_handback_does_not_hide_a_dead_process");
         let root = directory("unrelated-handback");
         let record = seed(&root, 1_000);
         let mut h = run_control::tests::handback(&record);
@@ -3954,6 +3956,7 @@ mod registry_tests {
 
     #[test]
     fn a_late_tick_observes_final_buffered_output_before_releasing() {
+        let _switches = crate::switches::TestScope::unpaused("a_late_tick_observes_final_buffered_output_before_releasing");
         let root = directory("late-stop-observation");
         let (old, lease) = swap_seed(&root, "required");
         let mut alive = stopped_proof(); alive.pid_absent = false; alive.pid_alive = true;
@@ -3969,6 +3972,7 @@ mod registry_tests {
     }
     #[test]
     fn an_admission_refusal_keeps_the_continuation_on_its_branch() {
+        let _switches = crate::switches::TestScope::unpaused("an_admission_refusal_keeps_the_continuation_on_its_branch");
         let root = directory("retry-successor");
         let (old, _) = swap_seed(&root, "required");
         swap_tick(&root, 1000, stopped_proof());
@@ -3990,6 +3994,7 @@ mod registry_tests {
     }
     #[test]
     fn model_requirement_persists_and_can_be_disabled_again() {
+        let _switches = crate::switches::TestScope::unpaused("model_requirement_persists_and_can_be_disabled_again");
         let root = directory("requirement-persistence");
         seed(&root, 1000);
         let repo = root.join("control");

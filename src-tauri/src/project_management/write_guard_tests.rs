@@ -374,3 +374,82 @@ fn wrong_committed_acknowledgment_never_discards_retained_evidence() {
     let retained: Value = read_json(&pending).unwrap();
     assert_eq!(retained["pending"]["details"]["proof"], "actual");
 }
+
+#[test]
+fn concurrent_real_switch_files_pause_only_their_own_fixture() {
+    let paused = Scratch::new();
+    let running = Scratch::new();
+    let paused_head = run_git(&paused.0, &["rev-parse", "HEAD"]).unwrap();
+    let running_head = run_git(&running.0, &["rev-parse", "HEAD"]).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let check = |root: PathBuf, read_only: bool, barrier: std::sync::Arc<std::sync::Barrier>| {
+        std::thread::spawn(move || {
+            let switches = root.join(".git/fixture-switches");
+            let _scope = crate::switches::TestScope::in_dir(
+                switches.clone(),
+                crate::switches::KillSwitches {
+                    read_only,
+                    ..Default::default()
+                },
+            );
+            barrier.wait();
+            let observed_before = crate::switches::load().read_only;
+            let disk =
+                read_json::<crate::switches::KillSwitches>(&switches.join("kill-switches.json"));
+            let result = record_mutation(
+                &root,
+                "fixture.automatic",
+                "TEST",
+                json!({"actual":"strict gate"}),
+                &[],
+                "fixture automatic write",
+            );
+            barrier.wait();
+            assert_eq!(observed_before, read_only);
+            assert_eq!(disk.unwrap().read_only, read_only);
+            if read_only {
+                assert!(result.unwrap_err().contains("read_only"));
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(
+                crate::switches::load().read_only,
+                read_only,
+                "the other fixture cannot replace this file authority"
+            );
+        })
+    };
+    let first = check(paused.0.clone(), true, barrier.clone());
+    let second = check(running.0.clone(), false, barrier);
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(
+        paused_head,
+        run_git(&paused.0, &["rev-parse", "HEAD"]).unwrap()
+    );
+    assert_ne!(
+        running_head,
+        run_git(&running.0, &["rev-parse", "HEAD"]).unwrap()
+    );
+}
+
+#[test]
+fn scoped_corrupt_switch_file_still_blocks_the_actual_pm_gate() {
+    let f = Scratch::new();
+    let root = f.0.join(".git/fixture-switches");
+    let _scope =
+        crate::switches::TestScope::in_dir(root.clone(), crate::switches::KillSwitches::default());
+    let before = run_git(&f.0, &["rev-parse", "HEAD"]).unwrap();
+    std::fs::write(root.join("kill-switches.json"), b"{invalid").unwrap();
+    assert!(record_mutation(
+        &f.0,
+        "fixture.automatic",
+        "TEST",
+        json!({}),
+        &[],
+        "must refuse"
+    )
+    .unwrap_err()
+    .contains("invalid kill-switch file"));
+    assert_eq!(before, run_git(&f.0, &["rev-parse", "HEAD"]).unwrap());
+}
