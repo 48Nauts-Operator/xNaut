@@ -70,6 +70,14 @@ impl Role {
         matches!(self, Self::Fleet)
     }
 
+    /// Reconcile this installation's admitted remote runs and their existing
+    /// review policy. Transfers contain only exe.dev/GitVM workers; this does
+    /// not authorize local execution or picking up another ticket.
+    pub fn coordinates_remote_runs(self) -> bool {
+        matches!(self, Self::Fleet | Self::Workstation)
+    }
+
+
     /// May this machine start verifications? The fleet and a sandbox box.
     pub fn verifies(self) -> bool {
         matches!(self, Self::Fleet | Self::Sandbox)
@@ -324,6 +332,15 @@ mod tests {
         let mut settings = settings_with("workstation", Some(true));
         assert!(!adopt_role(&mut settings), "nothing to migrate over an explicit role");
         assert_eq!(resolve(&settings), Role::Workstation);
+    }
+
+    #[test]
+    fn workstation_coordinates_remote_results_without_local_or_unattended_work() {
+        assert!(Role::Fleet.coordinates_remote_runs());
+        assert!(Role::Workstation.coordinates_remote_runs());
+        assert!(!Role::Sandbox.coordinates_remote_runs());
+        assert!(!Role::Workstation.dispatches());
+        assert!(!Role::Workstation.verifies());
     }
 
     #[test]

@@ -6,6 +6,7 @@ All notable changes to xNAUT are documented in this file.
 
 ### Fixed
 - Allow approved exe.dev and GitVM swarms to start and refill from Workstation instances, while keeping unattended ticket pickup restricted to Fleet instances.
+- Collect completed remote results and continue their configured review policy from Workstation instances. Local verification and unattended ticket pickup remain restricted.
 - Carry an explicitly requested swarm destination through planning, approval, storage and dispatch. Reject unavailable providers instead of substituting local execution.
 - Report queued members in dispatch totals and retain durable approval across capacity waits and restarts. Stopped groups remain stopped and repeated confirmation cannot duplicate workers.
 

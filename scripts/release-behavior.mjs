@@ -14,6 +14,7 @@ export const nativeSuites = [
   'run_control::tests::', 'settings::tests::', 'ticket_triage::tests::',
 ];
 export const requiredNative = [
+  'instance::tests::workstation_coordinates_remote_results_without_local_or_unattended_work',
   'swarm_plan::tests::workstation_remote_swarm_approval_restart_refill_and_duplicate_confirmation',
   'swarm_plan::tests::workstation_swarm_rejects_local_mixed_missing_and_unknown_destinations_before_approval',
   'swarm_plan::tests::swarm_read_only_sandbox_and_stop_preserve_queued_work_without_launching',
