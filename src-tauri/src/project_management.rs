@@ -2290,6 +2290,85 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     ticket_update_with_registry_in(repo, &crate::agents::registry_dir()?, request)
 }
 
+/// XNAUT-472: serialize this transaction across app processes as well as threads.
+/// Keep the lease in the common Git directory so linked worktrees share it.
+struct TicketUpdateLease(std::fs::File);
+impl TicketUpdateLease {
+    fn acquire(repo: &Path) -> Result<Self, String> {
+        let common = run_git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+        let file = std::fs::OpenOptions::new()
+            .read(true).write(true).create(true).truncate(false)
+            .open(Path::new(&common).join("xnaut-ticket-update.lock"))
+            .map_err(|e| format!("cannot open ticket update lease: {e}"))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self(file)),
+            Err(std::fs::TryLockError::WouldBlock) => Err(
+                "another process is updating this control repository; reload the ticket and retry".into(),
+            ),
+            Err(std::fs::TryLockError::Error(e)) => Err(format!("cannot lock ticket update: {e}")),
+        }
+    }
+}
+impl Drop for TicketUpdateLease {
+    fn drop(&mut self) { let _ = self.0.unlock(); }
+}
+
+struct TicketReconcileWorktree<'a> {
+    repo: &'a Path,
+    path: PathBuf,
+}
+impl Drop for TicketReconcileWorktree<'_> {
+    fn drop(&mut self) {
+        // Only this disposable detached checkout is removed, including a
+        // scratch merge conflict. No shared file/index or original commit moves.
+        let _ = run_git(self.repo, &["worktree", "remove", "--force", &self.path.to_string_lossy()]);
+    }
+}
+
+fn finish_ticket_reconciliation(
+    repo: &Path, branch: &str, original: &str, merged: &str,
+) -> Result<(), String> {
+    if run_git(repo, &["symbolic-ref", "--short", "HEAD"])? != branch
+        || run_git(repo, &["rev-parse", "HEAD"])? != original
+    {
+        return Err("control repository changed during ticket reconciliation; no ticket was written; reload and retry".into());
+    }
+    // This candidate descends from the original HEAD. Git's normal checkout
+    // checks preserve both staged and unstaged disjoint edits and refuse any
+    // tracked/untracked path it would overwrite. Explicitly defeat user-level
+    // merge.autoStash: other people's changes must never be moved aside.
+    run_git(repo, &["merge", "--ff-only", "--no-autostash", "--no-edit", merged])
+        .map_err(|e| format!("ticket update cannot reconcile incoming changes without touching pending files; preserve and resolve the paths below, then reload and retry. Local commits and pending edits were not stashed or reset: {e}"))?;
+    if run_git(repo, &["rev-parse", "HEAD"])? != merged {
+        return Err("control repository moved during ticket reconciliation; reload the ticket before retrying".into());
+    }
+    Ok(())
+}
+
+fn reconcile_ticket_with_unrelated_dirt(
+    repo: &Path, branch: &str, remote_ref: &str,
+) -> Result<(), String> {
+    let original = run_git(repo, &["rev-parse", "HEAD"])?;
+    let incoming = run_git(repo, &["rev-parse", remote_ref])?;
+    let common = run_git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+    let path = Path::new(&common).join(format!("xnaut-ticket-reconcile-{}", uuid::Uuid::new_v4()));
+    run_git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), &original])?;
+    let scratch = TicketReconcileWorktree { repo, path };
+    // Merge only committed history in isolation. Rebasing the shared checkout
+    // refuses unrelated dirt; merging here retains every local handback commit
+    // as an ancestor and never stages another ticket's pending edits.
+    if let Err(error) = run_git(&scratch.path, &[
+        "-c", "user.name=xNaut", "-c", "user.email=xnaut@local",
+        "merge", "--no-edit", "--no-autostash", &incoming,
+    ]) {
+        let paths = run_git(&scratch.path, &["diff", "--name-only", "--diff-filter=U"])
+            .unwrap_or_default();
+        return Err(format!("committed control history could not be reconciled; resolve these paths before retrying this ticket: {paths}. Shared checkout, index, and local handback commits are preserved: {error}"));
+    }
+    let merged = run_git(&scratch.path, &["rev-parse", "HEAD"])?;
+    finish_ticket_reconciliation(repo, branch, &original, &merged)
+}
+
 /// XNAUT-414: a fetch that cannot reach the remote does not fail the write.
 /// A Finder-launched app has no ssh agent, so `git fetch` over the Tailscale
 /// remote failed and its error was returned as the WRITE's error: every
@@ -2299,13 +2378,18 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = TicketUpdateLease::acquire(repo)?;
     // XNAUT-297: reconcile committed fleet edits before reading the revision.
     // Local-only control repos still work. Never stash, reset, or choose a side
     // of a conflict: a committed handback must remain recoverable on its branch.
-    if run_git(repo, &["remote"])?.lines().any(|remote| remote == "origin") {
+    let has_origin = run_git(repo, &["remote"])?.lines().any(|remote| remote == "origin");
+    if has_origin {
         let git_dir = PathBuf::from(run_git(repo, &["rev-parse", "--absolute-git-dir"])?);
         if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
             return Err("control repository already has a rebase in progress; resolve it before updating a ticket".into());
+        }
+        if git_dir.join("MERGE_HEAD").exists() {
+            return Err("control repository already has a merge in progress; resolve it before updating a ticket".into());
         }
         // Only dirt that would ride along blocks the write (XNAUT-412): every
         // mutation commits with `--only` its own paths, so another ticket's
@@ -2338,7 +2422,11 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
             if run_git(repo, &["merge-base", "--is-ancestor", &remote_ref, "HEAD"]).is_ok() {
                 break;
             }
-            match run_git(repo, &["rebase", &remote_ref]) {
+            if !run_git(repo, &["status", "--porcelain", "--untracked-files=all"])?.is_empty() {
+                reconcile_ticket_with_unrelated_dirt(repo, &branch, &remote_ref)?;
+                break;
+            }
+            match run_git(repo, &["rebase", "--no-autostash", &remote_ref]) {
                 Ok(_) => break,
                 Err(error) => {
                     if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
@@ -2422,6 +2510,12 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
     let request = request;
 
     let path = find_ticket_path(&repo, &request.id)?;
+    // A non-cooperating writer may have edited the requested ticket while the
+    // remote/scratch work was running. Never absorb that edit into this write.
+    let rel = path.strip_prefix(repo).map_err(|_| "ticket path escaped control repository")?;
+    if has_origin && !run_git(repo, &["status", "--porcelain", "--", &rel.to_string_lossy()])?.is_empty() {
+        return Err(format!("{} acquired uncommitted changes while reconciling; preserve them, reload the ticket and retry", request.id));
+    }
     let mut record: TicketRecord = read_json(&path)?;
     let previous_status = record.status.clone();
     let previous_owner = record.owner.clone().unwrap_or_default();
@@ -2490,6 +2584,7 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
         &[path],
         &format!("chore(pm): update {}", record.id),
     )?;
+    drop(_lease);
     drop(_guard);
     crate::run_control::ticket_completed_in(
         registry, &record.id, &previous_owner, &previous_status, &record.status,
@@ -3085,12 +3180,147 @@ mod tests {
     }
 
     fn fleet_update(repo: &Path, id: &str, revision: u64, body: &str) -> Result<TicketRecord, String> {
-        ticket_update_in(repo, TicketUpdateRequest {
+        ticket_update_with_registry_in(repo, &repo.join(".git/fixture-registry"), TicketUpdateRequest {
             model_requirement: None,
             id: id.into(), expected_revision: revision, title: None,
             ticket_type: None, status: None, priority: None, owner: None,
             clear_owner: false, documentation: None, body: Some(body.into()), caller: None,
         })
+    }
+
+    fn commit_fixture_path(repo: &Path, relative: &str, bytes: &[u8]) -> String {
+        let path = repo.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        run_git(repo, &["add", "--", relative]).unwrap();
+        run_git(repo, &["commit", "--only", "-m", "fixture change", "--", relative]).unwrap();
+        run_git(repo, &["rev-parse", "HEAD"]).unwrap()
+    }
+
+    #[test]
+    fn dirty_fleet_divergence_preserves_staging_events_and_committed_handback() {
+        let (first, second, remote) = fleet_writers("dirty-divergence");
+        let target = "projects/XNAUT/tickets/XNAUT-900.json";
+        let other = "projects/XNAUT/tickets/XNAUT-901.json";
+        let mut ticket: TicketRecord = read_json(&first.join(target)).unwrap();
+        ticket.handback = Some(a_filed_handback("XNAUT-900"));
+        ticket.revision = 2;
+        let local = commit_fixture_path(&first, target, &serde_json::to_vec(&ticket).unwrap());
+        let remote_commit = commit_fixture_path(&second, "remote-note.md", b"independent fleet edit");
+        run_git(&second, &["push", "origin", "main"]).unwrap();
+        std::fs::write(first.join(other), b"staged unrelated ticket bytes\n").unwrap();
+        run_git(&first, &["add", "--", other]).unwrap();
+        std::fs::write(first.join(other), b"newer unstaged ticket bytes\n").unwrap();
+        std::fs::write(first.join("events/stray.json"), b"untracked event bytes\0\n").unwrap();
+        // A user's auto-stash preference must not move any of those bytes aside.
+        run_git(&first, &["config", "merge.autoStash", "true"]).unwrap();
+        let staged = run_git(&first, &["diff", "--cached", "--binary"]).unwrap();
+        let updated = fleet_update(&first, "XNAUT-900", 2, "ready for independent review").unwrap();
+        assert_eq!(updated.revision, 3);
+        assert_eq!(updated.handback, ticket.handback);
+        assert_eq!(std::fs::read(first.join(other)).unwrap(), b"newer unstaged ticket bytes\n");
+        assert_eq!(run_git(&first, &["diff", "--cached", "--binary"]).unwrap(), staged);
+        assert_eq!(std::fs::read(first.join("events/stray.json")).unwrap(), b"untracked event bytes\0\n");
+        for ancestor in [&local, &remote_commit] {
+            run_git(&first, &["merge-base", "--is-ancestor", ancestor, "HEAD"]).unwrap();
+        }
+        let published: TicketRecord = serde_json::from_str(
+            &run_git(&remote, &["show", &format!("main:{target}")]).unwrap(),
+        ).unwrap();
+        assert_eq!(published.revision, 3);
+        assert_eq!(published.handback, ticket.handback);
+        assert!(run_git(&remote, &["show", "main:events/stray.json"]).is_err());
+        assert!(!run_git(&remote, &["show", &format!("main:{other}")]).unwrap().contains("unrelated ticket bytes"));
+        assert!(!first.join(".git/MERGE_HEAD").exists());
+        assert!(!first.join(".git/rebase-merge").exists());
+        assert!(!run_git(&first, &["worktree", "list", "--porcelain"]).unwrap().contains("xnaut-ticket-reconcile-"));
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
+    #[test]
+    fn dirty_fleet_overlap_refuses_without_overwriting_or_stashing_pending_bytes() {
+        let (first, second, _) = fleet_writers("dirty-overlap");
+        let other = "projects/XNAUT/tickets/XNAUT-901.json";
+        let original = commit_fixture_path(&first, "local-handback.md", b"preserved local history");
+        fleet_update(&second, "XNAUT-901", 1, "incoming same path").unwrap();
+        std::fs::write(first.join(other), b"pending other ticket").unwrap();
+        run_git(&first, &["add", "--", other]).unwrap();
+        std::fs::write(first.join(other), b"pending newer other ticket").unwrap();
+        std::fs::write(first.join("events/stray.json"), b"keep event").unwrap();
+        run_git(&first, &["config", "merge.autoStash", "true"]).unwrap();
+        let index = run_git(&first, &["diff", "--cached", "--binary"]).unwrap();
+        let ticket = std::fs::read(first.join("projects/XNAUT/tickets/XNAUT-900.json")).unwrap();
+        let error = fleet_update(&first, "XNAUT-900", 1, "must not write").unwrap_err();
+        assert!(error.contains("pending files") && error.contains("XNAUT-901.json"), "{error}");
+        assert_eq!(run_git(&first, &["rev-parse", "HEAD"]).unwrap(), original);
+        assert_eq!(run_git(&first, &["diff", "--cached", "--binary"]).unwrap(), index);
+        assert_eq!(std::fs::read(first.join(other)).unwrap(), b"pending newer other ticket");
+        assert_eq!(std::fs::read(first.join("events/stray.json")).unwrap(), b"keep event");
+        assert_eq!(std::fs::read(first.join("projects/XNAUT/tickets/XNAUT-900.json")).unwrap(), ticket);
+        assert!(run_git(&first, &["stash", "list"]).unwrap().is_empty());
+        assert!(!first.join(".git/MERGE_HEAD").exists());
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
+    #[test]
+    fn dirty_fleet_reconciliation_still_refuses_a_stale_target_revision() {
+        let (first, second, _) = fleet_writers("dirty-stale-target");
+        let local = commit_fixture_path(&first, "local-handback.md", b"local evidence");
+        fleet_update(&second, "XNAUT-900", 1, "newer target record").unwrap();
+        let other = first.join("projects/XNAUT/tickets/XNAUT-901.json");
+        std::fs::write(&other, b"unrelated pending work").unwrap();
+        let error = fleet_update(&first, "XNAUT-900", 1, "stale overwrite").unwrap_err();
+        assert!(error.contains("expected revision 1, current revision 2"), "{error}");
+        let target: TicketRecord = read_json(&first.join("projects/XNAUT/tickets/XNAUT-900.json")).unwrap();
+        assert_eq!(target.body, "newer target record");
+        assert_eq!(std::fs::read(&other).unwrap(), b"unrelated pending work");
+        run_git(&first, &["merge-base", "--is-ancestor", &local, "HEAD"]).unwrap();
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
+    #[test]
+    fn dirty_fleet_committed_conflict_preserves_original_handback_and_index() {
+        let (first, second, _) = fleet_writers("dirty-committed-conflict");
+        let target = "projects/XNAUT/tickets/XNAUT-900.json";
+        let mut ticket: TicketRecord = read_json(&first.join(target)).unwrap();
+        ticket.handback = Some(a_filed_handback("XNAUT-900"));
+        ticket.revision = 2;
+        let original = commit_fixture_path(&first, target, &serde_json::to_vec(&ticket).unwrap());
+        fleet_update(&second, "XNAUT-900", 1, "competing remote record").unwrap();
+        std::fs::write(first.join("events/pending.json"), b"pending event").unwrap();
+        let error = fleet_update(&first, "XNAUT-900", 2, "must not write").unwrap_err();
+        assert!(error.contains("committed control history") && error.contains(target), "{error}");
+        assert_eq!(run_git(&first, &["rev-parse", "HEAD"]).unwrap(), original);
+        assert_eq!(read_json::<TicketRecord>(&first.join(target)).unwrap().handback, ticket.handback);
+        assert!(run_git(&first, &["diff", "--cached"]).unwrap().is_empty());
+        assert_eq!(std::fs::read(first.join("events/pending.json")).unwrap(), b"pending event");
+        assert!(!first.join(".git/MERGE_HEAD").exists());
+        assert!(!run_git(&first, &["worktree", "list", "--porcelain"]).unwrap().contains("xnaut-ticket-reconcile-"));
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
+    #[test]
+    fn dirty_fleet_checkout_moving_during_scratch_work_is_refused() {
+        let (first, _, _) = fleet_writers("dirty-moved-head");
+        let original = run_git(&first, &["rev-parse", "HEAD"]).unwrap();
+        let moved = commit_fixture_path(&first, "concurrent.md", b"another writer's commit");
+        let error = finish_ticket_reconciliation(&first, "main", &original, &original).unwrap_err();
+        assert!(error.contains("changed during ticket reconciliation"), "{error}");
+        assert_eq!(run_git(&first, &["rev-parse", "HEAD"]).unwrap(), moved);
+        assert_eq!(std::fs::read(first.join("concurrent.md")).unwrap(), b"another writer's commit");
+        std::fs::remove_dir_all(first).unwrap();
+    }
+
+    #[test]
+    fn portable_ticket_update_lease_excludes_processes_and_releases_on_drop() {
+        crate::run_control::tests::cross_process_lock_fixture(
+            "project_management::tests::portable_ticket_update_lease_excludes_processes_and_releases_on_drop",
+            |root| root.join(".git/xnaut-ticket-update.lock"),
+            |root| {
+                run_git(root, &["init", "--quiet"]).unwrap();
+                TicketUpdateLease::acquire(root).unwrap()
+            },
+        );
     }
 
     /// Tron, 2026-09-20: XNAUT-394's file sat modified after an interrupted
