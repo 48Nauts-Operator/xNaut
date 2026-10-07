@@ -294,7 +294,7 @@ def dmg_equivalence(dmg, tested_app, version, tested_signing):
             "DMG application identity/version differs from tested updater application",
         )
         command("codesign", "--verify", "--deep", "--strict", str(app))
-        signing = command("codesign", "-dvv", str(app))
+        signing = command("codesign", "-d", "--verbose=4", str(app))
         binary_hash = digest(app / "Contents/MacOS/xnaut")
         require(
             binary_hash == digest(tested_app / "Contents/MacOS/xnaut")
@@ -546,7 +546,7 @@ def main():
         )
         report["binary_sha256"] = digest(binary)
         command("codesign", "--verify", "--deep", "--strict", str(app))
-        signing = command("codesign", "-dvv", str(app))
+        signing = command("codesign", "-d", "--verbose=4", str(app))
         require(
             "TeamIdentifier=" + TEAM in signing
             and "Authority=Developer ID Application:" in signing,

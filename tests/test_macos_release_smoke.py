@@ -294,7 +294,15 @@ class ProductionSmokeTests(unittest.TestCase):
             tested = root / "tested.app"
             (tested / "Contents/MacOS").mkdir(parents=True)
             (tested / "Contents/MacOS/xnaut").write_bytes(b"same executable")
-            for fault in (None, "version", "binary", "cdhash", "signature"):
+            for fault in (
+                None,
+                "version",
+                "binary",
+                "cdhash",
+                "signature",
+                "missing_hash",
+                "duplicate_hash",
+            ):
                 with self.subTest(fault=fault):
                     mounts, calls = [], []
 
@@ -336,6 +344,14 @@ class ProductionSmokeTests(unittest.TestCase):
                             shutil.rmtree(mounts[0] / "xNAUT.app")
                         elif "--verify" in args and fault == "signature":
                             raise RuntimeError("bad signature")
+                        # XNAUT-476: macOS display level 2 omits CDHash. Do not
+                        # let the fake signing tool hide inadequate verbosity.
+                        if args[:3] != ("codesign", "-d", "--verbose=4"):
+                            return "Identifier=com.xnaut.app"
+                        if fault == "missing_hash":
+                            return "Identifier=com.xnaut.app"
+                        if fault == "duplicate_hash":
+                            return "CDHash=abcdef\nCDHash=123456"
                         return "CDHash=abcdef" if fault != "cdhash" else "CDHash=123456"
 
                     with (
