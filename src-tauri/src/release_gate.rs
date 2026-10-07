@@ -288,6 +288,7 @@ pub fn record_candidate(
     control: &Path,
     mut candidate: ReleaseCandidate,
 ) -> Result<ReleaseCandidate, String> {
+    let _lease = crate::project_management::ControlWriteLease::acquire(control)?;
     if candidate.project.trim().is_empty() {
         return Err("a candidate needs a project key".into());
     }
@@ -345,6 +346,7 @@ pub fn load_run(control: &Path, project: &str, id: &str) -> Result<ReleaseRun, S
 }
 
 fn save_run(control: &Path, run: &ReleaseRun, event: &str, message: &str) -> Result<(), String> {
+    let _lease = crate::project_management::ControlWriteLease::acquire(control)?;
     let path = releases_dir(control, &run.project).join(format!("{}.json", run.id));
     write_existing(&path, run)?;
     crate::project_management::record_mutation(
@@ -377,6 +379,7 @@ pub fn start_release(
     designated_tester: &str,
     release_sha: Option<&str>,
 ) -> Result<ReleaseRun, String> {
+    let _lease = crate::project_management::ControlWriteLease::acquire(control)?;
     let mut candidate = load_candidate(control, project, candidate_id)?;
     let repo = PathBuf::from(&candidate.repo);
     if !repo.is_dir() {
@@ -438,6 +441,7 @@ pub fn advance(
     run_id: &str,
     to: &str,
 ) -> Result<ReleaseRun, String> {
+    let _lease = crate::project_management::ControlWriteLease::acquire(control)?;
     let mut run = load_run(control, project, run_id)?;
     if let Some(reason) = run.stopped.as_deref() {
         return Err(format!(
@@ -470,6 +474,7 @@ pub fn advance(
 /// Stop a run where it stands, with the reason attached. Returns the reason so
 /// the caller can hand it straight back as the error.
 pub fn stop(control: &Path, mut run: ReleaseRun, reason: String) -> Result<String, String> {
+    let _lease = crate::project_management::ControlWriteLease::acquire(control)?;
     run.stopped = Some(reason.clone());
     run.updated_at = chrono::Utc::now().to_rfc3339();
     save_run(

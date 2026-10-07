@@ -1190,7 +1190,7 @@ pub async fn issue_intake_configure(
 ) -> Result<IssueIntake, String> {
     let pm = state.settings.lock().await.project_management.clone();
     let repo = crate::project_management::configured_repo(&pm)?;
-    crate::project_management::set_issue_intake_in(&repo, &project, intake)
+    crate::project_management::owner_action(|| crate::project_management::set_issue_intake_in(&repo, &project, intake))
 }
 
 /// Run intake now, for one project or all of them.

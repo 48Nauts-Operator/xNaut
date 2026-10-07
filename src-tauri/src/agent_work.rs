@@ -870,13 +870,11 @@ async fn prepare_ticket(args: &Value, handle: &str, allowed: &[PathBuf]) -> Resu
                 .to_ascii_uppercase();
             let remote = git(&root, &["remote", "get-url", "forgejo"])
                 .or_else(|_| git(&root, &["remote", "get-url", "origin"]))?;
-            let app = crate::nudge::app().ok_or("The app is not running")?;
-            let state = tauri::Manager::state::<crate::state::AppState>(app);
             let request = serde_json::from_value(
                 json!({"key":project_key,"name":name,"source_repo":root,"forge_remote":remote}),
             )
             .map_err(|e| e.to_string())?;
-            crate::project_management::pm_project_create(state, request).await?
+            crate::project_management::project_create_in(&repo, request)?
         }
     };
     let source_id = format!(

@@ -6,6 +6,13 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use tauri::State;
 
+mod write_guard;
+mod deferred;
+#[cfg(test)]
+mod write_guard_tests;
+pub(crate) use write_guard::{owner_action, ControlWriteLease};
+use write_guard::common_dir;
+
 const MANIFEST_NAME: &str = "xnaut-projects.json";
 
 fn mutation_lock() -> &'static Mutex<()> {
@@ -409,7 +416,7 @@ const NO_AUTO_MAINTENANCE: [&str; 4] = ["-c", "gc.auto=0", "-c", "maintenance.au
 
 fn git_command(repo: &Path) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(NO_AUTO_MAINTENANCE);
+    cmd.arg("-C").arg(repo).args(NO_AUTO_MAINTENANCE).env("GIT_OPTIONAL_LOCKS", "0");
     cmd
 }
 
@@ -494,6 +501,7 @@ pub(crate) fn maintenance_due(
 /// was due. The interval is claimed BEFORE the task runs, so a slow task and
 /// the next tick cannot start a second one.
 pub fn maintain_control_repo(repo: &Path) -> Result<Option<&'static str>, String> {
+    deferred::replay(repo)?;
     let task = {
         let mut state = maintenance_state()
             .lock()
@@ -518,6 +526,7 @@ pub(crate) fn run_maintenance_task(repo: &Path, task: &str) -> Result<(), String
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let started = std::time::Instant::now();
     run_git(repo, &["config", "gc.auto", "0"])?;
     run_git(repo, &["config", "maintenance.auto", "false"])?;
@@ -769,6 +778,7 @@ fn is_initialized_repo(path: &Path) -> bool {
 }
 
 fn configure_origin(path: &Path, requested_remote: &str) -> Result<String, String> {
+    let _lease = ControlWriteLease::acquire(path)?;
     let requested_remote = requested_remote.trim();
     if !requested_remote.is_empty() {
         if run_git(path, &["remote", "get-url", "origin"]).is_ok() {
@@ -781,6 +791,7 @@ fn configure_origin(path: &Path, requested_remote: &str) -> Result<String, Strin
 }
 
 fn sync_repo(repo: &Path, authenticated_remote: Option<(&str, &str)>) -> Result<(), String> {
+    let _lease = ControlWriteLease::acquire(repo)?;
     let origin = run_git(repo, &["remote", "get-url", "origin"]).unwrap_or_default();
     if origin.is_empty() {
         return Err("no origin remote is configured".into());
@@ -813,7 +824,9 @@ fn sync_repo(repo: &Path, authenticated_remote: Option<(&str, &str)>) -> Result<
             }
         }
         let push_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
-        run_git_authenticated(repo, &["push", remote_url, &push_ref], authorization)?;
+        let pushed = run_git_authenticated(repo, &["push", remote_url, &push_ref], authorization);
+        deferred::push_result(repo, &branch, &pushed)?;
+        pushed?;
         run_git(repo, &["update-ref", &remote_ref, "HEAD"])?;
         run_git(
             repo,
@@ -834,7 +847,9 @@ fn sync_repo(repo: &Path, authenticated_remote: Option<(&str, &str)>) -> Result<
             return Err(error);
         }
     }
-    run_git(repo, &["push", "-u", "origin", &branch])?;
+    let pushed = run_git(repo, &["push", "-u", "origin", &branch]);
+    deferred::push_result(repo, &branch, &pushed)?;
+    pushed?;
     Ok(())
 }
 
@@ -914,6 +929,7 @@ fn inspect(settings: &ProjectManagementSettings) -> ModuleStatus {
     status.git_repository = path.join(".git").is_dir();
     status.valid = status.git_repository && path.join(MANIFEST_NAME).is_file();
     if status.valid {
+        status.warning = deferred::warning(&path).unwrap_or_else(|e| format!("Control repository evidence status unavailable: {e}"));
         status.project_count = std::fs::read_dir(path.join("projects"))
             .map(|entries| {
                 entries
@@ -946,6 +962,16 @@ fn inspect(settings: &ProjectManagementSettings) -> ModuleStatus {
         status.error = "folder is not an initialized xNaut Project Management repository".into();
     }
     status
+}
+
+/// Read-only disk evidence: Git reports loose-object disk size in KiB.
+pub(crate) fn control_repo_pressure_detail(repo: &Path) -> Result<String, String> {
+    let output = run_git(repo, &["count-objects", "-v"])?;
+    let field = |key: &str| output.lines().find_map(|line| line.strip_prefix(key).and_then(|v| v.trim().parse::<u64>().ok()));
+    let count = field("count:").ok_or("control repository loose-object count unavailable")?;
+    let kib = field("size:").ok_or("control repository loose-object size unavailable")?;
+    let warning = deferred::warning(repo)?;
+    Ok(format!("Control repository: {count} loose objects, {} bytes on disk. {warning}", kib.saturating_mul(1024)))
 }
 
 pub fn configured_repo(settings: &ProjectManagementSettings) -> Result<PathBuf, String> {
@@ -1058,22 +1084,19 @@ pub(crate) fn record_mutation(
     paths: &[PathBuf],
     message: &str,
 ) -> Result<(), String> {
+    let _lease = ControlWriteLease::acquire(repo)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let event_path = repo.join("events").join(format!(
+    let event_path = repo.join("events").join(deferred::replay_id().map(|id| format!("deferred-{id}.json")).unwrap_or_else(|| format!(
         "{}-{}.json",
         chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ"),
         uuid::Uuid::new_v4()
-    ));
-    write_json_atomic(
-        &event_path,
-        &json!({
-            "version": 1,
-            "event": event_type,
-            "subject": subject,
-            "timestamp": now,
-            "details": details,
-        }),
-    )?;
+    )));
+    let mut event = json!({
+        "version": 1, "event": event_type, "subject": subject,
+        "timestamp": now, "details": details,
+    });
+    if let Some(id) = deferred::replay_id() { event["deferred_pending_sha256"] = id.into(); }
+    write_json_atomic(&event_path, &event)?;
     let mut commit_paths = paths.to_vec();
     commit_paths.push(event_path);
     let relative: Result<Vec<String>, String> = commit_paths
@@ -1118,19 +1141,20 @@ pub(crate) fn record_mutation(
 /// Best effort on purpose. The commit already exists; a remote that is down
 /// or ahead must not turn a successful write into an error the agent retries.
 /// A rejected push is left for the next write's rebase, which is exactly the
-/// case XNAUT-297 handles, and it is logged so it is never silent.
+/// case XNAUT-297 handles. Its persistent per-branch fault is visible in PM
+/// and disk-pressure evidence until that branch publishes successfully.
 fn publish(repo: &Path) {
     let Ok(remotes) = run_git(repo, &["remote"]) else { return };
     if !remotes.lines().any(|remote| remote == "origin") {
         return;
     }
     let Ok(branch) = run_git(repo, &["symbolic-ref", "--short", "HEAD"]) else { return };
-    if let Err(error) = run_git(repo, &["push", "origin", &branch]) {
-        let _ = crate::debug_log::debug_log_append(vec![format!(
-            "[pm] push of {branch} deferred to the next write: {}",
-            error.lines().last().unwrap_or(&error)
-        )]);
+    let result = run_git(repo, &["push", "origin", &branch]);
+    if let Err(error) = deferred::push_result(repo, &branch, &result) {
+        eprintln!("[pm] push fault could not be persisted: {error}");
+        crate::ledger::record("pm_push_fault", "project_management", "", &error);
     }
+
 }
 
 /// Append a Vault document mutation to the project event trail (XNAUT-14).
@@ -1144,19 +1168,27 @@ pub(crate) async fn record_document_event(
     details: Value,
 ) {
     let settings = state.settings.lock().await.project_management.clone();
-    let Ok(repo) = configured_repo(&settings) else {
-        return;
+    if !settings.enabled { return; }
+    let repo = match configured_repo(&settings) {
+        Ok(repo) => repo,
+        Err(error) => {
+            let evidence = crate::project_wiki::redact(&json!({"event":event,"subject":subject,"details":details,"error":error}).to_string());
+            crate::ledger::record("pm_evidence_fault", "project_management", subject, &evidence);
+            eprintln!("[pm] document receipt cannot reach configured control repository; original Vault document remains: {error}");
+            return;
+        }
     };
-    if let Err(error) = record_mutation(
-        &repo,
-        event,
-        subject,
-        details,
-        &[],
-        &format!("feat(pm): {event} {subject}"),
-    ) {
-        eprintln!("[pm] document event not recorded: {error}");
+    if let Err(error) = record_document_in(&repo, event, subject, details) {
+        let detail = format!("Document event {event} for {subject}: {error}");
+        eprintln!("[pm] {detail}");
+        crate::ledger::record("pm_evidence_fault", "project_management", subject, &detail);
     }
+
+}
+
+fn record_document_in(repo: &Path, event: &str, subject: &str, details: Value) -> Result<(), String> {
+    deferred::retain(repo, deferred::Pending::Document { event: event.into(), subject: subject.into(), details }, "Document event awaiting control repository write")?;
+    deferred::replay(repo)
 }
 
 /// Where a project's repository is ON THIS MACHINE.
@@ -1221,6 +1253,7 @@ fn import_task_projects(
     repo: &Path,
     tasks: &[crate::tasks::TaskSession],
 ) -> Result<Vec<ProjectRecord>, String> {
+    let _lease = ControlWriteLease::acquire(repo)?;
     let mut existing = list_projects(repo)?;
     let mut used: std::collections::HashSet<String> =
         existing.iter().map(|project| project.key.clone()).collect();
@@ -1365,6 +1398,7 @@ fn migrate_legacy_pm_data(
     clients: &[crate::pm::ExternalProject],
     todos: &std::collections::HashMap<String, Vec<crate::project_todos::Todo>>,
 ) -> Result<Vec<ProjectRecord>, String> {
+    let _lease = ControlWriteLease::acquire(repo)?;
     let mut projects = list_projects(repo)?;
     let mut used: std::collections::HashSet<String> =
         projects.iter().map(|project| project.key.clone()).collect();
@@ -1647,10 +1681,15 @@ pub async fn pm_module_initialize(
             request.personal_owner,
         )
         .await?;
-        run_git(&path, &["remote", "add", "origin", &remote_url])?;
-        if let Err(error) = run_git(&path, &["push", "-u", "origin", "main"]) {
-            warning = format!("Repository created, but the first push failed: {error}");
-        }
+        owner_action(|| -> Result<(), String> {
+            let _lease = ControlWriteLease::acquire(&path)?;
+            run_git(&path, &["remote", "add", "origin", &remote_url])?;
+            let branch = run_git(&path, &["symbolic-ref", "--short", "HEAD"])?;
+            let pushed = run_git(&path, &["push", "-u", "origin", &branch]);
+            deferred::push_result(&path, &branch, &pushed)?;
+            if pushed.is_err() { warning = "Repository created, but push is deferred; local history retained. Check remote access and synchronize.".into(); }
+            Ok(())
+        })?;
     }
 
     let mut settings = state.settings.lock().await.clone();
@@ -1682,7 +1721,7 @@ pub async fn pm_module_initialize(
     crate::settings::save(&settings)?;
     *state.settings.lock().await = settings.clone();
     let mut status = inspect(&settings.project_management);
-    status.warning = warning;
+    if !warning.is_empty() { status.warning = format!("{} {warning}", status.warning).trim().into(); }
     Ok(status)
 }
 
@@ -1698,7 +1737,7 @@ pub async fn pm_module_connect(
     let mut project_management = ProjectManagementSettings {
         enabled: true,
         repo_path: path.to_string_lossy().into_owned(),
-        remote_url: configure_origin(&path, &request.remote_url)?,
+        remote_url: owner_action(|| configure_origin(&path, &request.remote_url))?,
     };
     let status = inspect(&project_management);
     if !status.valid {
@@ -1720,11 +1759,11 @@ pub async fn pm_module_sync(
     let repo = configured_repo(&settings.project_management)?;
     let origin = run_git(&repo, &["remote", "get-url", "origin"]).unwrap_or_default();
     let auth = authenticated_remote(&settings, &origin);
-    sync_repo(
+    owner_action(|| sync_repo(
         &repo,
         auth.as_ref()
             .map(|(url, header)| (url.as_str(), header.as_str())),
-    )?;
+    ))?;
     Ok(inspect(&settings.project_management))
 }
 
@@ -1745,6 +1784,7 @@ pub async fn pm_project_import_existing(
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     import_task_projects(&repo, &crate::tasks::load_tasks())?;
     Ok(projects_for_display(migrate_legacy_pm_data(
         &repo,
@@ -1755,11 +1795,13 @@ pub async fn pm_project_import_existing(
 
 #[tauri::command]
 pub async fn pm_project_create(
-    state: State<'_, crate::state::AppState>,
-    request: ProjectCreateRequest,
+    state: State<'_, crate::state::AppState>, request: ProjectCreateRequest,
 ) -> Result<ProjectRecord, String> {
     let settings = state.settings.lock().await.project_management.clone();
-    let repo = configured_repo(&settings)?;
+    owner_action(|| project_create_in(&configured_repo(&settings)?, request))
+}
+
+pub(crate) fn project_create_in(repo: &Path, request: ProjectCreateRequest) -> Result<ProjectRecord, String> {
     let key = validate_project_key(&request.key)?;
     let forge_remote = crate::repository_transfer::validate_remote(request.forge_remote.as_deref().unwrap_or(&request.source_repo))?;
     let name = request.name.trim();
@@ -1782,6 +1824,7 @@ pub async fn pm_project_create(
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let project_dir = repo.join("projects").join(&key);
     if project_dir.exists() {
         return Err(format!("project already exists: {key}"));
@@ -1839,6 +1882,7 @@ pub async fn pm_project_update(
 ) -> Result<ProjectRecord, String> {
     let settings = state.settings.lock().await.project_management.clone();
     let repo = configured_repo(&settings)?;
+    owner_action(|| {
     let key = validate_project_key(&request.key)?;
     let name = request.name.trim();
     if name.is_empty() {
@@ -1860,6 +1904,7 @@ pub async fn pm_project_update(
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let manifest = repo.join("projects").join(&key).join("project.json");
     if !manifest.is_file() {
         return Err(format!("project does not exist: {key}"));
@@ -1932,6 +1977,7 @@ pub async fn pm_project_update(
         write_json_atomic(&dir.join("xnaut/project-paths.json"), &paths)?;
     }
     Ok(projects_for_display(vec![record]).remove(0))
+    })
 }
 
 /// Set a project's issue-intake settings and nothing else (XNAUT-382).
@@ -1954,6 +2000,7 @@ pub fn set_issue_intake_in(
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let manifest = repo.join("projects").join(&key).join("project.json");
     if !manifest.is_file() {
         return Err(format!("project does not exist: {key}"));
@@ -2201,6 +2248,7 @@ pub fn ticket_create_in(repo: &Path, request: TicketCreateRequest) -> Result<Tic
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let tickets_dir = repo.join("projects").join(&key).join("tickets");
     if !tickets_dir.is_dir() {
         return Err(format!("project not found: {key}"));
@@ -2248,7 +2296,20 @@ pub async fn pm_ticket_create(
     request: TicketCreateRequest,
 ) -> Result<TicketRecord, String> {
     let settings = state.settings.lock().await.project_management.clone();
+    owner_action(|| ticket_create_in(&configured_repo(&settings)?, request))
+}
+
+pub(crate) async fn ticket_create_automatic(
+    state: State<'_, crate::state::AppState>, request: TicketCreateRequest,
+) -> Result<TicketRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
     ticket_create_in(&configured_repo(&settings)?, request)
+}
+pub(crate) async fn ticket_update_automatic(
+    state: State<'_, crate::state::AppState>, request: TicketUpdateRequest,
+) -> Result<TicketRecord, String> {
+    let settings = state.settings.lock().await.project_management.clone();
+    ticket_update_in(&configured_repo(&settings)?, request)
 }
 
 /// `complete` is NautBot's word: tested, checked and approved. ONE shared
@@ -2290,28 +2351,9 @@ pub fn ticket_update_in(repo: &Path, request: TicketUpdateRequest) -> Result<Tic
     ticket_update_with_registry_in(repo, &crate::agents::registry_dir()?, request)
 }
 
-/// XNAUT-472: serialize this transaction across app processes as well as threads.
-/// Keep the lease in the common Git directory so linked worktrees share it.
-struct TicketUpdateLease(std::fs::File);
-impl TicketUpdateLease {
-    fn acquire(repo: &Path) -> Result<Self, String> {
-        let common = run_git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
-        let file = std::fs::OpenOptions::new()
-            .read(true).write(true).create(true).truncate(false)
-            .open(Path::new(&common).join("xnaut-ticket-update.lock"))
-            .map_err(|e| format!("cannot open ticket update lease: {e}"))?;
-        match file.try_lock() {
-            Ok(()) => Ok(Self(file)),
-            Err(std::fs::TryLockError::WouldBlock) => Err(
-                "another process is updating this control repository; reload the ticket and retry".into(),
-            ),
-            Err(std::fs::TryLockError::Error(e)) => Err(format!("cannot lock ticket update: {e}")),
-        }
-    }
-}
-impl Drop for TicketUpdateLease {
-    fn drop(&mut self) { let _ = self.0.unlock(); }
-}
+// Keep the old test name and on-disk lease identity for compatibility.
+#[cfg(test)]
+type TicketUpdateLease = ControlWriteLease;
 
 struct TicketReconcileWorktree<'a> {
     repo: &'a Path,
@@ -2378,7 +2420,8 @@ fn ticket_update_with_registry_in(repo: &Path, registry: &Path, request: TicketU
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
-    let _lease = TicketUpdateLease::acquire(repo)?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
+
     // XNAUT-297: reconcile committed fleet edits before reading the revision.
     // Local-only control repos still work. Never stash, reset, or choose a side
     // of a conflict: a committed handback must remain recoverable on its branch.
@@ -2621,6 +2664,7 @@ pub fn ticket_retag_in(
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let path = find_ticket_path(repo, id)?;
     let mut record: TicketRecord = read_json(&path)?;
     record.tags = tags
@@ -2744,6 +2788,7 @@ fn attach_handback_in(
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let path = find_ticket_path(repo, &handback.ticket)?;
     let mut record: TicketRecord = read_json(&path)?;
     record.handback = Some(handback.clone());
@@ -2770,6 +2815,14 @@ fn attach_handback_in(
 /// boundary with handbacks. Public agent update tools cannot forge receipts.
 pub(crate) fn attach_jury_in(repo: &Path, job: &crate::jury::Job, status: Option<&str>) -> Result<TicketRecord,String> {
     let _guard=mutation_lock().lock().map_err(|_|"PM mutation lock unavailable")?;
+    let _lease = match ControlWriteLease::acquire(repo) {
+        Ok(lease) => lease,
+        Err(reason) => {
+            let record: TicketRecord = read_json(&find_ticket_path(repo, &job.ticket)?)?;
+            deferred::retain(repo, deferred::Pending::Jury { job: Box::new(job.clone()), status: status.map(str::to_owned), expected_revision: record.revision }, &reason)?;
+            return Err(format!("{reason}; jury receipt retained locally"));
+        }
+    };
     let path=find_ticket_path(repo,&job.ticket)?;
     let mut record:TicketRecord=read_json(&path)?;
     let previous=record.approval.jury_reviews.iter().find(|j|j.id==job.id);
@@ -2793,8 +2846,8 @@ pub(crate) fn attach_jury_in(repo: &Path, job: &crate::jury::Job, status: Option
     record.revision+=1;
     record.updated_at=chrono::Utc::now().to_rfc3339();
     write_json_atomic(&path,&record)?;
-    record_mutation(repo,"ticket.jury",&record.id,json!({"jury_id":job.id,"decision":job.decision,"state":job.state,"revision":record.revision}),&[path.clone()],&format!("chore(pm): jury receipt for {}",record.id))?;
-    if let Some((previous,new))=release_change {
+    record_mutation(repo,"ticket.jury",&record.id,json!({"jury_id":job.id,"decision":job.decision,"state":job.state,"revision":record.revision,"release_change":release_change}),&[path.clone()],&format!("chore(pm): jury receipt for {}",record.id))?;
+    if let Some((previous,new))=release_change.filter(|_| deferred::replay_id().is_none()) {
         record_mutation(repo,"ticket.release",&record.id,json!({"previous":previous,"new":new,"revision":record.revision}),&[],&format!("chore(pm): {} release {} -> {}",record.id,if previous.is_empty(){"unassigned"}else{&previous},new))?;
     }
     Ok(record)
@@ -2804,6 +2857,7 @@ pub(crate) fn attach_jury_in(repo: &Path, job: &crate::jury::Job, status: Option
 /// `ticket.release` with the previous and new value on every change.
 pub fn ticket_release_in(repo: &Path, id: &str, release: &str) -> Result<TicketRecord, String> {
     let _guard = mutation_lock().lock().map_err(|_| "PM mutation lock unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let release = release.trim().to_string();
     let path = find_ticket_path(repo, id)?;
     let mut record: TicketRecord = read_json(&path)?;
@@ -2824,13 +2878,14 @@ pub async fn pm_ticket_release(
     release: String,
 ) -> Result<TicketRecord, String> {
     let settings = state.settings.lock().await.project_management.clone();
-    ticket_release_in(&configured_repo(&settings)?, &id, &release)
+    owner_action(|| ticket_release_in(&configured_repo(&settings)?, &id, &release))
 }
 
 /// Add or remove one tag on a ticket. Idempotent; the write is a mutation
 /// like any other, so it is committed, pushed and evented.
 pub fn ticket_tag_in(repo: &Path, id: &str, tag: &str, remove: bool) -> Result<TicketRecord, String> {
     let _guard = mutation_lock().lock().map_err(|_| "PM mutation lock unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let tag = tag.trim().to_string();
     if tag.is_empty() { return Err("a tag is required".into()); }
     let path = find_ticket_path(repo, id)?;
@@ -2853,7 +2908,7 @@ pub async fn pm_ticket_tag(
     remove: Option<bool>,
 ) -> Result<TicketRecord, String> {
     let settings = state.settings.lock().await.project_management.clone();
-    ticket_tag_in(&configured_repo(&settings)?, &id, &tag, remove.unwrap_or(false))
+    owner_action(|| ticket_tag_in(&configured_repo(&settings)?, &id, &tag, remove.unwrap_or(false)))
 }
 
 /// Tell NautBot a ticket came back. Deliberately does NOT cold-launch it: a
@@ -2909,7 +2964,7 @@ pub async fn pm_ticket_update(
     request: TicketUpdateRequest,
 ) -> Result<TicketRecord, String> {
     let settings = state.settings.lock().await.project_management.clone();
-    ticket_update_in(&configured_repo(&settings)?, request)
+    owner_action(|| ticket_update_in(&configured_repo(&settings)?, request))
 }
 
 #[tauri::command]
@@ -2920,9 +2975,11 @@ pub async fn pm_ticket_delete(
 ) -> Result<(), String> {
     let settings = state.settings.lock().await.project_management.clone();
     let repo = configured_repo(&settings)?;
+    owner_action(|| {
     let _guard = mutation_lock()
         .lock()
         .map_err(|_| "Project Management mutation lock is unavailable")?;
+    let _lease = ControlWriteLease::acquire(&repo)?;
     let path = find_ticket_path(&repo, &id)?;
     let record: TicketRecord = read_json(&path)?;
     if record.revision != expected_revision {
@@ -2940,6 +2997,7 @@ pub async fn pm_ticket_delete(
         &[path],
         &format!("chore(pm): delete {id}"),
     )
+    })
 }
 
 #[cfg(test)]

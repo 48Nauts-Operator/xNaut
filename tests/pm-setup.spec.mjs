@@ -97,3 +97,15 @@ test('first hidden Settings opening from PM setup settles the real module panel'
   await page.locator('#btn-close-settings-panel').click();
   await expect(page.locator('#settings-panel')).toBeHidden();
 });
+
+test('retained repository faults stay visible without hiding the board and clear on confirmed refresh', async ({ page }) => {
+  const warning = 'Push deferred since yesterday; local commits retained. 2 deferred PM receipts need reconciliation.';
+  const pane = await mountWith(page, { ...OK, warning });
+  await expect(pane.locator('.pmw-repository-warning')).toBeVisible();
+  await expect(pane.locator('.pmw-repository-warning')).toHaveText(warning);
+  await expect(pane.locator('.pmw-new-ticket')).toBeVisible();
+  await expect(pane.locator('[data-pm-setup]')).toHaveCount(0);
+  await page.evaluate((status) => { window.__xnautStub.pm_module_status = status; }, { ...OK, warning: '' });
+  await pane.locator('.pmw-refresh').click();
+  await expect(pane.locator('.pmw-repository-warning')).toBeHidden();
+});

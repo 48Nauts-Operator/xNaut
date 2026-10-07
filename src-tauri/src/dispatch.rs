@@ -334,7 +334,7 @@ pub async fn pm_ticket_dispatch(
     project: String,
     environment: Option<String>,
 ) -> Result<DispatchResult, String> {
-    dispatch_scoped(app, ticket_id, project, environment, None).await
+    dispatch_with_findings_gate(app, ticket_id, project, environment, None, false, PmWriteOrigin::Owner).await
 }
 
 pub(crate) async fn dispatch_scoped(
@@ -344,19 +344,25 @@ pub(crate) async fn dispatch_scoped(
     environment: Option<String>,
     approved: Option<&crate::swarm_plan::PlannedRun>,
 ) -> Result<DispatchResult, String> {
-    dispatch_with_findings_gate(app,ticket_id,project,environment,approved,false).await
+    dispatch_with_findings_gate(app,ticket_id,project,environment,approved,false,PmWriteOrigin::Automatic).await
 }
 
 pub(crate) async fn model_ticket_dispatch(
     app: tauri::AppHandle, ticket_id: String, project: String, environment: Option<String>,
 ) -> Result<DispatchResult,String> {
-    dispatch_with_findings_gate(app,ticket_id,project,environment,None,true).await
+    dispatch_with_findings_gate(app,ticket_id,project,environment,None,true,PmWriteOrigin::Automatic).await
 }
+
+#[derive(Clone, Copy)]
+enum PmWriteOrigin { Owner, Automatic }
 
 async fn dispatch_with_findings_gate(
     app: tauri::AppHandle, ticket_id: String, project: String, environment: Option<String>,
-    approved: Option<&crate::swarm_plan::PlannedRun>, model_origin: bool,
+    approved: Option<&crate::swarm_plan::PlannedRun>, model_origin: bool, pm_origin: PmWriteOrigin,
 ) -> Result<DispatchResult,String> {
+    if matches!(pm_origin, PmWriteOrigin::Automatic) {
+        if let Some(reason) = crate::switches::automatic_pm_write_hold_strict() { return Err(reason); }
+    }
     let tickets = crate::project_management::pm_ticket_list(
         app.state::<crate::state::AppState>(),
         Some(project.clone()),
@@ -565,12 +571,10 @@ async fn dispatch_with_findings_gate(
         session = launched.session_id,
         environment = destination.key(),
     );
-    let dispatched_ticket = crate::project_management::pm_ticket_update(
-        app.state::<crate::state::AppState>(),
-        crate::project_management::TicketUpdateRequest {
+    let request = crate::project_management::TicketUpdateRequest {
             model_requirement: None,
-            // Dispatch is the owner pressing a button, not an agent writing:
-            // unattributed, and therefore not gated (XNAUT-243).
+            // Status transition attribution is separate from the trusted entry
+            // point used for read_only admission below.
             caller: None,
             id: ticket.id.clone(),
             expected_revision: ticket.revision,
@@ -582,9 +586,13 @@ async fn dispatch_with_findings_gate(
             clear_owner: false,
             documentation: None,
             body: Some(format!("{}{note}", ticket.body)),
-        },
-    )
-    .await?;
+        };
+    let state = app.state::<crate::state::AppState>();
+    let dispatched_ticket = if matches!(pm_origin, PmWriteOrigin::Owner) {
+        crate::project_management::pm_ticket_update(state, request).await?
+    } else {
+        crate::project_management::ticket_update_automatic(state, request).await?
+    };
 
     Ok(DispatchResult {
         ticket_scope: crate::swarm_plan::scope(&dispatched_ticket),

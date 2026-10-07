@@ -556,7 +556,7 @@ async fn call_project_tool(
         }
         "xnaut_create_ticket" => {
             let request = serde_json::from_value(args).map_err(|error| error.to_string())?;
-            serde_json::to_value(crate::project_management::pm_ticket_create(state, request).await?)
+            serde_json::to_value(crate::project_management::ticket_create_automatic(state, request).await?)
                 .map_err(|error| error.to_string())
         }
         "xnaut_update_ticket" => {
@@ -566,7 +566,7 @@ async fn call_project_tool(
             // the done/complete rails. The caller cannot choose its own
             // identity: it comes from the session behind the token.
             request.caller = caller.map(str::to_string);
-            serde_json::to_value(crate::project_management::pm_ticket_update(state, request).await?)
+            serde_json::to_value(crate::project_management::ticket_update_automatic(state, request).await?)
                 .map_err(|error| error.to_string())
         }
         "xnaut_handback" => {

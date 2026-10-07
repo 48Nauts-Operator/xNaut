@@ -85,7 +85,7 @@ pub fn load() -> KillSwitches {
         .unwrap_or_default()
 }
 
-/// Only automatic merge uses the strict reader. A genuinely absent file keeps
+/// Automatic merge and PM writers use the strict reader. A genuinely absent file keeps
 /// the established defaults; existing but unavailable/corrupt authority is a hold.
 fn load_strict_at(path: &Path) -> Result<KillSwitches, String> {
     let body = match std::fs::read_to_string(path) {
@@ -109,6 +109,16 @@ pub(crate) fn automatic_merge_hold_at(path: &Path) -> Option<String> {
     match load_strict_at(path) {
         Ok(switches) => switches.automatic_merge_hold().map(str::to_owned),
         Err(reason) => Some(reason),
+    }
+}
+
+/// PM automation fails closed on unreadable authority; direct owner commands
+/// retain their explicit-action contract and do not use this background gate.
+pub(crate) fn automatic_pm_write_hold_strict() -> Option<String> {
+    match load_strict_at(&store_path()) {
+        Ok(switches) if switches.read_only => Some("Automatic PM write paused: read_only kill-switch engaged; evidence retained for retry".into()),
+        Ok(_) => None,
+        Err(reason) => Some(reason.replace("Automatic merge", "Automatic PM write")),
     }
 }
 

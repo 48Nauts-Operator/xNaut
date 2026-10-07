@@ -729,6 +729,7 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
         <button class="pmw-icon pmw-sync" title="Pull and push control repository" aria-label="Synchronize">${ICON.sync}</button>
         <button class="pmw-btn pmw-btn-primary pmw-new-ticket">New ticket</button>
       </header>
+      <div class="pmw-repository-warning" role="status" hidden style="padding:10px 14px;color:#fbbf24;white-space:pre-wrap;flex-shrink:0"></div>
       <div class="pmw-main">
         <div class="pmw-work"><main class="pmw-content"></main><aside class="pmw-detail" hidden></aside></div>
       </div>
@@ -4230,6 +4231,9 @@ The authoritative artifact for this stage is at work:${rel}. Vault tool rel/from
     function paintStatus() {
       const status = state.status;
       if (!status) return;
+      const warning = $('.pmw-repository-warning');
+      warning.textContent = status.warning || '';
+      warning.hidden = !status.warning;
       const parts = [];
       if (status.branch) parts.push(status.branch);
       if (status.ahead) parts.push(`${status.ahead} ahead`);

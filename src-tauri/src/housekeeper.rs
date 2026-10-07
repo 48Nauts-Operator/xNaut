@@ -941,6 +941,12 @@ pub fn watch_disk(app: &tauri::AppHandle) {
         volume.used_pct,
         human_bytes(volume.free),
     );
+    let control = match crate::project_management::repo_now() {
+        Ok(repo) => crate::project_management::control_repo_pressure_detail(&repo)
+            .unwrap_or_else(|e| format!("Control repository disk evidence unavailable: {e}")),
+        Err(_) => "Control repository is not configured or available.".into(),
+    };
+    let detail = format!("{detail} {control}");
     crate::ledger::record("disk_pressure", "housekeeper", "", &detail);
     let _ = app.emit(
         "housekeeper://pressure",
