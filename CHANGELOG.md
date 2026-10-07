@@ -2,6 +2,17 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.3] - 2026-10-07
+
+### Fixed
+- Allow approved exe.dev and GitVM swarms to start and refill from Workstation instances, while keeping unattended ticket pickup restricted to Fleet instances.
+- Carry an explicitly requested swarm destination through planning, approval, storage and dispatch. Reject unavailable providers instead of substituting local execution.
+- Report queued members in dispatch totals and retain durable approval across capacity waits and restarts. Stopped groups remain stopped and repeated confirmation cannot duplicate workers.
+
+### Release checks
+- Require native dispatch, persistence, recovery and admission tests plus browser behavior tests before release packaging on macOS and Windows. Missing, skipped, failed or wrong-source evidence refuses the release.
+- Retain the macOS signing and UTF-8 updater-discovery evidence corrections from the 1.30.2 verification.
+
 ## [1.30.2] - 2026-10-07
 
 ### Added
