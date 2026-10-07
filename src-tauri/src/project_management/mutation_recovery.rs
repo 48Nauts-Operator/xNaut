@@ -1171,7 +1171,7 @@ mod tests {
         assert!(pending(&f.repo).unwrap().is_empty());
         // Existing PM fixtures and first-time repositories can have an unborn HEAD.
         let fresh = f.repo.join("fresh");
-        std::fs::create_dir(&fresh).unwrap();
+        std::fs::create_dir_all(fresh.join("events")).unwrap();
         run_git(&fresh, &["init", "-b", "main"]).unwrap();
         run_git(&fresh, &["config", "commit.gpgsign", "false"]).unwrap();
         let path = fresh.join("projects/TEST/project.json");
@@ -1230,18 +1230,42 @@ mod tests {
         );
     }
     #[cfg(unix)]
+    struct GitHolder {
+        child: std::process::Child,
+        release: PathBuf,
+    }
+    #[cfg(unix)]
+    impl Drop for GitHolder {
+        fn drop(&mut self) {
+            // Release only this fixture's hook, including assertion unwinds.
+            // Git itself removes its lock; the test never unlinks index.lock.
+            let _ = std::fs::write(&self.release, b"release fixture holder");
+            let _ = self.child.wait();
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn real_git_holder_release_allows_bounded_retry_with_normal_hooks() {
         let f = Fixture::new();
         hook(&f,"#!/bin/sh\nif [ -n \"$XN473_HOLDER\" ]; then\n touch .git/holder-ready\n while [ ! -e .git/release-holder ]; do sleep 0.01; done\n exit 1\nfi\necho recovery >> .git/hook-invocations\nexit 0\n");
-        let mut holder = git_command(&f.repo)
-            .args(["commit", "--allow-empty", "-m", "holder"])
+        // Ordinary/empty commits release index.lock before invoking hooks.
+        // A real partial commit retains it while constructing its temporary
+        // index, matching the observed native contention path.
+        std::fs::write(f.repo.join("holder-only"), b"holder staged content\n").unwrap();
+        f.git(&["add", "holder-only"]);
+        let child = git_command(&f.repo)
+            .args(["commit", "--only", "-m", "holder", "--", "holder-only"])
             .env("XN473_HOLDER", "1")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut holder = GitHolder {
+            child,
+            release: f.repo.join(".git/release-holder"),
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !f.repo.join(".git/holder-ready").exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -1263,7 +1287,7 @@ mod tests {
         });
         let result = f.write();
         release.join().unwrap();
-        assert!(!holder.wait().unwrap().success());
+        assert!(!holder.child.wait().unwrap().success());
         result.unwrap();
         assert!(pending(&f.repo).unwrap().is_empty());
         assert_eq!(
@@ -1274,5 +1298,7 @@ mod tests {
             1
         );
         assert_eq!(f.git(&["rev-list", "--count", "HEAD"]), "2");
+        assert_eq!(f.git(&["show", ":holder-only"]), "holder staged content");
+        assert!(run_git(&f.repo, &["cat-file", "-e", "HEAD:holder-only"]).is_err());
     }
 }
