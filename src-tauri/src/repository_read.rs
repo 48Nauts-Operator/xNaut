@@ -50,21 +50,58 @@ pub(crate) fn user_texts(messages: &[Value]) -> Vec<String> {
 pub fn roots(messages: &[Value]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     for text in user_texts(messages) {
-        // Both whitespace-delimited paths and quoted paths with spaces.
-        let parts = text.split(['"', '\'', '`']).chain(text.split_whitespace());
-        for part in parts {
-            let path = Path::new(part.trim().trim_end_matches([',', ';', '.']));
-            if !path.is_absolute() || !path.join(".git").exists() {
-                continue;
-            }
-            if let Ok(path) = path.canonicalize() {
-                if path.is_dir() && !roots.contains(&path) {
-                    roots.push(path);
-                }
-            }
+        for path in declared_paths(&text) {
+            if !roots.contains(&path) { roots.push(path); }
         }
     }
     roots
+}
+
+/// Authorization is the owner's exact location, independent of whether a
+/// checkout has been created there yet. Never infer an ancestor repository.
+fn scoped_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return None;
+    }
+    if path.exists() { return path.is_dir().then(|| path.canonicalize().ok()).flatten(); }
+    Some(path.components().filter(|c| !matches!(c, Component::CurDir)).collect())
+}
+
+fn reference_tokens(text: &str) -> Vec<&str> {
+    // Quoted references may contain spaces. Unquoted references end at
+    // whitespace, so an entire sentence starting with a path is never a root.
+    static REFERENCES: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = REFERENCES.get_or_init(|| regex::Regex::new(
+        r#"`[^`]*`|"[^"]*"|'[^']*'|[^\s]+"#).expect("reference token pattern"));
+    pattern.find_iter(text).map(|m| m.as_str().trim_matches(['"', '\'', '`'])
+        .trim_end_matches([',', ';', '.', ')', ']'])).collect()
+}
+
+fn declared_paths(text: &str) -> Vec<PathBuf> {
+    reference_tokens(text).into_iter().filter_map(|token| scoped_path(Path::new(token))).collect()
+}
+
+fn project_name_text(text: &str) -> String {
+    reference_tokens(text).into_iter().filter(|token| {
+        !Path::new(token).is_absolute() && !token.contains("://") && !token.starts_with("git@")
+    }).collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) fn checkout_diagnostic(root: &Path) -> Value {
+    let state = match std::fs::metadata(root) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing_directory",
+        Err(_) => "unavailable_directory",
+        Ok(meta) if !meta.is_dir() => "not_directory",
+        Ok(_) if root.join(".git").exists() => "git_checkout",
+        Ok(_) => match std::fs::read_dir(root) {
+            Ok(mut entries) => if entries.next().is_none() { "empty_directory" } else { "non_git_directory" },
+            Err(_) => "unavailable_directory",
+        },
+    };
+    json!({"repository":root,"authorized":true,"checkout_state":state,
+        "available_locally":state=="git_checkout",
+        "next_action":if state=="git_checkout" {"Inspect the exact checkout and existing project work before preparing a task."}
+        else {"The owner already supplied this exact path. Establish or restore its intended Git checkout, preserving any supplied remote, then retry this same root. This chat has no repository clone/bootstrap tool. Do not substitute a parent/company project, initialize unrelated history, or launch product work while prerequisites remain blocked."}})
 }
 /// The UI bounds recent model history, but keeps the owner's repository
 /// references from the whole thread. Resolve them locally; never replay old
@@ -84,9 +121,17 @@ fn conversation_context_in(
     entries: &[(String, String, String)],
     reviews: &[crate::repository_transfer::Transfer],
 ) -> (Vec<PathBuf>, Vec<Value>) {
-    let (mut allowed, context) = context_with_reviews(scope, entries, reviews);
-    for root in roots(scope) {
-        if !allowed.contains(&root) { allowed.push(root); }
+    let (mut allowed, mut context) = context_with_reviews(scope, entries, reviews);
+    for text in user_texts(scope) {
+        let remotes: Vec<_> = reference_tokens(&text).into_iter().filter(|token|
+            (token.contains("://") || token.starts_with("git@")) && token.ends_with(".git")).collect();
+        for root in declared_paths(&text) {
+            if !allowed.contains(&root) { allowed.push(root.clone()); }
+            let mut detail = checkout_diagnostic(&root);
+            detail["source"] = json!("owner_explicit_path");
+            detail["supplied_remotes"] = json!(remotes);
+            if !context.contains(&detail) { context.push(detail); }
+        }
     }
     (allowed, context)
 }
@@ -164,9 +209,7 @@ fn resolve_authorized_root(
     if !path.is_absolute() {
         return Err("The registered project has no absolute local repository path. Set its local source folder in project settings.".into());
     }
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Repository unavailable: {e}"))?;
+    let canonical = scoped_path(&path).ok_or("Repository path must be an absolute directory without parent traversal")?;
     if !allowed.contains(&canonical) {
         return Err("Repository root was not supplied by the user or resolved from a registered project they named. Ask for the project name or path; do not guess or broaden it.".into());
     }
@@ -192,9 +235,9 @@ fn resolve_registered(
     let mut allowed = Vec::new();
     let mut context = Vec::new();
     for (key, name, path) in entries {
-        let named = user_texts(messages).iter().any(|text| {
-            mentions(text, key)
-                || (mentions(text, name)
+        let named = user_texts(messages).iter().map(|text| project_name_text(text)).any(|text| {
+            mentions(&text, key)
+                || (mentions(&text, name)
                     && entries
                         .iter()
                         .filter(|(_, other, _)| other.eq_ignore_ascii_case(name))
@@ -205,17 +248,16 @@ fn resolve_registered(
             continue;
         }
         let root = Path::new(path);
-        let valid = root.is_absolute() && root.join(".git").exists();
-        let canonical = valid
-            .then(|| root.canonicalize().ok())
-            .flatten()
-            .filter(|p| p.is_dir());
+        let canonical = scoped_path(root);
         if let Some(root) = &canonical {
             if !allowed.contains(root) {
                 allowed.push(root.clone());
             }
         }
-        context.push(json!({"project":key,"name":name,"repository":canonical.as_ref().map(|p|p.to_string_lossy().to_string()).unwrap_or_else(||path.clone()),"available_locally":canonical.is_some()}));
+        let mut detail = canonical.as_ref().map(|p| checkout_diagnostic(p)).unwrap_or_else(|| json!({"repository":path,"authorized":false,"checkout_state":"invalid_local_path","available_locally":false}));
+        detail["project"] = json!(key);
+        detail["name"] = json!(name);
+        context.push(detail);
     }
     (allowed, context)
 }
@@ -358,6 +400,61 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    // XNAUT-474: the same durable-history path used by run_turn_streaming.
+    #[test]
+    fn saved_owner_scope_keeps_empty_checkout_and_remote_beyond_recent_window() {
+        let tmp = Scratch::new();
+        let root = tmp.path().join("Inventory Manager");
+        let invented = tmp.path().join("invented");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let remote = "ssh://git@forge.invalid:2222/48Nauts/InventoryManager.git";
+        let mut messages = vec![json!({"role":"user","text":format!("Use `{}` at `{}`. Mockups must be approved before product work.", remote, root.display())})];
+        for index in 0..40 { messages.push(json!({"role":"user","text":format!("Design discussion {index}")})); }
+        messages.push(json!({"role":"assistant","text":format!("Use {} instead",invented.display())}));
+        messages.push(json!({"role":"tool","text":format!("Use {}",invented.display())}));
+        messages.push(json!({"role":"user","text":"Please orchestrate the next steps"}));
+        let recent: Vec<_> = messages.iter().rev().take(16).map(|m| json!({"role":m["role"],"content":m["text"]})).collect();
+        assert!(conversation_context_in(&recent, &[], &[]).0.is_empty());
+        let history = crate::agent_history::from_thread("fixture", json!({"messages":messages})).unwrap();
+        let mut scope = recent;
+        scope.extend(history.owner_texts().into_iter().map(|text| json!({"role":"user","content":text})));
+        let entries = vec![("48NAUTS".into(), "48Nauts".into(), tmp.path().to_string_lossy().into_owned())];
+        let (allowed, context) = conversation_context_in(&scope, &entries, &[]);
+        assert_eq!(allowed, vec![root.clone()]);
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0]["checkout_state"], "empty_directory");
+        assert_eq!(context[0]["supplied_remotes"], json!([remote]));
+        assert!(history.owner_texts()[0].contains("Mockups must be approved"));
+        assert!(resolve_authorized_root("48NAUTS", &allowed, &entries).is_err());
+        assert!(resolve_authorized_root(invented.to_str().unwrap(), &allowed, &entries).is_err());
+        assert_eq!(resolve_authorized_root(root.to_str().unwrap(), &allowed, &entries).unwrap(), root);
+        assert!(!invented.exists());
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn explicit_missing_path_remains_scope_without_authorizing_parent_or_url_namespace() {
+        let tmp = Scratch::new();
+        let parent = tmp.path().canonicalize().unwrap();
+        let root = parent.join("missing");
+        let entries = vec![("48NAUTS".into(), "Company".into(), parent.to_string_lossy().into_owned())];
+        let messages = vec![json!({"role":"user","content":format!("{} then inspect ssh://git@forge.invalid/48NAUTS/app.git",root.display())})];
+        let (allowed, context) = conversation_context_in(&messages, &entries, &[]);
+        assert_eq!(allowed, vec![root.clone()]);
+        assert_eq!(context[0]["checkout_state"], "missing_directory");
+        assert!(resolve_authorized_root(parent.to_str().unwrap(), &allowed, &entries).is_err());
+        assert!(resolve_authorized_root("48NAUTS", &allowed, &entries).is_err());
+        for explicit in ["Inspect Company", "Review 48NAUTS-42"] {
+            let (named, _) = conversation_context_in(&[json!({"role":"user","content":explicit})], &entries, &[]);
+            assert_eq!(named, vec![parent.clone()]);
+        }
+        let collision = parent.join("48NAUTS").join("app");
+        let (path_only, _) = conversation_context_in(&[json!({"role":"user","content":collision})], &entries, &[]);
+        assert_eq!(path_only, vec![collision]);
+        assert!(!root.exists());
     }
 
     #[test]
@@ -538,7 +635,8 @@ mod tests {
             &[json!({"role":"user","content":"Review Missing"})],
             &missing,
         );
-        assert!(allowed.is_empty());
+        assert_eq!(allowed, vec![tmp.path().join("absent")]);
+        assert_eq!(context[0]["checkout_state"], "missing_directory");
         assert_eq!(context[0]["available_locally"], false);
     }
 

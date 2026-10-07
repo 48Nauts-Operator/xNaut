@@ -40,10 +40,41 @@ pub fn specs() -> Vec<Value> {
 
 fn authorize_root(root: &str, allowed: &[PathBuf]) -> Result<PathBuf, String> {
     let path = crate::repository_read::authorized_root(root, allowed)?;
-    if !path.join(".git").exists() {
-        return Err("A Git repository root is required; scratch folders are not worktrees.".into());
+    let diagnostic = work_checkout_diagnostic(&path);
+    if diagnostic["checkout_state"] != "git_checkout" {
+        return Err(format!("Authorized repository checkout is unavailable ({}): {}. Do not substitute another project or a parent directory.",
+            diagnostic["checkout_state"].as_str().unwrap_or("unknown"), path.display()));
     }
     Ok(path)
+}
+
+fn work_checkout_diagnostic(root: &Path) -> Value {
+    let mut diagnostic = crate::repository_read::checkout_diagnostic(root);
+    if diagnostic["checkout_state"] == "git_checkout" {
+        let actual = git(root, &["rev-parse", "--show-toplevel"])
+            .ok().and_then(|p| PathBuf::from(p).canonicalize().ok());
+        if actual.as_deref() != Some(root) {
+            diagnostic["checkout_state"] = json!("invalid_git_checkout");
+        } else if git(root, &["rev-parse", "--verify", "HEAD^{commit}"]).is_err() {
+            diagnostic["checkout_state"] = json!("unborn_repository");
+        }
+    }
+    diagnostic["available_locally"] = json!(diagnostic["checkout_state"] == "git_checkout");
+    diagnostic
+}
+
+fn checkout_refusal(root: &str, allowed: &[PathBuf]) -> Option<Value> {
+    let path = match crate::repository_read::authorized_root(root, allowed) {
+        Ok(path) => path,
+        Err(error) => return Some(json!({"ok":false,"code":"repository_scope_required","error":error,
+            "execution_started":false,"tracking_created":false})),
+    };
+    let mut diagnostic = work_checkout_diagnostic(&path);
+    if diagnostic["checkout_state"] == "git_checkout" { return None; }
+    diagnostic["next_action"] = json!("Preserve the supplied remote/path and current prerequisites. Establish or restore that exact Git checkout before preparing repository tickets or workers; this chat has no repository clone/bootstrap tool. Do not switch to a parent/company project, create unrelated Git history, or treat repository setup as approval to start product work.");
+    Some(json!({"ok":false,"code":"repository_checkout_unavailable",
+        "error":format!("The owner-authorized path {} is {}. No repository task was prepared or launched.",path.display(),diagnostic["checkout_state"].as_str().unwrap_or("unavailable")),
+        "repository":diagnostic,"execution_started":false,"tracking_created":false,"bootstrap_started":false}))
 }
 
 fn workspace_key(handle: &str, task_key: &str) -> String {
@@ -809,6 +840,16 @@ pub async fn execute(
     user_context: &str,
     history: Option<&crate::agent_history::History>,
 ) -> Value {
+    if name != "prepare_repository_ticket" {
+        if let Err(error) = required_ticket(args["ticket"].as_str()) {
+            return json!({"ok":false,"error":error});
+        }
+    }
+    // Diagnose the user's known location before mutable profile/PM/launch
+    // admission. An empty checkout is not missing user authorization.
+    if let Some(refusal) = checkout_refusal(args["root"].as_str().unwrap_or_default(), allowed) {
+        return refusal;
+    }
     if name == "prepare_repository_ticket" {
         return match prepare_ticket(args, handle, allowed).await {
             Ok(value) => value,
@@ -1110,6 +1151,55 @@ fn track_launch(ticket: &str, handle: &str, receipt: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    // XNAUT-474: exercise the actual public tool boundary before PM/profile lookup.
+    #[tokio::test]
+    async fn known_unavailable_checkout_is_diagnosed_without_tracking_or_launch() {
+        let temp = Temp::new();
+        let parent = temp.path().canonicalize().unwrap();
+        git(&parent, &["init", "-q"]).unwrap();
+        let empty = parent.join("Inventory Manager");
+        let missing = parent.join("not-created");
+        let non_git = parent.join("company");
+        std::fs::create_dir(&empty).unwrap();
+        std::fs::create_dir(&non_git).unwrap();
+        std::fs::write(non_git.join("notes.txt"), "preserved").unwrap();
+        let before = git(&parent, &["status", "--porcelain", "--untracked-files=all"]).unwrap();
+        for (root, state) in [(&empty, "empty_directory"), (&missing, "missing_directory"), (&non_git, "non_git_directory")] {
+            for tool in ["prepare_repository_ticket", "create_worktree", "start_repository_task"] {
+                let result = execute(tool, &json!({"root":root,"ticket":"APP-1","task_key":"fixed-scope","task":"Wait for approved mockups"}),
+                    "nonexistent-fixture-profile", std::slice::from_ref(root), "", None).await;
+                assert_eq!(result["code"], "repository_checkout_unavailable", "{result}");
+                assert_eq!(result["repository"]["repository"], json!(root));
+                assert_eq!(result["repository"]["checkout_state"], state);
+                assert_eq!(result["repository"]["authorized"], true);
+                for field in ["tracking_created", "execution_started", "bootstrap_started"] { assert_eq!(result[field], false); }
+            }
+        }
+        assert!(!missing.exists());
+        assert_eq!(std::fs::read_dir(&empty).unwrap().count(), 0);
+        assert_eq!(std::fs::read_to_string(non_git.join("notes.txt")).unwrap(), "preserved");
+        assert_eq!(git(&parent, &["status", "--porcelain", "--untracked-files=all"]).unwrap(), before);
+        let wrong = checkout_refusal(parent.to_str().unwrap(), &[empty]).unwrap();
+        assert_eq!(wrong["code"], "repository_scope_required");
+    }
+
+    #[test]
+    fn checkout_availability_rechecks_real_git_identity_and_initial_commit() {
+        let temp = Temp::new();
+        let root = temp.path().canonicalize().unwrap().join("future checkout");
+        let scope = vec![root.clone()];
+        assert_eq!(checkout_refusal(root.to_str().unwrap(), &scope).unwrap()["repository"]["checkout_state"], "missing_directory");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        assert_eq!(checkout_refusal(root.to_str().unwrap(), &scope).unwrap()["repository"]["checkout_state"], "invalid_git_checkout");
+        std::fs::remove_dir(root.join(".git")).unwrap();
+        git(&root, &["init", "-q"]).unwrap();
+        assert_eq!(checkout_refusal(root.to_str().unwrap(), &scope).unwrap()["repository"]["checkout_state"], "unborn_repository");
+        git(&root, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "baseline"]).unwrap();
+        assert!(checkout_refusal(root.to_str().unwrap(), &scope).is_none());
+        assert_eq!(authorize_root(root.to_str().unwrap(), &scope).unwrap(), root);
+    }
+
     fn prelaunch_fixture() -> (Temp, PathBuf, PathBuf, Value, crate::repository_transfer::Transfer) {
         let temp = Temp::new();
         let root = temp.path().join("repo");
