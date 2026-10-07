@@ -22,21 +22,21 @@ class DiscoveryTests(unittest.TestCase):
         filename = {
             "darwin-aarch64": "xNAUT-macos-aarch64.app.tar.gz",
             "darwin-x86_64": "xNAUT-macos-x64.app.tar.gz",
-            "windows-x86_64": "xNAUT-1.30.2-windows-x64.msi",
+            "windows-x86_64": "xNAUT-1.30.3-windows-x64.msi",
         }[target]
         manifest = {
-            "version": "1.30.2",
+            "version": "1.30.3",
             "platforms": {
                 target: {
-                    "url": f"https://github.com/48Nauts/xnaut/releases/download/v1.30.2/{filename}",
+                    "url": f"https://github.com/48Nauts/xnaut/releases/download/v1.30.3/{filename}",
                     "signature": "published-signature",
                 }
             },
         }
         return {
-            "appVersion": "1.29.3",
-            "currentVersion": "1.29.3",
-            "version": "1.30.2",
+            "appVersion": "1.30.2",
+            "currentVersion": "1.30.2",
+            "version": "1.30.3",
             "available": True,
             "resourceClosed": True,
             "mechanism": "tauri-plugin-updater",
@@ -170,7 +170,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_no_fallback_wrong_version_or_unclosed_resource(self):
         for key, invalid in [
-            ("appVersion", "1.30.2"),
+            ("appVersion", "1.30.3"),
             ("currentVersion", "1.29.2"),
             ("version", "1.31.0"),
             ("available", False),
@@ -194,7 +194,7 @@ class DiscoveryTests(unittest.TestCase):
                     value, feed, "48Nauts/xnaut", "darwin-aarch64"
                 )
         value, feed = self.values()
-        value["rawJson"]["version"] = "1.29.3"
+        value["rawJson"]["version"] = "1.30.2"
         with self.assertRaises(RuntimeError):
             module.validate_discovery(value, feed, "48Nauts/xnaut", "darwin-aarch64")
         value, feed = self.values()
@@ -203,7 +203,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_public_release_rejects_draft_prerelease_and_unpublished(self):
         valid = {
-            "tag_name": "v1.30.2",
+            "tag_name": "v1.30.3",
             "published_at": "2026-10-06T00:00:00Z",
             "draft": False,
             "prerelease": False,
@@ -225,11 +225,11 @@ class DiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             path = Path(scratch)
             row = {
-                "tag_name": "v1.29.3",
+                "tag_name": "v1.30.2",
                 "assets": [
                     {
                         "name": "old.msi",
-                        "browser_download_url": "https://github.com/48Nauts/xnaut/releases/download/v1.29.3/old.msi",
+                        "browser_download_url": "https://github.com/48Nauts/xnaut/releases/download/v1.30.2/old.msi",
                         "digest": "sha256:wrong",
                     }
                 ],
@@ -271,9 +271,9 @@ class DiscoveryTests(unittest.TestCase):
           const expression=EXPRESSION;
           async function trial(closeFails) {
             const calls=[];
-            global.window={__TAURI__:{app:{getVersion:async()=> '1.29.3'},updater:{
+            global.window={__TAURI__:{app:{getVersion:async()=> '1.30.2'},updater:{
               check:async(options)=> {calls.push(options); return {available:true,
-                currentVersion:'1.29.3',version:'1.30.2',rawJson:{version:'1.30.2'},
+                currentVersion:'1.30.2',version:'1.30.3',rawJson:{version:'1.30.3'},
                 close:async()=>{calls.push('closed');if(closeFails)throw Error('close failed');}};}
             }}};
             try {
