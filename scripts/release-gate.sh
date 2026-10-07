@@ -43,6 +43,15 @@ if [ -z "$COMMIT_SHA" ] || [ -z "$COMMIT_EPOCH" ]; then
   exit 2
 fi
 
+# GUI launch evidence alone did not catch the 1.30.2 dispatch regression.
+# Require the native + browser behavior gate for this exact clean candidate too.
+BEHAVIOR_REPORT="${BEHAVIOR_REPORT:-artifacts/release-behavior/result.json}"
+GATE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if ! node "$GATE_SCRIPT_DIR/release-behavior.mjs" --verify "$BEHAVIOR_REPORT" "$COMMIT_SHA"; then
+  echo "REFUSED: run npm run test:release on the clean release candidate before releasing." >&2
+  exit 1
+fi
+
 VERSION="$VERSION" COMMIT_SHA="$COMMIT_SHA" COMMIT_EPOCH="$COMMIT_EPOCH" RUNS="$RUNS" python3 - <<'PYGATE'
 import datetime as dt
 import glob

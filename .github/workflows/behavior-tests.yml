@@ -1,0 +1,49 @@
+name: Release behavior contracts
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: ['**']
+
+permissions:
+  contents: read
+
+jobs:
+  behavior:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: behavior-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+      - run: npm ci
+      - run: npx playwright install chromium
+      - name: Verify release behavior on this exact checkout
+        run: node scripts/release-behavior.mjs
+      - name: Retain test outcomes, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behavior-${{ matrix.os }}-${{ github.sha }}
+          path: artifacts/release-behavior
+          if-no-files-found: error

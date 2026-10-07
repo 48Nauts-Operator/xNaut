@@ -56,13 +56,50 @@ impl DispatchRefusal {
 }
 
 pub(crate) fn automatic_admission(ticket: &str, project: &str) -> Result<(), DispatchRefusal> {
-    let refuse = |kind, reason| DispatchRefusal { kind, reason };
     if crate::switches::load().read_only || !crate::instance::role().dispatches() {
-        return Err(refuse(
-            RefusalKind::Policy,
-            "read_only or instance role prohibits automatic dispatch".into(),
-        ));
+        return Err(DispatchRefusal {
+            kind: RefusalKind::Policy,
+            reason: "read_only or instance role prohibits automatic dispatch".into(),
+        });
     }
+    ticket_admission(ticket, project)
+}
+
+/// An approved remote group is controlled from the owner's workstation, while
+/// its workers execute at the pinned provider. This does not authorize the
+/// workstation to pick up arbitrary tickets or start local workers.
+pub(crate) fn approved_dispatch_policy(
+    role: crate::instance::Role,
+    read_only: bool,
+    environment: Option<&str>,
+) -> Result<(), DispatchRefusal> {
+    use crate::{instance::Role, sandbox::launch_env::LaunchEnv};
+    let reason = if read_only {
+        Some("the read_only kill-switch is engaged")
+    } else {
+        match role {
+            Role::Fleet => None,
+            Role::Workstation if matches!(environment.and_then(LaunchEnv::from_key),
+                Some(LaunchEnv::ExeDev | LaunchEnv::GitVm)) => None,
+            Role::Workstation => Some("This plan requires local execution. Choose exe.dev or GitVM to run approved work remotely from this workstation."),
+            Role::Sandbox => Some("This sandbox verifies work; it cannot dispatch a swarm. Approve remote work from the owner's workstation or a Fleet instance."),
+        }
+    };
+    match reason {
+        Some(reason) => Err(DispatchRefusal { kind: RefusalKind::Policy, reason: reason.into() }),
+        None => Ok(()),
+    }
+}
+
+pub(crate) fn approved_group_admission(
+    ticket: &str, project: &str, environment: Option<&str>,
+) -> Result<(), DispatchRefusal> {
+    approved_dispatch_policy(crate::instance::role(), crate::switches::load().read_only, environment)?;
+    ticket_admission(ticket, project)
+}
+
+fn ticket_admission(ticket: &str, project: &str) -> Result<(), DispatchRefusal> {
+    let refuse = |kind, reason| DispatchRefusal { kind, reason };
     if let Some(reason) = crate::housekeeper::launch_floor() {
         return Err(refuse(RefusalKind::Capacity, reason));
     }
@@ -403,6 +440,13 @@ async fn dispatch_with_findings_gate(
         &sandboxes,
     );
     destination.route(&sandboxes)?;
+    if let Some(run) = approved {
+        approved_dispatch_policy(crate::instance::role(), crate::switches::load().read_only,
+            run.environment.as_deref()).map_err(|refusal| refusal.reason)?;
+        if run.environment.as_deref() != Some(destination.key()) {
+            return Err("approved execution destination changed before dispatch".into());
+        }
+    }
 
     if !crate::run_control::runtime_meets_in(
         &crate::agents::registry_dir()?,

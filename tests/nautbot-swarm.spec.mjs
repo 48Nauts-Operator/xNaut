@@ -76,13 +76,51 @@ test('a swarm plan arrives as a card and dispatches nothing until it is confirme
   expect(await page.evaluate(() => window.__xnautErrors)).toEqual([]);
 });
 
-test('the plan exposes a workstation dispatch hold before confirmation', async ({ page }) => {
+test('a local plan explains why this workstation cannot execute it', async ({ page }) => {
   await openNautbot(page);
   await page.evaluate(() => { window.__xnautInvokes.length = 0; });
   await page.evaluate((plan) => window.__xnautEmit('swarm-plan-proposed', { agent_id: 'nautbot', plan }),
-    { ...PLAN, dispatch_hold: 'This instance has the workstation role, so its swarm queue cannot dispatch.' });
-  await expect(page.locator('.as-swarm')).toContainText('workstation role');
+    { ...PLAN, dispatch_hold: 'This plan requires local execution. Choose exe.dev or GitVM to run approved work remotely from this workstation.' });
+  await expect(page.locator('.as-swarm')).toContainText('Choose exe.dev or GitVM');
   expect(await page.evaluate(() => window.__xnautInvokes.some((i) => i.cmd === 'swarm_plan_dispatch'))).toBe(false);
+});
+
+for (const startedCount of [0, 3]) {
+  test(`five-ticket swarm keeps ${5 - startedCount} queued tickets visible after confirmation and reload`, async ({ page }) => {
+    await openNautbot(page);
+    const plan = { ...PLAN, id: 'swarm-five', skipped: [], runs: Array.from({ length: 5 }, (_, i) =>
+      ({ ...PLAN.runs[0], ticket: `SMOKE-${i + 1}`, environment: 'exe-dev' })) };
+    await page.evaluate(({ plan, startedCount }) => {
+      window.__xnautInvokes.length = 0;
+      window.__xnautStub.swarm_plan_dispatch = {
+        plan_id: plan.id, project: plan.project, total: 5,
+        started: plan.runs.slice(0, startedCount),
+        queued: plan.runs.slice(startedCount).map(r => r.ticket), failed: [],
+      };
+      window.__xnautEmit('swarm-plan-proposed', { agent_id: 'nautbot', plan });
+    }, { plan, startedCount });
+    const card = page.locator('.as-swarm');
+    await card.getByRole('button', { name: 'Dispatch 5 agents' }).click();
+    await expect(card).toContainText(`Started ${startedCount}; queued ${5 - startedCount}; blocked 0`);
+    await expect(card.locator('.as-swarm-run')).toHaveCount(5);
+    expect(await page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'swarm_plan_dispatch').length)).toBe(1);
+    await openNautbot(page);
+    await expect(page.locator('[data-swarm]').last()).toContainText(`Started ${startedCount}; queued ${5 - startedCount}; blocked 0`);
+    expect(await page.evaluate(() => window.__xnautInvokes.some(i => i.cmd === 'swarm_plan_dispatch'))).toBe(false);
+  });
+}
+
+test('dispatch refusal is shown on the plan without claiming that workers started', async ({ page }) => {
+  await openNautbot(page);
+  await page.evaluate(plan => {
+    window.__xnautStub.swarm_plan_dispatch = { __reject: 'Repository changed since approval; review the updated plan.' };
+    window.__xnautEmit('swarm-plan-proposed', { agent_id: 'nautbot', plan });
+  }, PLAN);
+  const card = page.locator('.as-swarm');
+  await card.getByRole('button', { name: 'Dispatch 2 agents' }).click();
+  await expect(card).toContainText('Not dispatched: Repository changed since approval');
+  await expect(card).not.toContainText('Watch them in the Observatory');
+  await expect(card.locator('.as-swarm-run')).toHaveCount(2);
 });
 
 test('the Observatory reads dispatched runs from the registry, grouped by project', async ({ page }) => {

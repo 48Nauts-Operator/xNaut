@@ -24,6 +24,10 @@ START = dt.datetime.fromtimestamp(EPOCH, dt.timezone.utc)
 def stamp(seconds):
     return (START + dt.timedelta(seconds=seconds)).strftime('%Y-%m-%dT%H:%M:%SZ')
 BINARY = 'a' * 64
+BEHAVIOR_SHAPE = json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
+    "import {nativeSuites,requiredNative,browserFiles} from './scripts/release-behavior.mjs'; "
+    "console.log(JSON.stringify({native:[...nativeSuites.map(s=>s+'fixture'),...requiredNative],browser:browserFiles.map(file=>({file,title:'fixture'}))}));"],
+    cwd=REPO, text=True))
 NATIVE_IDS = ['identity', 'sidebar', 'right-pane', 'snippets', 'browser', 'markdown', 'diff',
               'workspace', 'worktrees', 'more', 'help', 'settings', 'roster', 'refresh-usage', 'restore']
 NATIVE_IDS += ['settings-' + key for key in ['ai','voice','tasksmode','appearance','shortcuts','mobile',
@@ -43,14 +47,22 @@ class Gate(unittest.TestCase):
         self.root = self.runs / 'fixture-host' / 'fixture'
         self.root.mkdir(parents=True)
         self.record = summary()
+        self.behavior_path = self.runs / 'behavior.json'
+        self.behavior = {**BEHAVIOR_SHAPE, 'source_commit':SOURCE, 'working_tree_changes':'',
+            'started_at':stamp(0), 'finished_at':stamp(31), 'scope':'native-and-browser', 'status':'passed'}
 
     def call(self, expected=False):
         (self.root / 'run.json').write_text(json.dumps(self.record))
+        if self.behavior is None:
+            self.behavior_path.unlink(missing_ok=True)
+        else:
+            self.behavior_path.write_text(json.dumps(self.behavior))
         result = subprocess.run(['bash', str(REPO/'scripts/release-gate.sh'), '1.30.0', SOURCE], cwd=REPO,
-            env={**os.environ, 'RUNS':str(self.runs), 'BINARY_SHA256':BINARY}, text=True, capture_output=True)
+            env={**os.environ, 'RUNS':str(self.runs), 'BINARY_SHA256':BINARY,
+                 'BEHAVIOR_REPORT':str(self.behavior_path)}, text=True, capture_output=True)
         self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
         if not expected:
-            self.assertIn('REFUSED:', result.stdout)
+            self.assertIn('REFUSED:', result.stdout + result.stderr)
         return result
 
     def native(self):
@@ -72,6 +84,17 @@ class Gate(unittest.TestCase):
 
     def test_provenanced_legacy_summary_passes(self):
         self.call(True)
+
+    def test_behavior_evidence_is_mandatory_even_with_a_passing_gui_walk(self):
+        original = dict(self.behavior)
+        for native in [False, True]:
+            if native:
+                self.native()
+            for change in [{'status':'failed'}, {'status':'partial'}, {'scope':'native-only'},
+                           {'source_commit':'b'*40}, {'working_tree_changes':' M source.rs'},
+                           {'native':[]}, {'browser':[]}]:
+                self.behavior = {**original, **change}; self.call()
+            self.behavior = None; self.call()
 
     def test_empty_missing_malformed_duplicate_or_incomplete_cases_refuse(self):
         for cases in [None, [], {}, 'passed', [None], [{}], [{'id':'launch','status':'passed'}],

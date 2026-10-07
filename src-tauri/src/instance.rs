@@ -16,7 +16,7 @@
 // `loops.dispatch_here` (XNAUT-358) answered exactly one question: may this
 // machine start agents. It was the right answer to the wrong question, because
 // the machines differ in more than one way. tron dispatches AND verifies; the
-// Studio is where the owner plans and reviews and must never launch anything;
+// Studio is where the owner plans and reviews and must never start local workers;
 // a headless box exists to verify and nothing else. One boolean cannot say
 // that, and three booleans would be three chances to configure a contradiction.
 //
@@ -25,6 +25,8 @@
 // which is the conservative direction — a machine whose purpose is unclear must
 // not start agents on somebody's desk. The ticket keeps waiting and the ledger
 // says why, which is a visible failure rather than a dangerous one.
+// Approved remote swarms are a distinct case: dispatch::approved_dispatch_policy
+// permits the workstation to coordinate them without changing its automatic role.
 //
 // The old key stays honoured and stays on disk for one release (see
 // `adopt_role`), so a settings file written here still reads correctly in a
@@ -50,7 +52,9 @@ pub enum Role {
     /// Dispatches and verifies. The fleet: tron, and any box whose job is to
     /// run the work rather than to be looked at.
     Fleet,
-    /// Plans and reviews, and NEVER dispatches. The owner's desk. It does not
+    /// Plans and reviews; never picks up tickets or starts local swarm workers.
+    /// Explicitly approved remote groups use dispatch::approved_dispatch_policy.
+    /// The owner's desk. It does not
     /// verify either: a verification is a run, and the reason this role exists
     /// is that runs must not start here.
     Workstation,
@@ -60,7 +64,8 @@ pub enum Role {
 }
 
 impl Role {
-    /// May this machine start agents? Only the fleet.
+    /// May this machine autonomously pick up tickets? Only the fleet.
+    /// Approved remote groups have a separate destination-aware policy.
     pub fn dispatches(self) -> bool {
         matches!(self, Self::Fleet)
     }
@@ -262,7 +267,7 @@ mod tests {
         // table is stated once, here, and cannot be configured into a
         // contradiction.
         assert!(Role::Fleet.dispatches() && Role::Fleet.verifies());
-        assert!(!Role::Workstation.dispatches(), "the owner's desk never launches");
+        assert!(!Role::Workstation.dispatches(), "the owner's desk never picks up unattended tickets");
         assert!(!Role::Workstation.verifies(), "a verification is a run too");
         assert!(!Role::Sandbox.dispatches(), "a sandbox box has no board to dispatch from");
         assert!(Role::Sandbox.verifies());

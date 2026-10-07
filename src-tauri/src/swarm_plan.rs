@@ -814,12 +814,12 @@ fn resolve_environment(
     Ok(destination)
 }
 
-fn ensure_dispatch_role(role: crate::instance::Role) -> Result<(), String> {
-    if role.dispatches() {
-        Ok(())
-    } else {
-        Err(format!("This instance has the {} role, so its swarm queue cannot dispatch. No new approval or worker was created. Dispatch from a Fleet instance with this plan available; do not change roles or regenerate the plan to bypass this restriction.", role.as_str()))
+fn ensure_dispatch_role(role: crate::instance::Role, plan: &SwarmPlan) -> Result<(), String> {
+    for run in &plan.runs {
+        crate::dispatch::approved_dispatch_policy(role, false, run.environment.as_deref())
+            .map_err(|refusal| format!("{}: {}", run.ticket, refusal.reason))?;
     }
+    Ok(())
 }
 
 pub fn build_with_environment(
@@ -884,7 +884,7 @@ pub fn build_with_environment(
             .find(|p| p.key == project)
             .map(|p| p.forge_remote.clone());
     }
-    plan.dispatch_hold = ensure_dispatch_role(crate::instance::role()).err();
+    plan.dispatch_hold = ensure_dispatch_role(crate::instance::role(), &plan).err();
     Ok(plan)
 }
 
@@ -1000,29 +1000,35 @@ pub(crate) fn model_group_requires_triage(project: &str, ticket: &str) -> Result
 }
 
 async fn dispatch_plan_from(app: tauri::AppHandle, plan_id: &str, model_origin: bool) -> Result<SwarmDispatched,String> {
-    if crate::switches::load().read_only {
-        return Err("the read_only kill-switch is engaged".into());
-    }
-    ensure_dispatch_role(crate::instance::role())?;
     let registry = crate::agents::registry_dir()?;
-    {
-        let _lease = GroupLease::acquire(&registry)?;
-        let path = path_in(&registry, plan_id)?;
-        let mut group: Group =
-            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
-        if group.stopped_at.is_some() {
-            return Err("group was stopped; a new exact scope approval is required".into());
-        }
-        approve_from(&mut group,model_origin,crate::run_control::now_ms(),crate::ticket_triage::admit_current_ticket)?;
-        save_in(&registry, &group)?;
-    }
+    confirm_in(&registry, plan_id, model_origin, crate::instance::role(),
+        crate::switches::load().read_only, crate::ticket_triage::admit_current_ticket)?;
     refill(&app).await?;
     groups_in(&registry, None)?
         .iter()
         .find(|g| g.plan.id == plan_id)
         .map(report)
         .ok_or_else(|| "plan disappeared".into())
+}
+
+/// The card and model tool share this exact persisted approval boundary.
+fn confirm_in(
+    registry: &Path, plan_id: &str, model_origin: bool, role: crate::instance::Role,
+    read_only: bool, admit: impl FnMut(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    if read_only {
+        return Err("the read_only kill-switch is engaged".into());
+    }
+    let _lease = GroupLease::acquire(registry)?;
+    let path = path_in(registry, plan_id)?;
+    let mut group: Group = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if group.stopped_at.is_some() {
+        return Err("group was stopped; a new exact scope approval is required".into());
+    }
+    ensure_dispatch_role(role, &group.plan)?;
+    approve_from(&mut group, model_origin, crate::run_control::now_ms(), admit)?;
+    save_in(registry, &group)
 }
 
 /// Returns every approved membership, including blocked members: ordinary fleet
@@ -1198,7 +1204,7 @@ impl RefillBackend for NativeRefill<'_> {
         run: &PlannedRun,
         project: &str,
     ) -> Result<(), crate::dispatch::DispatchRefusal> {
-        crate::dispatch::automatic_admission(&run.ticket, project)?;
+        crate::dispatch::approved_group_admission(&run.ticket, project, run.environment.as_deref())?;
         let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())
             .map_err(crate::dispatch::DispatchRefusal::uncertain)?;
         if profile.model != run.model {
@@ -1255,22 +1261,25 @@ fn block_local(
 }
 
 pub(crate) async fn refill(app: &tauri::AppHandle) -> Result<(), String> {
-    if crate::switches::load().read_only || !crate::instance::role().dispatches() {
-        return Ok(());
-    }
     let registry = crate::agents::registry_dir()?;
     let _lease = GroupLease::acquire(&registry)?;
     let repo = crate::project_management::repo_now()?;
     let tickets = crate::project_management::ticket_list_in(&repo, None)?;
     crate::project_management::list_projects(&repo)?; // shared PM integrity, before any dispatch
-    refill_in(&registry, &tickets, &NativeRefill(app)).await
+    refill_in(&registry, &tickets, &NativeRefill(app), crate::instance::role(),
+        crate::switches::load().read_only).await
 }
 
 async fn refill_in(
     registry: &Path,
     tickets: &[TicketRecord],
     backend: &impl RefillBackend,
+    role: crate::instance::Role,
+    read_only: bool,
 ) -> Result<(), String> {
+    if read_only || role == crate::instance::Role::Sandbox {
+        return Ok(());
+    }
     // Corrupt shared run/group registries remain global failures. Do not hide
     // them as a missing member profile and launch around uncertain occupancy.
     crate::run_control::worker_count_in(registry)?;
@@ -1351,6 +1360,12 @@ async fn refill_in(
                 continue;
             }
             if group.members[i].state != MemberState::Queued {
+                continue;
+            }
+            if let Err(refusal) = crate::dispatch::approved_dispatch_policy(role, read_only, run.environment.as_deref()) {
+                group.members[i].refusal = Some(refusal.clone());
+                transition(&mut group, i, MemberState::Blocked, refusal.reason, None, now);
+                save_in(registry, &group)?;
                 continue;
             }
             if current.is_none_or(|t| !is_open(&t.status)) {
@@ -1561,15 +1576,17 @@ mod tests {
     }
 
     #[test]
-    fn non_dispatching_roles_return_an_actionable_refusal() {
+    fn approved_remote_dispatch_policy_preserves_local_and_automatic_restrictions() {
         use crate::instance::Role;
-        assert!(ensure_dispatch_role(Role::Fleet).is_ok());
-        for role in [Role::Workstation, Role::Sandbox] {
-            let error = ensure_dispatch_role(role).unwrap_err();
-            assert!(error.contains(role.as_str()));
-            assert!(error.contains("No new approval or worker"));
-            assert!(error.contains("Fleet"));
+        for environment in [None, Some("local"), Some("exe-dev"), Some("gitvm"), Some("unknown")] {
+            for role in [Role::Fleet, Role::Workstation, Role::Sandbox] {
+                let remote = matches!(environment, Some("exe-dev" | "gitvm"));
+                let allowed = role == Role::Fleet || (role == Role::Workstation && remote);
+                assert_eq!(crate::dispatch::approved_dispatch_policy(role, false, environment).is_ok(), allowed);
+                assert!(crate::dispatch::approved_dispatch_policy(role, true, environment).is_err());
+            }
         }
+        assert!(!Role::Workstation.dispatches(), "unattended dispatch is still Fleet-only");
     }
 
     fn ticket(id: &str, project: &str, status: &str, owner: Option<&str>) -> TicketRecord {
@@ -2183,6 +2200,24 @@ mod tests {
         launched: std::sync::Mutex<Vec<String>>,
     }
     impl RefillFixture {
+        fn five_remote(environment: &str) -> Self {
+            let registry = scratch();
+            let tickets: Vec<_> = (2..=6).map(|n|
+                ticket(&format!("FORCASTER-{n}"), "FORCASTER", "ready", Some("codex"))).collect();
+            let mut plan = plan_from("remote", "FORCASTER", &[],
+                &board(&tickets, &models(), &HashSet::new()), 3, 0).unwrap();
+            for run in &mut plan.runs {
+                run.requested_environment = Some(environment.into());
+                run.environment = Some(environment.into());
+            }
+            remember_in(&registry, plan).unwrap();
+            std::fs::create_dir_all(registry.join("profiles")).unwrap();
+            std::fs::write(registry.join("profiles/codex.json"),
+                serde_json::to_vec(&serde_json::json!({"model": models()["codex"]})).unwrap()).unwrap();
+            Self { registry, tickets, fail_reconcile: None, fail_snapshot: None,
+                launched: std::sync::Mutex::new(vec![]) }
+        }
+
         fn new() -> Self {
             let registry = scratch();
             let tickets = vec![
@@ -2308,6 +2343,7 @@ mod tests {
                 );
                 manifest.branch = run.branch.clone();
                 manifest.project = project;
+                manifest.remote_env = run.environment.clone();
                 let own = manifest.run_id.clone();
                 let registered = crate::run_control::request_in(&self.registry, manifest, || {
                     crate::run_control::worker_capacity_in(&self.registry, 8, &own, None)
@@ -2320,11 +2356,130 @@ mod tests {
                     worktree_path: worktree,
                     session_id: format!("fixture-{}", registered.run_id),
                     run_id: Some(registered.run_id),
-                    environment: "fixture".into(),
+                    environment: run.environment.unwrap_or_else(|| "fixture".into()),
                     ticket_scope: run.scope,
                 })
             })
         }
+    }
+
+    #[tokio::test]
+    async fn workstation_remote_swarm_approval_restart_refill_and_duplicate_confirmation() {
+        use crate::{instance::Role, run_control::{self, RunState}};
+        // Both confirmation entry points and both remote providers exercise the
+        // production approval store, queue, policy, capacity and run registry.
+        for environment in ["exe-dev", "gitvm"] {
+            for model_origin in [false, true] {
+                let fixture = RefillFixture::five_remote(environment);
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+                assert!(fixture.launched.lock().unwrap().is_empty(), "unapproved work must not launch");
+                confirm_in(&fixture.registry, "remote", model_origin, Role::Workstation, false, |_, _| Ok(())).unwrap();
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+                let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+                let result = report(&group).tool_result();
+                assert_eq!(result["total"], 5);
+                assert_eq!(result["started"].as_array().unwrap().len(), 3);
+                assert_eq!(result["queued"].as_array().unwrap().len(), 2);
+                assert_eq!(result["failed"].as_array().unwrap().len(), 0);
+                let originals: Vec<_> = group.members.iter().filter_map(|m| m.run_id.clone()).collect();
+                for _ in 0..2 {
+                    confirm_in(&fixture.registry, "remote", model_origin, Role::Workstation, false, |_, _| Ok(())).unwrap();
+                    refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+                }
+                assert_eq!(fixture.launched.lock().unwrap().len(), 3, "repeat confirmation cannot launch duplicates");
+                // Finish one worker. Reloading the persisted group must fill
+                // exactly that slot, preserving every previous run identity.
+                run_control::update_in(&fixture.registry, &originals[0], |r| r.state = RunState::Done).unwrap();
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+                assert_eq!(fixture.launched.lock().unwrap().len(), 4);
+                run_control::update_in(&fixture.registry, &originals[1], |r| r.state = RunState::Done).unwrap();
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+                let reopened = groups_in(&fixture.registry, None).unwrap().remove(0);
+                assert_eq!(fixture.launched.lock().unwrap().len(), 5);
+                assert!(report(&reopened).queued.is_empty());
+                assert_eq!(reopened.approved_at, group.approved_at);
+                assert_eq!(reopened.members.iter().take(3).filter_map(|m| m.run_id.clone()).collect::<Vec<_>>(), originals);
+                let ids = run_control::list_ids_in(&fixture.registry).unwrap();
+                assert_eq!(ids.len(), 5);
+                for id in ids {
+                    assert_eq!(run_control::load_manifest_in(&fixture.registry, &id).unwrap().remote_env.as_deref(), Some(environment));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn workstation_swarm_rejects_local_mixed_missing_and_unknown_destinations_before_approval() {
+        use crate::instance::Role;
+        for destination in [None, Some("local"), Some("unknown")] {
+            let fixture = RefillFixture::five_remote("exe-dev");
+            let mut group = groups_in(&fixture.registry, None).unwrap().remove(0);
+            group.plan.runs[4].environment = destination.map(str::to_owned);
+            save_in(&fixture.registry, &group).unwrap();
+            assert!(confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).is_err());
+            assert!(groups_in(&fixture.registry, None).unwrap()[0].approved_at.is_none());
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            assert!(fixture.launched.lock().unwrap().is_empty());
+        }
+        let fixture = RefillFixture::five_remote("local");
+        confirm_in(&fixture.registry, "remote", false, Role::Fleet, false, |_, _| Ok(())).unwrap();
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        let result = report(&groups_in(&fixture.registry, None).unwrap()[0]).tool_result();
+        assert_eq!(result["failed"].as_array().unwrap().len(), 5);
+        assert!(fixture.launched.lock().unwrap().is_empty(), "legacy local approvals cannot start on this workstation");
+    }
+
+    #[tokio::test]
+    async fn swarm_read_only_sandbox_and_stop_preserve_queued_work_without_launching() {
+        use crate::instance::Role;
+        let fixture = RefillFixture::five_remote("exe-dev");
+        for (role, read_only) in [(Role::Workstation, true), (Role::Sandbox, false)] {
+            assert!(confirm_in(&fixture.registry, "remote", false, role, read_only, |_, _| Ok(())).is_err());
+            assert!(groups_in(&fixture.registry, None).unwrap()[0].approved_at.is_none());
+        }
+        confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+        let before = std::fs::read(path_in(&fixture.registry, "remote").unwrap()).unwrap();
+        for (role, read_only) in [(Role::Workstation, true), (Role::Sandbox, false)] {
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, role, read_only).await.unwrap();
+            assert_eq!(std::fs::read(path_in(&fixture.registry, "remote").unwrap()).unwrap(), before);
+        }
+        let mut group = groups_in(&fixture.registry, None).unwrap().remove(0);
+        stop(&mut group, 100);
+        save_in(&fixture.registry, &group).unwrap();
+        assert!(confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).is_err());
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        assert!(fixture.launched.lock().unwrap().is_empty());
+        assert_eq!(groups_in(&fixture.registry, None).unwrap()[0].members.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn swarm_changed_ticket_scope_blocks_only_affected_member() {
+        use crate::instance::Role;
+        let mut fixture = RefillFixture::five_remote("exe-dev");
+        confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+        fixture.tickets[0].body.push_str("changed instructions after approval");
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+        assert_eq!(group.members[0].state, MemberState::Blocked);
+        assert!(group.members[0].reason.contains("scope"));
+        assert_eq!(report(&group).started.len(), 3);
+        assert_eq!(report(&group).queued.len(), 1);
+        assert_eq!(group.members.len(), 5);
+        assert!(!fixture.launched.lock().unwrap().contains(&fixture.tickets[0].id));
+    }
+
+    #[tokio::test]
+    async fn swarm_model_confirmation_failure_cannot_partially_approve_or_launch() {
+        use crate::instance::Role;
+        let fixture = RefillFixture::five_remote("exe-dev");
+        assert!(confirm_in(&fixture.registry, "remote", true, Role::Workstation, false, |_, ticket| {
+            if ticket == "FORCASTER-6" { Err("finding needs review".into()) } else { Ok(()) }
+        }).is_err());
+        let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+        assert!(group.approved_at.is_none());
+        assert!(group.events.is_empty());
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        assert!(fixture.launched.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2345,7 +2500,7 @@ mod tests {
                     "project recovery source unavailable"
                 }
             };
-            refill_in(&fixture.registry, &fixture.tickets, &fixture)
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, crate::instance::Role::Fleet, false)
                 .await
                 .unwrap();
             let first = groups_in(&fixture.registry, None).unwrap();
@@ -2367,7 +2522,7 @@ mod tests {
                 .count();
             for _ in 0..2 {
                 // Reloading is performed inside the production loop each pass.
-                refill_in(&fixture.registry, &fixture.tickets, &fixture)
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, crate::instance::Role::Fleet, false)
                     .await
                     .unwrap();
             }
@@ -2404,7 +2559,7 @@ mod tests {
     async fn refill_keeps_shared_native_registry_corruption_fail_closed() {
         let fixture = RefillFixture::new();
         std::fs::write(fixture.registry.join("corrupt.run.json"), b"{broken").unwrap();
-        assert!(refill_in(&fixture.registry, &fixture.tickets, &fixture)
+        assert!(refill_in(&fixture.registry, &fixture.tickets, &fixture, crate::instance::Role::Fleet, false)
             .await
             .is_err());
         assert!(fixture.launched.lock().unwrap().is_empty());

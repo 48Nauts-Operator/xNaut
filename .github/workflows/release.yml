@@ -16,8 +16,13 @@ on:
         default: false
 
 jobs:
+  behavior-tests:
+    if: ${{ !inputs.update_homebrew_only }}
+    uses: ./.github/workflows/behavior-tests.yml
+
   build-and-release:
     if: ${{ !inputs.update_homebrew_only }}
+    needs: behavior-tests
     strategy:
       fail-fast: false
       matrix:
