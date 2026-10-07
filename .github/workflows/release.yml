@@ -332,6 +332,7 @@ jobs:
     uses: ./.github/workflows/macos-smoke.yml
     with:
       tag: ${{ github.ref_name }}
+      application_sha: ${{ github.sha }}
 
   # Keep the Homebrew cask in step with the release. It drifted to 1.9.4 while
   # four versions shipped, so brew users sat on a build without either half of

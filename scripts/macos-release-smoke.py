@@ -144,6 +144,57 @@ def verify_updater(distribution, tag, arch, config, openssl):
             )
 
 
+def release_metadata(repo, tag):
+    # GitHub's release-by-tag endpoint does not expose draft releases. The CLI
+    # resolves drafts too; retain exact tag and numeric ID binding on both reads.
+    require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag), "Invalid release tag")
+    selected = json.loads(
+        command(
+            "gh", "release", "view", tag, "--repo", repo, "--json", "databaseId,tagName"
+        )
+    )
+    release_id = selected.get("databaseId")
+    require(
+        type(release_id) is int and release_id > 0 and selected.get("tagName") == tag,
+        "Release lookup did not resolve the exact tag and numeric ID",
+    )
+    release = json.loads(command("gh", "api", f"repos/{repo}/releases/{release_id}"))
+    require(
+        release.get("id") == release_id
+        and release.get("tag_name") == tag
+        and not release.get("prerelease"),
+        "Release metadata differs from the selected candidate",
+    )
+    return release
+
+
+def application_identity(application_source, expected_sha, resolved_sha, tag):
+    require(
+        re.fullmatch(r"[0-9a-f]{40}", expected_sha),
+        "Expected a full application commit SHA",
+    )
+    actual = command("git", "-C", str(application_source), "rev-parse", "HEAD")
+    require(
+        actual == expected_sha == resolved_sha.strip(),
+        "Application checkout, requested SHA and candidate tag must match",
+    )
+    config = json.loads(
+        command(
+            "git",
+            "-C",
+            str(application_source),
+            "show",
+            f"{actual}:src-tauri/tauri.conf.json",
+        )
+    )
+    require(
+        config["version"] == tag.removeprefix("v")
+        and config["identifier"] == IDENTIFIER,
+        "Application source version/identity differs from candidate tag",
+    )
+    return config
+
+
 def free_port():
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -430,6 +481,8 @@ def main():
     parser.add_argument("--distribution", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--openssl", required=True)
+    parser.add_argument("--application-sha", required=True)
+    parser.add_argument("--application-source", type=Path, required=True)
     args = parser.parse_args()
     evidence, distribution = args.evidence.resolve(), args.distribution.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
@@ -462,18 +515,14 @@ def main():
             "Runner architecture mismatch",
         )
         release = json.loads((distribution / "release.json").read_text())
-        report["source_commit"] = command("git", "rev-parse", "HEAD")
-        require(
-            (distribution / "source-sha.txt").read_text().strip()
-            == report["source_commit"],
-            "Checkout is not the candidate tag commit",
+        report["harness_source_commit"] = command("git", "rev-parse", "HEAD")
+        tauri_config = application_identity(
+            args.application_source.resolve(),
+            args.application_sha,
+            (distribution / "source-sha.txt").read_text(),
+            args.tag,
         )
-        tauri_config = json.loads(Path("src-tauri/tauri.conf.json").read_text())
-        require(
-            tauri_config["version"] == args.tag[1:]
-            and tauri_config["identifier"] == IDENTIFIER,
-            "Source version/identity differs from tag",
-        )
+        report["source_commit"] = args.application_sha
         hashes = verify_assets(release, args.tag, args.arch, distribution)
         verify_updater(distribution, args.tag, args.arch, tauri_config, args.openssl)
         record("artifact_integrity", hashes)

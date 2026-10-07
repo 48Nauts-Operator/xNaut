@@ -6,10 +6,17 @@ on:
       tag:
         required: true
         type: string
+      application_sha:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
         description: Exact staged production tag to verify
+        required: true
+        type: string
+      application_sha:
+        description: Full immutable application commit for that tag
         required: true
         type: string
 
@@ -31,7 +38,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.sha }} # Reviewed harness revision, independent of application tag.
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.application_sha }}
+          path: application-source
           persist-credentials: false
       - name: Download the exact production assets
         env:
@@ -42,7 +54,11 @@ jobs:
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           mkdir -p distribution evidence
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > distribution/release.json
+          python3 - <<'PY' > distribution/release.json
+          import json, os, runpy
+          smoke = runpy.run_path("scripts/macos-release-smoke.py")
+          print(json.dumps(smoke["release_metadata"](os.environ["GITHUB_REPOSITORY"], os.environ["TAG"])))
+          PY
           gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha > distribution/source-sha.txt
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir distribution \
             --pattern "xNAUT-${TAG#v}-macos-$ARCH.dmg" \
@@ -52,11 +68,13 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
           ARCH: ${{ matrix.arch }}
+          APPLICATION_SHA: ${{ inputs.application_sha }}
         run: |
           set -euo pipefail
           brew install openssl@3
           python3 scripts/macos-release-smoke.py --tag "$TAG" --arch "$ARCH" \
             --distribution distribution --evidence evidence \
+            --application-source application-source --application-sha "$APPLICATION_SHA" \
             --openssl "$(brew --prefix openssl@3)/bin/openssl"
       - name: Preserve production identity and native evidence
         if: always()

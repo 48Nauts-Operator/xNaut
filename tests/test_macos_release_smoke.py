@@ -19,6 +19,106 @@ SPEC.loader.exec_module(SMOKE)
 
 
 class ProductionSmokeTests(unittest.TestCase):
+    def test_draft_lookup_uses_numeric_id_and_binds_both_responses(self):
+        release = {
+            "id": 405192386,
+            "tag_name": "v1.30.1",
+            "draft": True,
+            "prerelease": False,
+        }
+        selected = {"databaseId": 405192386, "tagName": "v1.30.1"}
+        with patch.object(
+            SMOKE, "command", side_effect=[json.dumps(selected), json.dumps(release)]
+        ) as invoke:
+            self.assertEqual(SMOKE.release_metadata("Owner/Repo", "v1.30.1"), release)
+            self.assertEqual(
+                invoke.call_args_list[0].args,
+                (
+                    "gh",
+                    "release",
+                    "view",
+                    "v1.30.1",
+                    "--repo",
+                    "Owner/Repo",
+                    "--json",
+                    "databaseId,tagName",
+                ),
+            )
+            self.assertEqual(
+                invoke.call_args_list[1].args,
+                ("gh", "api", "repos/Owner/Repo/releases/405192386"),
+            )
+        for changed in [
+            {**selected, "databaseId": "405192386"},
+            {**selected, "databaseId": True},
+            {**selected, "databaseId": -1},
+            {**selected, "tagName": "v1.29.3"},
+        ]:
+            with (
+                patch.object(
+                    SMOKE, "command", return_value=json.dumps(changed)
+                ) as invoke,
+                self.assertRaises(RuntimeError),
+            ):
+                SMOKE.release_metadata("Owner/Repo", "v1.30.1")
+            self.assertEqual(invoke.call_count, 1)
+        for changed in [
+            {**release, "id": 99},
+            {**release, "tag_name": "v1.29.3"},
+            {**release, "prerelease": True},
+        ]:
+            with (
+                patch.object(
+                    SMOKE,
+                    "command",
+                    side_effect=[json.dumps(selected), json.dumps(changed)],
+                ),
+                self.assertRaises(RuntimeError),
+            ):
+                SMOKE.release_metadata("Owner/Repo", "v1.30.1")
+
+    def test_application_source_is_separate_and_exact_commit_bound(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            source = Path(scratch) / "application"
+            source.mkdir()
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-C", str(source), *args], text=True
+                ).strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            config = {
+                "version": "1.30.1",
+                "identifier": SMOKE.IDENTIFIER,
+                "plugins": {"updater": {"pubkey": "committed-key"}},
+            }
+            path = source / "src-tauri/tauri.conf.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(config))
+            git("add", ".")
+            git("commit", "-qm", "application source")
+            sha = git("rev-parse", "HEAD")
+            # The harness runs outside this separate checkout. Its HEAD need
+            # not equal the application SHA, but the candidate tag must.
+            self.assertEqual(
+                SMOKE.application_identity(source, sha, sha + "\n", "v1.30.1"), config
+            )
+            path.write_text(json.dumps({**config, "plugins": {}}))
+            self.assertEqual(
+                SMOKE.application_identity(source, sha, sha, "v1.30.1"), config
+            )
+            for expected, resolved, tag in [
+                (sha[:8], sha, "v1.30.1"),
+                ("a" * 40, sha, "v1.30.1"),
+                (sha, "b" * 40, "v1.30.1"),
+                (sha, sha, "v1.30.0"),
+            ]:
+                with self.assertRaises(RuntimeError):
+                    SMOKE.application_identity(source, expected, resolved, tag)
+
     def test_launch_refuses_owner_account_existing_profile_and_overrides(self):
         with tempfile.TemporaryDirectory() as scratch:
             config = Path(scratch) / "profile"
