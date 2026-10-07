@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 pub const GRACE_MS: i64 = 60_000;
@@ -538,13 +538,16 @@ fn persist_locked(dir: &Path, run: &mut RunManifest) -> Result<(), String> {
     let path = journal_path(dir, &run.run_id);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
         .write(true)
+        .truncate(false)
         .open(&path)
         .map_err(|e| e.to_string())?;
     // The inherited tail repair refuses middle corruption. A partial last
     // write is removed before another event can be committed after it.
+    // Append-only Windows handles cannot truncate a partial journal tail.
+    // StoreLock serializes the full truncate/seek/write operation on all hosts.
     file.set_len(valid_end as u64).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
     if valid_end > 0 && std::fs::read(&path).map_err(|e| e.to_string())?.last() != Some(&b'\n') {
         writeln!(file).map_err(|e| e.to_string())?;
     }
@@ -1305,6 +1308,7 @@ pub fn ticket_revision_in(repo: &Path, project: &str, ticket: &str) -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(not(windows))]
 pub fn process_birth(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "lstart="])
@@ -1312,6 +1316,40 @@ pub fn process_birth(pid: u32) -> Option<String> {
         .ok()?;
     let birth = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !birth.is_empty()).then_some(birth)
+}
+/// Use the native creation timestamp on Windows; a Unix `ps` process cannot
+/// identify Windows PIDs. Query and liveness share one handle, preventing PID
+/// reuse between the checks. Win32 contract: GetProcessTimes / WaitForSingleObject.
+#[cfg(windows)]
+pub fn process_birth(pid: u32) -> Option<String> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime { low: u32, high: u32 }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn GetProcessTimes(handle: *mut c_void, creation: *mut FileTime,
+            exit: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
+        fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    if pid == 0 { return None; }
+    // PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE; never request write access.
+    let handle = unsafe { OpenProcess(0x1000 | 0x100000, 0, pid) };
+    if handle.is_null() { return None; }
+    let (mut creation, mut exit, mut kernel, mut user) =
+        (FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default());
+    // All pointers refer to initialized FILETIME layouts and the handle is owned
+    // here. WAIT_TIMEOUT (0x102) proves it has not signalled process exit.
+    let birth = unsafe {
+        let read = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user);
+        let alive = WaitForSingleObject(handle, 0) == 0x102;
+        CloseHandle(handle);
+        (read != 0 && alive).then(|| format!("windows-filetime:{}",
+            ((creation.high as u64) << 32) | creation.low as u64))
+    };
+    birth
 }
 fn pid_answers(pid: u32) -> bool {
     if pid == 0 || pid > i32::MAX as u32 {

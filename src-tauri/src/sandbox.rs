@@ -1341,19 +1341,36 @@ run `gitvm stop` there by hand if it is still up",
             }
         }
 
+        // These generated scripts run on Unix remote workers. On Windows CI,
+        // Git Bash executes them with an isolated native Python home. Never use
+        // the unrelated Windows/WSL bash shim or the runner's real credentials.
+        fn seed_shell(home: &std::path::Path, workdir: &std::path::Path) -> std::process::Command {
+            let mut command = std::process::Command::new(
+                std::env::var_os("XNAUT_TEST_BASH").unwrap_or_else(|| "bash".into()));
+            command.args(["--noprofile", "--norc"])
+                .current_dir(workdir).env("HOME", home).env("USERPROFILE", home);
+            command
+        }
+        fn run_seed(seed: &str, home: &std::path::Path, workdir: &std::path::Path) -> std::process::Output {
+            let script = if std::env::var_os("XNAUT_TEST_PYTHON").is_some() {
+                format!("python3() {{ \"$XNAUT_TEST_PYTHON\" \"$@\"; }}\n{seed}")
+            } else { seed.to_string() };
+            seed_shell(home, workdir).args(["-c", &script]).output().expect("the seed shell ran")
+        }
+        fn seed_workdir(workdir: &std::path::Path) -> String {
+            let out = seed_shell(workdir, workdir).args(["-c", "printf '%s' \"$PWD\""])
+                .output().unwrap();
+            assert!(out.status.success());
+            String::from_utf8(out.stdout).unwrap()
+        }
+
         /// Run a seed the way the run script does: from the working
         /// directory, with a HOME of its own. Returns that HOME.
         fn seed_into(seed: &str, workdir: &std::path::Path) -> std::path::PathBuf {
             let home = std::env::temp_dir().join(format!("xnaut-seed-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&home).unwrap();
             std::fs::create_dir_all(workdir).unwrap();
-            let out = std::process::Command::new("bash")
-                .arg("-c")
-                .arg(seed)
-                .current_dir(workdir)
-                .env("HOME", &home)
-                .output()
-                .expect("the seed shell ran");
+            let out = run_seed(seed, &home, workdir);
             assert!(
                 out.status.success(),
                 "the seed exited {:?}: {}",
@@ -1379,8 +1396,7 @@ run `gitvm stop` there by hand if it is still up",
             assert_eq!(saved["hasCompletedOnboarding"], true);
             // And the trust dialog, keyed by the directory the agent runs in,
             // which the seed learned from $PWD rather than being told.
-            let dir = std::fs::canonicalize(&work).unwrap();
-            let key = dir.to_string_lossy().to_string();
+            let key = seed_workdir(&work);
             assert_eq!(
                 saved["projects"][&key]["hasTrustDialogAccepted"],
                 true,
@@ -1407,13 +1423,7 @@ run `gitvm stop` there by hand if it is still up",
             )
             .unwrap();
 
-            let out = std::process::Command::new("bash")
-                .arg("-c")
-                .arg(onboarding_seed(&runtime("claude", None)))
-                .current_dir(&work)
-                .env("HOME", &home)
-                .output()
-                .unwrap();
+            let out = run_seed(&onboarding_seed(&runtime("claude", None)), &home, &work);
             assert!(out.status.success());
 
             let saved: serde_json::Value =
@@ -1435,17 +1445,10 @@ run `gitvm stop` there by hand if it is still up",
             let work = std::env::temp_dir().join(format!("xnaut-work-{}", uuid::Uuid::new_v4()));
             let seed = onboarding_seed(&runtime("codex", Some(crate::agents::PreflightTrust::Codex)));
             let home = seed_into(&seed, &work);
-            std::process::Command::new("bash")
-                .arg("-c")
-                .arg(&seed)
-                .current_dir(&work)
-                .env("HOME", &home)
-                .output()
-                .unwrap();
+            assert!(run_seed(&seed, &home, &work).status.success());
 
             let body = std::fs::read_to_string(home.join(".codex").join("config.toml")).unwrap();
-            let dir = std::fs::canonicalize(&work).unwrap();
-            let header = format!("[projects.\"{}\"]", dir.to_string_lossy());
+            let header = format!("[projects.\"{}\"]", seed_workdir(&work));
             assert_eq!(
                 body.lines().filter(|l| l.trim() == header).count(),
                 1,
@@ -1468,8 +1471,7 @@ run `gitvm stop` there by hand if it is still up",
                 &std::fs::read_to_string(home.join(".gemini").join("trustedFolders.json")).unwrap(),
             )
             .unwrap();
-            let dir = std::fs::canonicalize(&work).unwrap();
-            assert_eq!(saved[dir.to_string_lossy().as_ref()], "TRUST_FOLDER");
+            assert_eq!(saved[seed_workdir(&work)], "TRUST_FOLDER");
 
             let _ = std::fs::remove_dir_all(&home);
             let _ = std::fs::remove_dir_all(&work);
@@ -1479,14 +1481,16 @@ run `gitvm stop` there by hand if it is still up",
         /// python through the environment for exactly this reason.
         #[test]
         fn a_workdir_containing_quotes_is_data_and_not_syntax() {
-            let work = std::env::temp_dir().join(format!("xnaut-it's \"x\"-{}", uuid::Uuid::new_v4()));
+            // Windows forbids double quotes in filenames; apostrophe, dollar
+            // and spaces still exercise shell data handling there.
+            let name = if cfg!(windows) { "xnaut-it's $x" } else { "xnaut-it's \"$x\"" };
+            let work = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
             let home = seed_into(&onboarding_seed(&runtime("claude", None)), &work);
             let saved: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(home.join(".claude.json")).unwrap())
                     .unwrap();
-            let dir = std::fs::canonicalize(&work).unwrap();
             assert_eq!(
-                saved["projects"][dir.to_string_lossy().as_ref()]["hasTrustDialogAccepted"],
+                saved["projects"][seed_workdir(&work)]["hasTrustDialogAccepted"],
                 true,
                 "{saved}"
             );

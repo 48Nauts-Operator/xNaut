@@ -38,6 +38,17 @@ jobs:
           key: behavior-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
       - run: npm ci
       - run: npx playwright install chromium
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.12'
+      - name: Configure remote Unix shell fixtures on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "XNAUT_TEST_BASH=C:\Program Files\Git\bin\bash.exe" >> $env:GITHUB_ENV
+          $pythonPath = python -c "import sys; print(sys.executable)"
+          "XNAUT_TEST_PYTHON=$pythonPath" >> $env:GITHUB_ENV
       - name: Verify release behavior on this exact checkout
         run: node scripts/release-behavior.mjs
       - name: Retain test outcomes, including failures

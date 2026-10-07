@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.4] - 2026-10-08
+
+### Fixed
+- Preserve and extend worker journals on Windows using write access that permits recovery of an interrupted final record. The native registry lock still protects the entire recovery and append operation.
+- Identify live Windows processes by their native creation time rather than invoking the Unix process-list command.
+- Include the Workstation remote swarm, explicit destination and durable queue corrections prepared in 1.30.3. The Windows behavior gate stopped 1.30.3 before publication.
+
+### Release checks
+- Execute remote onboarding shell fixtures with Git Bash and isolated Python on Windows, using filesystem-valid quoted names and the shell's actual working-directory format. All required behavior cases remain enabled.
+
 ## [1.30.3] - 2026-10-07
 
 ### Fixed

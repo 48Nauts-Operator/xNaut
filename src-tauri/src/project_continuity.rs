@@ -1998,7 +1998,7 @@ mod tests {
         assert!(snapshot
             .diagnostics
             .iter()
-            .any(|d| d.blocking && d.source == tickets.display().to_string()));
+            .any(|d| d.blocking && Path::new(&d.source) == tickets));
         assert!(!tickets.exists());
     }
 }
