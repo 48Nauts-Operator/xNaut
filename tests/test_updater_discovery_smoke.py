@@ -18,6 +18,46 @@ spec.loader.exec_module(module)
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_release_versions_reject_nonstable_and_nonforward_pairs(self):
+        self.assertEqual(
+            module.release_versions("1.30.6", "1.30.7"), ("1.30.6", "1.30.7")
+        )
+        self.assertEqual(
+            module.release_versions("1.9.9", "1.10.0"), ("1.9.9", "1.10.0")
+        )
+        for old, new in [
+            ("1.30.7", "1.30.7"),
+            ("1.30.7", "1.30.6"),
+            ("v1.30.6", "1.30.7"),
+            ("1.30.6", "1.30.7-rc.1"),
+            ("1.30.6", "../1.30.7"),
+            ("1.30.6", "1.030.7"),
+        ]:
+            with self.subTest(old=old, new=new), self.assertRaises(RuntimeError):
+                module.release_versions(old, new)
+
+    def test_selected_release_pair_controls_native_and_platform_validation(self):
+        for target in ("darwin-aarch64", "darwin-x86_64", "windows-x86_64"):
+            old_value, old_feed = self.values(target)
+            with (
+                patch.object(module, "OLD", "1.30.6"),
+                patch.object(module, "NEW", "1.30.7"),
+            ):
+                value = json.loads(
+                    json.dumps(old_value)
+                    .replace("1.30.6", "1.30.7")
+                    .replace("1.30.4", "1.30.6")
+                )
+                feed = value["rawJson"]
+                self.assertEqual(
+                    module.validate_discovery(value, feed, "48Nauts/xnaut", target),
+                    feed["platforms"][target],
+                )
+                with self.assertRaises(RuntimeError):
+                    module.validate_discovery(
+                        old_value, old_feed, "48Nauts/xnaut", target
+                    )
+
     def test_ci_token_only_authenticates_github_api_metadata(self):
         urls = [
             ("https://api.github.com/repos/48Nauts/xnaut/releases/latest", True),

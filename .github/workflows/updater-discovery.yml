@@ -3,13 +3,24 @@ name: Published native updater discovery
 # Deliberately not called by release assembly: the target must already be public.
 on:
   workflow_dispatch:
+    inputs:
+      old_version:
+        description: Published version to launch
+        required: true
+        default: '1.30.6'
+        type: string
+      new_version:
+        description: Expected latest public version
+        required: true
+        default: '1.30.7'
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   discover:
-    name: Native 1.30.4 to 1.30.6 (${{ matrix.target }})
+    name: Native ${{ inputs.old_version }} to ${{ inputs.new_version }} (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +43,8 @@ jobs:
       - name: Check through the old production Tauri updater
         env:
           GH_TOKEN: ${{ github.token }}
+          XNAUT_UPDATER_OLD_VERSION: ${{ inputs.old_version }}
+          XNAUT_UPDATER_NEW_VERSION: ${{ inputs.new_version }}
         run: python scripts/updater-discovery-smoke.py --target ${{ matrix.target }} --evidence evidence
       - name: Preserve actual discovery and cleanup evidence
         if: always()

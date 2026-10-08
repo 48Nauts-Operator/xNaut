@@ -29,6 +29,22 @@ OLD = "1.30.4"
 NEW = "1.30.6"
 
 
+def release_versions(old, new):
+    for version in (old, new):
+        require(
+            isinstance(version, str)
+            and re.fullmatch(
+                r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version
+            ),
+            "Expected a stable major.minor.patch version",
+        )
+    require(
+        tuple(map(int, new.split("."))) > tuple(map(int, old.split("."))),
+        "Expected a newer public release",
+    )
+    return old, new
+
+
 def fetch(url):
     # Hosted runners share unauthenticated GitHub API quotas. Authenticate only
     # metadata requests; release downloads and the old app's updater stay public.
@@ -199,6 +215,11 @@ def fresh_config(system):
 
 
 def main():
+    global OLD, NEW
+    OLD, NEW = release_versions(
+        os.environ.get("XNAUT_UPDATER_OLD_VERSION", OLD),
+        os.environ.get("XNAUT_UPDATER_NEW_VERSION", NEW),
+    )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--target",
