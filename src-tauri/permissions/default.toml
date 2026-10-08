@@ -665,6 +665,8 @@ commands.allow = [
   "mobile_info",
   "conversation_store_load",
   "conversation_store_put",
+  "durable_agent_turns",
+  "durable_agent_turn_ack",
   "notebook_distill",
   "chat_send",
   "chat_send_model",

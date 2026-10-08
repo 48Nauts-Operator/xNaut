@@ -1114,6 +1114,18 @@
     };
     paintMessages();
 
+    const restoreDurableThread = (event) => {
+      if (!event.detail?.threads?.includes(thread.id)) return;
+      const saved = allThreadsFor(profile.handle).find(item => item.id === thread.id);
+      if (saved) {
+        thread = saved;
+        sessionId = thread.session_id || sessionId;
+        const terminal = pane.querySelector('[data-terminal]');
+        if (terminal) terminal.hidden = !sessionId;
+        paintMessages();
+      }
+    };
+
     // The compute quick pane registers itself but nothing invoked it (XNAUT-144
     // gap). It sits HERE and not at the end of the function on purpose: a throw
     // in any later wiring step used to leave the right pane blank, which is
@@ -1558,6 +1570,8 @@
     // It was in the right rail first, which is 300px of chrome meant for
     // status, not for a diagram anyone has to read.
     const paneCleanups = [];
+    window.addEventListener('xnaut:durable-turns-restored', restoreDurableThread);
+    paneCleanups.push(() => window.removeEventListener('xnaut:durable-turns-restored', restoreDurableThread));
     const stage = pane.querySelector('[data-stage]');
     const split = pane.querySelector('[data-split]');
     const canvasButton = pane.querySelector('[data-canvas]');
@@ -1666,6 +1680,7 @@
     // render leaked a subscription every time he clicked an agent.
     authTarget = {
       handle: profile.handle,
+      threadId: thread.id,
       append: (plugin) => {
         thread = updateThread(profile.handle, thread.id, (next) => {
           next.messages.push({ id:`auth-${Date.now()}`, kind:'auth', plugin, at:nowIso() });
@@ -1700,7 +1715,7 @@
     // The placeholders are UI, not conversation. 'Thinking…' was missing from
     // this list, so every turn shipped a trailing assistant message and the
     // Anthropic lane rejected the whole request as a prefill (XNAUT-217).
-    const PLACEHOLDERS = new Set(['Working…', 'Thinking…']);
+    const PLACEHOLDERS = new Set(['Working…', 'Thinking…', 'Recovering interrupted turn…']);
     const chatHistory = () => {
       const recent = (thread.messages || [])
         .filter(message => (message.executionReceipt || message.kind !== 'action') && !message.voiceTranscript && (message.text || message.executionReceipt) && !PLACEHOLDERS.has(message.text))
@@ -1754,13 +1769,20 @@
           saveSharedMessage({ id: userMessageId, role: 'user', text, at: nowIso() });
           composer.value = ''; grow();
         }
-        const replyId = `a-${Date.now()}`;
+        const requestId = `agent-chat-${crypto.randomUUID()}`;
+        const replyId = `a-${requestId}`;
+        const executionRequest = {
+          handle: profile.handle, requestId, messages: chatHistory(),
+          repositoryContext: repositoryContext(), threadId: thread.id, projectScope: journalProject,
+        };
+        window.xnautDurableAgentTurns?.track(requestId);
         thread = updateThread(profile.handle, thread.id, (next) => {
-          next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso(), journalProject, journalPending: true });
+          next.messages.push({ id: replyId, role: 'agent', text: 'Thinking…', at: nowIso(), journalProject, journalPending: true, executionRequestId: requestId, executionRequest, executionStatus: 'pending' });
           return next;
         });
         if (voiceRequest) voiceReplyTurns.add(voiceRequest.turn);
         paintMessages();
+        let completed = false;
         try {
           // The Settings page still writes provider credentials to the legacy
           // webview store; the Rust registry only learns about them through
@@ -1772,7 +1794,6 @@
           // The answer is painted as it is generated (XNAUT-159). What lands
           // here is PROVISIONAL: `reply` below is authoritative and replaces
           // it, so nothing downstream reads the live text.
-          const requestId = `agent-chat-${Date.now()}`;
           let live = '';
           const paintLive = (delta) => {
             live += delta;
@@ -1814,14 +1835,7 @@
           let reply;
           try {
             await window.xnautConversationStorage.confirmSaved('xnaut-agent-threads:v1');
-            reply = String(await invoke('agent_chat_turn', {
-              handle: profile.handle,
-              requestId,
-              messages: chatHistory(),
-              repositoryContext: repositoryContext(),
-              threadId: thread.id,
-              projectScope: journalProject,
-            }) || '').trim();
+            reply = String(await invoke('agent_chat_turn', executionRequest) || '').trim();
           } finally {
             try { stopStream(); } catch (_) {}
             try { stopLaunch(); } catch (_) {}
@@ -1839,6 +1853,7 @@
             updateAgentMessage(replyId, reply || 'No answer came back.');
             if (!reply) throw new Error('The agent returned no answer.');
           }
+          completed = true;
           return reply.startsWith('BUILD-REQUEST') ? reply.split('\n').slice(1).join('\n').trim() || 'That needs a coding session.' : reply;
         } catch (error) {
           updateAgentMessage(replyId, `Could not answer: ${String(error)}`);
@@ -1846,10 +1861,14 @@
         } finally {
           thread = updateThread(profile.handle, thread.id, next => {
             const message = next.messages.find(m => m.id === replyId);
-            if (message) message.journalPending = false;
+            if (message) {
+              message.journalPending = false;
+              if (completed) { message.executionStatus = 'completed'; delete message.executionRequest; }
+            }
             return next;
           });
           send.disabled = false;
+          await window.xnautDurableAgentTurns?.finished(requestId);
         }
         return;
       }
@@ -2333,11 +2352,13 @@
     window.__TAURI__.event.listen('plugin-needs-auth', (event) => {
       const payload = (event && event.payload) || {};
       if (!payload.plugin || !authTarget || payload.agent_id !== authTarget.handle) return;
+      if (payload.thread_id && payload.thread_id !== authTarget.threadId) return;
       authTarget.append(payload.plugin);
     }).catch((error) => console.error('[agent-space] auth card listener failed:', error));
     window.__TAURI__.event.listen('swarm-plan-proposed', (event) => {
       const payload = (event && event.payload) || {};
       if (!payload.plan || !authTarget || payload.agent_id !== authTarget.handle) return;
+      if (payload.thread_id && payload.thread_id !== authTarget.threadId) return;
       authTarget.appendSwarm(payload.plan);
     }).catch((error) => console.error('[agent-space] swarm card listener failed:', error));
   }

@@ -55,6 +55,8 @@ const STUB_JS = `
   // null for settings_get instead of the shaped object sent the frontend into a
   // spin that pegged Chrome at 22% CPU and made the page undrivable.
   const BY = {
+    durable_agent_turns: [],
+    durable_agent_turn_ack: null,
     pm_project_list: [PROJECT],
     // The panel's first load calls import_existing, not list (see
     // project-management-panel.js:4268). Without this the stub answers null, the

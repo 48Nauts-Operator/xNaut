@@ -13,8 +13,13 @@ export const nativeSuites = [
   'project_continuity::tests::', 'agent_work::tests::', 'repository_review::tests::',
   'run_control::tests::', 'settings::tests::', 'ticket_triage::tests::',
   'gitops::tests::',
+  'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'durable_turn::tests::process_kill_at_every_effect_boundary_preserves_results_and_prevents_duplicate_writes',
+  'durable_turn::tests::changed_provider_repository_and_tools_fail_before_replay',
+  'durable_turn::tests::failed_result_commit_leaves_recoverable_uncertainty',
+  'agent_tools::tests::durable_model_tool_loop_resumes_with_committed_results_and_no_repeated_read',
   'gitops::tests::ticket_history_queries_leave_the_ui_executor_free_and_bound_parallel_work',
   'swarm_plan::tests::overlapping_approvals_recover_under_latest_group_and_keep_its_dispatched_scope',
   'swarm_plan::tests::overlapping_approvals_respect_newest_stop_and_unapproved_partial_plans',
@@ -35,6 +40,7 @@ export const requiredNative = [
   'agent_tools::tests::swarm_tools_expose_destination_and_durable_queue_contract',
 ];
 export const browserFiles = [
+  'durable-agent-turns.spec.mjs',
   'nautbot-swarm.spec.mjs', 'dispatch-from-ticket.spec.mjs', 'approval-inbox.spec.mjs',
   'console-clean.spec.mjs', 'settings-hidden-lifecycle.spec.mjs',
   'observatory-sessions.spec.mjs', 'sidebar-sessions.spec.mjs',

@@ -17,6 +17,7 @@ pub fn is_catalog_call(name: &str) -> bool {
     matches!(name, SEARCH | LOAD)
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ToolCatalog {
     all: Vec<Value>,
     pinned: Vec<Value>,

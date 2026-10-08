@@ -30,7 +30,7 @@ pub(crate) fn root() -> Result<PathBuf, String> {
         .ok_or("Configuration directory unavailable")?
         .join(if crate::CONTINUITY_PREVIEW { "xnaut/continuity-preview" } else if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
 }
-fn connect(root: &Path) -> Result<Connection, String> {
+pub(crate) fn connect(root: &Path) -> Result<Connection, String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let path = root.join("conversations.sqlite");
     let db = Connection::open(&path).map_err(|e| e.to_string())?;

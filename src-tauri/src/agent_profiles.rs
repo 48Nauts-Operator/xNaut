@@ -1734,6 +1734,20 @@ pub async fn agent_build_workspace(
 #[tauri::command]
 pub async fn agent_chat_turn(
     app: tauri::AppHandle,
+    handle: String,
+    request_id: String,
+    messages: Vec<crate::chat::ChatMessage>,
+    repository_context: Option<Vec<String>>,
+    thread_id: Option<String>,
+    project_scope: Option<String>,
+) -> Result<String, String> {
+    crate::durable_turn::submit(app,request_id,crate::durable_turn::Request {
+        handle,messages,repository_context,thread_id,project_scope,
+    }).await
+}
+
+pub(crate) async fn agent_chat_turn_inner(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
     handle: String,
     request_id: String,
@@ -1756,6 +1770,12 @@ pub async fn agent_chat_turn(
     // fallback to a model that would claim the history does not exist.
     let saved_history = thread_id.as_deref()
         .map(|id| crate::agent_history::load(&profile.handle,id)).transpose()?;
+    crate::durable_turn::bind("agent", &serde_json::json!({
+        "handle":profile.handle,"provider":profile.chat_provider_or_provider(),
+        "model":profile.chat_model_or_model(),"effort":profile.reasoning_effort,
+        "capabilities":profile.capabilities,"repository_context":repository_context,
+        "thread_id":thread_id,"project_scope":project_scope,
+    }))?;
     let mut turn = vec![crate::chat::ChatMessage {
         role: "system".into(),
         content: crate::composer::chat_system(&profile),
@@ -1813,52 +1833,62 @@ pub async fn agent_chat_turn(
                     attach_session,
                     swarm_plan,
                 }) => {
-                    if let Some(session) = attach_session {
-                        let _ = tauri::Emitter::emit(
-                            &app,
-                            "attach-zellij-session",
-                            serde_json::json!({ "session": session, "agent_id": profile.handle }),
-                        );
-                    }
-                    if open_graph {
-                        let _ = tauri::Emitter::emit(&app, "open-graph", serde_json::json!({}));
-                    }
-                    // A local page the turn produced (an Excalidraw canvas, a
-                    // preview) belongs on screen beside the conversation, not
-                    // as a URL to copy.
-                    if let Some(url) = surface {
-                        let _ = tauri::Emitter::emit(
-                            &app,
-                            "open-in-browser",
-                            serde_json::json!({ "url": url, "agent_id": profile.handle }),
-                        );
-                    }
-                    // A plugin that wants a login becomes a card in the
-                    // thread, with the button right there.
-                    if let Some(card) = needs_auth {
-                        let _ = tauri::Emitter::emit(
-                            &app,
-                            "plugin-needs-auth",
-                            serde_json::json!({ "agent_id": profile.handle, "plugin": card }),
-                        );
-                    }
-                    // A swarm the turn PROPOSED. It becomes a card in the
-                    // thread with the plan on it, because a batch of eight
-                    // agents is confirmed by pressing the thing you read, not
-                    // by trusting a sentence that lists eight ids correctly.
-                    if let Some(plan) = swarm_plan {
-                        let _ = tauri::Emitter::emit(
-                            &app,
-                            "swarm-plan-proposed",
-                            serde_json::json!({ "agent_id": profile.handle, "plan": plan }),
-                        );
-                    }
-                    if wrote_document {
-                        let _ = tauri::Emitter::emit(
-                            &app,
-                            "document-changed",
-                            serde_json::json!({ "key": profile.handle }),
-                        );
+                    crate::durable_turn::save("outcome", &serde_json::json!({
+                        "text":text,"performed":performed,"surface":surface,"needs_auth":needs_auth,
+                        "open_graph":open_graph,"wrote_document":wrote_document,
+                        "attach_session":attach_session,"swarm_plan":swarm_plan,
+                    }))?;
+                    // Background recovery restores cards from the committed
+                    // outcome into the original thread. It must not navigate
+                    // the owner's currently selected workspace or terminal.
+                    if !crate::durable_turn::recovering() {
+                        if let Some(session) = attach_session {
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                "attach-zellij-session",
+                                serde_json::json!({ "session": session, "agent_id": profile.handle }),
+                            );
+                        }
+                        if open_graph {
+                            let _ = tauri::Emitter::emit(&app, "open-graph", serde_json::json!({}));
+                        }
+                        // A local page the turn produced (an Excalidraw canvas, a
+                        // preview) belongs on screen beside the conversation, not
+                        // as a URL to copy.
+                        if let Some(url) = surface {
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                "open-in-browser",
+                                serde_json::json!({ "url": url, "agent_id": profile.handle }),
+                            );
+                        }
+                        // A plugin that wants a login becomes a card in the
+                        // thread, with the button right there.
+                        if let Some(card) = needs_auth {
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                "plugin-needs-auth",
+                                serde_json::json!({ "agent_id": profile.handle, "thread_id":thread_id,"plugin": card }),
+                            );
+                        }
+                        // A swarm the turn PROPOSED. It becomes a card in the
+                        // thread with the plan on it, because a batch of eight
+                        // agents is confirmed by pressing the thing you read, not
+                        // by trusting a sentence that lists eight ids correctly.
+                        if let Some(plan) = swarm_plan {
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                "swarm-plan-proposed",
+                                serde_json::json!({ "agent_id": profile.handle, "thread_id":thread_id,"plan": plan }),
+                            );
+                        }
+                        if wrote_document {
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                "document-changed",
+                                serde_json::json!({ "key": profile.handle }),
+                            );
+                        }
                     }
                     // XNAUT-251: what the turn ACTUALLY did, sent to the UI
                     // whether or not anything happened. Three test runs were
@@ -1890,6 +1920,9 @@ pub async fn agent_chat_turn(
                     return Ok(text);
                 }
                 Err(error) => {
+                    if error.starts_with("Durable execution:") || crate::durable_turn::has_tool_intents() {
+                        return Err(error);
+                    }
                     if crate::responses::required(&llm.model) { return Err(error); }
                     // The fallback is right — an agent that cannot call tools
                     // should still answer — but it was SILENT, and that is what

@@ -728,11 +728,7 @@ async fn chat_send_with_settings(
     if let Some(notice) = receipt.substitution_notice() {
         full.push_str(&notice);
         full.push_str("\n\n");
-        app.emit(
-            "chat://chunk",
-            serde_json::json!({"requestId": request_id, "delta": format!("{notice}\n\n")}),
-        )
-        .map_err(|e| format!("failed to emit NautGate receipt: {e}"))?;
+        crate::durable_turn::emit_chunk(&app, &request_id, &format!("{notice}\n\n"))?;
     }
     let mut done = false;
 
@@ -761,11 +757,7 @@ async fn chat_send_with_settings(
             if let Some(delta) = delta_content(data) {
                 if !delta.is_empty() {
                     full.push_str(&delta);
-                    app.emit(
-                        "chat://chunk",
-                        serde_json::json!({"requestId": request_id, "delta": delta}),
-                    )
-                    .map_err(|e| format!("failed to emit chat://chunk: {e}"))?;
+                    crate::durable_turn::emit_chunk(&app, &request_id, &delta)?;
                 }
             }
         }

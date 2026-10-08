@@ -29,6 +29,7 @@ mod chat;
 mod responses;
 mod repository_read;
 mod conversation_store;
+mod durable_turn;
 mod agent_history;
 mod notebook;
 mod codex_spend;
@@ -353,6 +354,8 @@ async fn main() {
             // File Navigator + Editor
             conversation_store::conversation_store_load,
             conversation_store::conversation_store_put,
+            durable_turn::durable_agent_turns,
+            durable_turn::durable_agent_turn_ack,
             notebook::notebook_distill,
             commands::list_directory,
             commands::read_file,
@@ -921,6 +924,7 @@ async fn main() {
             sweep::queue_retries(sandbox_verify::reap_orphaned_runs());
             sweep::spawn_sweep_task(app.handle().clone());
             repository_transfer::spawn_reconciler(app.handle().clone());
+            durable_turn::spawn_recovery(app.handle().clone());
 
             // Runs that outlived the last app (XNAUT-242): put them back on
             // the board before anything else asks "who is working".

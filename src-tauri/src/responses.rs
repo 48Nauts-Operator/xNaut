@@ -7,7 +7,7 @@ pub fn required(model: &str) -> bool {
     let name = model.trim().rsplit('/').next().unwrap_or("");
     name == "gpt-6-astra" || name.starts_with("gpt-6-astra-")
 }
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Session {
     previous: Option<String>,
     sent: usize,
@@ -260,11 +260,7 @@ impl Session {
                         if !event.is_empty() {
                             if let Some(delta) = events.accept(event.trim_end_matches('\n'))? {
                                 if let Some((app, id)) = stream_to {
-                                    let _ = tauri::Emitter::emit(
-                                        app,
-                                        "chat://chunk",
-                                        json!({"requestId":id,"delta":delta}),
-                                    );
+                                    crate::durable_turn::emit_chunk(app, id, &delta)?;
                                 }
                             }
                             event.clear();
@@ -294,11 +290,7 @@ impl Session {
         self.sent = messages.len();
         if !is_sse {
             if let Some((app, id)) = stream_to {
-                let _ = tauri::Emitter::emit(
-                    app,
-                    "chat://chunk",
-                    json!({"requestId":id,"delta":message["content"]}),
-                );
+                crate::durable_turn::emit_chunk(app, id, message["content"].as_str().unwrap_or(""))?;
             }
         }
         Ok(Answer {
