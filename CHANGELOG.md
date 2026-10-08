@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.6] - 2026-10-08
+
+### Fixed
+- Use the newest approved plan for each ticket in both queue refill and native worker admission. Older overlapping plans cannot dispatch under a different approval or consume the resulting scope evidence. A stopped newest plan still prevents dispatch; unapproved previews do not replace approval.
+- Include refused-continuation recovery prepared in 1.30.5. That candidate was withheld before publication when overlapping saved approvals exposed a second recovery failure.
+
+### Release checks
+- Require overlapping-plan recovery, dispatch scope preservation, restart, duplicate confirmation, queue refill, stopped-plan precedence and partial overlap before packaging.
+- Verify native updater discovery from the last published release, 1.30.4, to 1.30.6.
+
 ## [1.30.5] - 2026-10-08
 
 ### Fixed

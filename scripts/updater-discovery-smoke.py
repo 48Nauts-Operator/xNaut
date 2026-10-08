@@ -26,7 +26,7 @@ smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
 require = smoke.require
 OLD = "1.30.4"
-NEW = "1.30.5"
+NEW = "1.30.6"
 
 
 def fetch(url):

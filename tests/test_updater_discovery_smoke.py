@@ -21,9 +21,9 @@ class DiscoveryTests(unittest.TestCase):
     def test_ci_token_only_authenticates_github_api_metadata(self):
         urls = [
             ("https://api.github.com/repos/48Nauts/xnaut/releases/latest", True),
-            ("https://api.github.com/repos/48Nauts/xnaut/commits/v1.30.5", True),
+            ("https://api.github.com/repos/48Nauts/xnaut/commits/v1.30.6", True),
             (
-                "https://github.com/48Nauts/xnaut/releases/download/v1.30.5/latest.json",
+                "https://github.com/48Nauts/xnaut/releases/download/v1.30.6/latest.json",
                 False,
             ),
             ("https://api.github.com.example.test/releases/latest", False),
@@ -62,13 +62,13 @@ class DiscoveryTests(unittest.TestCase):
         filename = {
             "darwin-aarch64": "xNAUT-macos-aarch64.app.tar.gz",
             "darwin-x86_64": "xNAUT-macos-x64.app.tar.gz",
-            "windows-x86_64": "xNAUT-1.30.5-windows-x64.msi",
+            "windows-x86_64": "xNAUT-1.30.6-windows-x64.msi",
         }[target]
         manifest = {
-            "version": "1.30.5",
+            "version": "1.30.6",
             "platforms": {
                 target: {
-                    "url": f"https://github.com/48Nauts/xnaut/releases/download/v1.30.5/{filename}",
+                    "url": f"https://github.com/48Nauts/xnaut/releases/download/v1.30.6/{filename}",
                     "signature": "published-signature",
                 }
             },
@@ -76,7 +76,7 @@ class DiscoveryTests(unittest.TestCase):
         return {
             "appVersion": "1.30.4",
             "currentVersion": "1.30.4",
-            "version": "1.30.5",
+            "version": "1.30.6",
             "available": True,
             "resourceClosed": True,
             "mechanism": "tauri-plugin-updater",
@@ -210,7 +210,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_no_fallback_wrong_version_or_unclosed_resource(self):
         for key, invalid in [
-            ("appVersion", "1.30.5"),
+            ("appVersion", "1.30.6"),
             ("currentVersion", "1.29.2"),
             ("version", "1.31.0"),
             ("available", False),
@@ -243,7 +243,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_public_release_rejects_draft_prerelease_and_unpublished(self):
         valid = {
-            "tag_name": "v1.30.5",
+            "tag_name": "v1.30.6",
             "published_at": "2026-10-06T00:00:00Z",
             "draft": False,
             "prerelease": False,
@@ -313,7 +313,7 @@ class DiscoveryTests(unittest.TestCase):
             const calls=[];
             global.window={__TAURI__:{app:{getVersion:async()=> '1.30.4'},updater:{
               check:async(options)=> {calls.push(options); return {available:true,
-                currentVersion:'1.30.4',version:'1.30.5',rawJson:{version:'1.30.5'},
+                currentVersion:'1.30.4',version:'1.30.6',rawJson:{version:'1.30.6'},
                 close:async()=>{calls.push('closed');if(closeFails)throw Error('close failed');}};}
             }}};
             try {

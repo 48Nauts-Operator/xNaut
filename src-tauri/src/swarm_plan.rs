@@ -358,6 +358,17 @@ pub(crate) fn groups_in(registry: &Path, project: Option<&str>) -> Result<Vec<Gr
     Ok(groups)
 }
 
+// Dispatch and native admission must use the same approval, including when
+// several persisted plans overlap. A stopped newest approval still supersedes
+// older approvals; an unapproved preview does not. Break timestamp ties in the
+// same order as the persisted group listing.
+fn latest_approved_group<'a>(groups: &'a [Group], ticket: &str) -> Option<&'a Group> {
+    groups
+        .iter()
+        .filter(|g| g.approved_at.is_some() && g.members.iter().any(|m| m.ticket == ticket))
+        .max_by_key(|g| (g.approved_at, g.plan.created_at, g.plan.id.as_str()))
+}
+
 fn remember_in(registry: &Path, plan: SwarmPlan) -> Result<(), String> {
     let _lease = GroupLease::acquire(registry)?;
     let path = path_in(registry, &plan.id)?;
@@ -651,11 +662,7 @@ pub(crate) fn worker_admission_for_ticket_in(
     let global_cap = crate::spend::load_ceiling().max_concurrent as usize;
     let mut group_capacity = None;
     if let Some(ticket) = ticket {
-        if let Some(group) = groups
-            .iter()
-            .filter(|g| g.approved_at.is_some() && g.members.iter().any(|m| m.ticket == ticket))
-            .max_by_key(|g| g.approved_at)
-        {
+        if let Some(group) = latest_approved_group(&groups, &ticket) {
             if group.stopped_at.is_some() {
                 return Err("Approved group was stopped; worker admission refused".into());
             }
@@ -1295,11 +1302,26 @@ async fn refill_in(
         return Err("Group registry membership is inconsistent; refill refused".into());
     }
     for mut group in groups
-        .into_iter()
+        .iter()
         .filter(|g| g.approved_at.is_some() && g.stopped_at.is_none())
+        .cloned()
     {
         let mut unavailable = vec![false; group.members.len()];
         for (i, is_unavailable) in unavailable.iter_mut().enumerate() {
+            if let Some(latest) = latest_approved_group(&groups, &group.members[i].ticket)
+                .filter(|latest| latest.plan.id != group.plan.id)
+            {
+                let id = group.members[i].run_id.clone();
+                group.members[i].refusal = None;
+                transition(
+                    &mut group, i, MemberState::Blocked,
+                    format!("superseded by approved plan {}; existing runs and evidence retained", latest.plan.id),
+                    id, crate::run_control::now_ms(),
+                );
+                save_in(registry, &group)?;
+                *is_unavailable = true;
+                continue;
+            }
             if let Err(error) = backend.reconcile(&group.plan.project, &group.members[i].ticket) {
                 let reason = format!(
                     "Prelaunch recovery unavailable for {}: {error}",
@@ -2198,6 +2220,7 @@ mod tests {
         fail_reconcile: Option<String>,
         fail_snapshot: Option<String>,
         launched: std::sync::Mutex<Vec<String>>,
+        append_dispatch_note: bool,
     }
     impl RefillFixture {
         fn five_remote(environment: &str) -> Self {
@@ -2215,7 +2238,7 @@ mod tests {
             std::fs::write(registry.join("profiles/codex.json"),
                 serde_json::to_vec(&serde_json::json!({"model": models()["codex"]})).unwrap()).unwrap();
             Self { registry, tickets, fail_reconcile: None, fail_snapshot: None,
-                launched: std::sync::Mutex::new(vec![]) }
+                launched: std::sync::Mutex::new(vec![]), append_dispatch_note: false }
         }
 
         // Reproduce the persisted 1.30.2 -> 1.30.4 FORCASTER failure: an
@@ -2307,6 +2330,7 @@ mod tests {
                 fail_reconcile: None,
                 fail_snapshot: None,
                 launched: std::sync::Mutex::new(vec![]),
+                append_dispatch_note: false,
             }
         }
     }
@@ -2407,6 +2431,13 @@ mod tests {
                     crate::run_control::worker_capacity_in(&self.registry, 8, &own, None)
                 })?;
                 self.launched.lock().unwrap().push(run.ticket.clone());
+                let ticket_scope = if self.append_dispatch_note {
+                    let mut ticket = self.tickets.iter().find(|t| t.id == run.ticket).unwrap().clone();
+                    ticket.body.push_str("\nNative dispatch evidence");
+                    scope(&ticket)
+                } else {
+                    run.scope.clone()
+                };
                 Ok(crate::dispatch::DispatchResult {
                     ticket_id: run.ticket,
                     handle: run.owner,
@@ -2415,7 +2446,7 @@ mod tests {
                     session_id: format!("fixture-{}", registered.run_id),
                     run_id: Some(registered.run_id),
                     environment: run.environment.unwrap_or_else(|| "fixture".into()),
-                    ticket_scope: run.scope,
+                    ticket_scope,
                 })
             })
         }
@@ -2506,6 +2537,90 @@ mod tests {
             assert!(prior.admission_refused && prior.state == RunState::Failed);
             let journal = std::fs::read(fixture.registry.join(format!("{}.events.jsonl", refused[i]))).unwrap();
             assert!(journal.starts_with(&old_journals[i]), "refusal evidence must only be appended to");
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_approvals_recover_under_latest_group_and_keep_its_dispatched_scope() {
+        use crate::{instance::Role, run_control::{self, RunState}};
+        for tied_approval in [false, true] {
+            let mut fixture = RefillFixture::five_remote("exe-dev");
+            fixture.append_dispatch_note = true;
+            let mut old = groups_in(&fixture.registry, None).unwrap().remove(0);
+            approve(&mut old, 100);
+            save_in(&fixture.registry, &old).unwrap();
+            let refused = fixture.seed_refused_continuations();
+            let old = groups_in(&fixture.registry, None).unwrap().remove(0);
+            let mut latest = old.clone();
+            latest.plan.id = "remote-new".into();
+            latest.plan.created_at = 1;
+            latest.approved_at = Some(if tied_approval { 100 } else { 101 });
+            save_in(&fixture.registry, &latest).unwrap();
+
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            let groups = groups_in(&fixture.registry, None).unwrap();
+            let latest = &groups[1];
+            assert_eq!((report(latest).started.len(), report(latest).queued.len(), report(latest).failed.len()), (3, 2, 0));
+            for (i, member) in groups[0].members.iter().enumerate() {
+                assert!(member.started.is_none(), "superseded plan must not dispatch");
+                assert_eq!(member.run_id.as_deref(), Some(refused[i].as_str()));
+                assert!(member.reason.contains("remote-new"));
+            }
+            for member in latest.members.iter().filter(|m| m.started.is_some()) {
+                let ticket = fixture.tickets.iter_mut().find(|t| t.id == member.ticket).unwrap();
+                ticket.body.push_str("\nNative dispatch evidence");
+                let planned = latest.plan.runs.iter().find(|r| r.ticket == member.ticket).unwrap();
+                assert_ne!(planned.scope, scope(ticket));
+                assert!(authorized_member(&fixture.registry, planned, member, ticket), "native admission must accept the dispatch's own scope append");
+                let current = run_control::load_manifest_in(&fixture.registry, member.run_id.as_ref().unwrap()).unwrap();
+                assert_eq!(current.remote_env.as_deref(), Some("exe-dev"));
+            }
+            // Reload persisted plans and repeat confirmation: no older plan may
+            // take ownership back or turn the dispatch's scope append into a refusal.
+            confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+            for _ in 0..2 {
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            }
+            let groups = groups_in(&fixture.registry, None).unwrap();
+            assert_eq!(fixture.launched.lock().unwrap().len(), 3);
+            assert_eq!(report(&groups[1]).failed.len(), 0);
+            for member in groups[1].members.iter().take(2) {
+                run_control::update_in(&fixture.registry, member.run_id.as_ref().unwrap(), |r| r.state = RunState::Done).unwrap();
+            }
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            let groups = groups_in(&fixture.registry, None).unwrap();
+            assert_eq!(report(&groups[1]).started.len(), 5);
+            assert_eq!(fixture.launched.lock().unwrap().len(), 5);
+            assert_eq!(run_control::list_ids_in(&fixture.registry).unwrap().len(), 15);
+            assert!(groups[0].members.iter().all(|m| m.started.is_none()));
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_approvals_respect_newest_stop_and_unapproved_partial_plans() {
+        use crate::instance::Role;
+        for approved in [false, true] {
+            let fixture = RefillFixture::five_remote("exe-dev");
+            let mut old = groups_in(&fixture.registry, None).unwrap().remove(0);
+            approve(&mut old, 100);
+            save_in(&fixture.registry, &old).unwrap();
+            let mut newer = old.clone();
+            newer.plan.id = "remote-new".into();
+            newer.plan.created_at = 1;
+            newer.plan.runs.truncate(2);
+            newer.members.truncate(2);
+            newer.approved_at = if approved { Some(101) } else { None };
+            if approved { stop(&mut newer, 102); }
+            save_in(&fixture.registry, &newer).unwrap();
+            for _ in 0..2 {
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            }
+            let launched = fixture.launched.lock().unwrap().clone();
+            let expected: Vec<_> = if approved { (4..=6).collect() } else { (2..=4).collect() };
+            assert_eq!(launched, expected.iter().map(|n| format!("FORCASTER-{n}")).collect::<Vec<_>>());
+            let groups = groups_in(&fixture.registry, None).unwrap();
+            assert!(groups[1].members.iter().all(|m| m.started.is_none()));
+            assert_eq!(groups[1].stopped_at.is_some(), approved);
         }
     }
 

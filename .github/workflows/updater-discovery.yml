@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   discover:
-    name: Native 1.30.4 to 1.30.5 (${{ matrix.target }})
+    name: Native 1.30.4 to 1.30.6 (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
