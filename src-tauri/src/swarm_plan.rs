@@ -1063,7 +1063,8 @@ fn recover_member(
             let continuation = match crate::run_control::continuation_in(registry, ticket) {
                 Ok(continuation) => continuation,
                 Err(error) => {
-                    let retained_id = group.members[i].run_id.clone();
+                    let retained_id = group.members[i].run_id.clone()
+                        .or_else(|| assignments.last().map(|a| a.run_id.clone()));
                     transition(group, i, MemberState::Blocked,
                         format!("continuation recovery refused: {error}"), retained_id, now);
                     return true;
@@ -2572,7 +2573,7 @@ mod tests {
             if conflict == "receipt" {
                 assert!(group.members[0].reason.contains("unrelated-run"), "the unrelated receipt must cause the refusal");
             }
-            assert_eq!(group.members[0].run_id.as_deref(), Some(refused[0].as_str()));
+            assert_eq!(group.members[0].run_id.as_deref(), Some(refused[0].as_str()), "{conflict}");
             assert!(!group.members[0].reason.contains("implementation retained"), "{conflict}");
             assert!(group.members[0].reason.contains("recovery refused") || group.members[0].reason.contains("conflicts with execution"), "{conflict}");
             assert_eq!(run_control::load_manifest_in(&fixture.registry, &refused[0]).unwrap().state, RunState::Failed);
