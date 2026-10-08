@@ -458,6 +458,7 @@
       sheetGeneration: 0,
       sheetEntry: null,
       factsGeneration: 0,
+      projectGeneration: 0,
       files: new Map(),  // path -> { disk, draft, mode }
       dirty: new Set(),  // absolute paths reported by git after a write
     };
@@ -1124,7 +1125,7 @@
     // previous project's checkout.
     async function switchProject(key) {
       const tab = state.tab;
-      await setProject({ project: key });
+      if (!await setProject({ project: key })) return;
       show(tab);
     }
 
@@ -1270,9 +1271,12 @@
 
     async function setProject(next) {
       next = next || {};
+      const generation = ++state.projectGeneration;
       // The project arrives as an argument, never read from the sidebar: the
       // sidebar that will select it is XNAUT-335 and is being built in parallel.
       const given = next.project;
+      const nextKey = typeof given === 'object' ? given?.key || given?.name : given;
+      if (nextKey && String(nextKey).toUpperCase() !== state.projectKey.toUpperCase()) state.worktree = '';
       if (given && typeof given === 'object') {
         state.project = given;
         state.projectKey = String(given.key || given.name || '');
@@ -1285,11 +1289,11 @@
       // Always asked for, even when the caller handed us the project object:
       // the switcher below the tabs lists every project, so the list is not an
       // optional lookup any more, it is what that control is made of.
-      try {
-        state.projects = (await invoke('pm_project_list')) || [];
-      } catch (_error) {
-        state.projects = [];
-      }
+      let projects;
+      try { projects = (await invoke('pm_project_list')) || []; }
+      catch (_error) { projects = []; }
+      if (generation !== state.projectGeneration) return false;
+      state.projects = projects;
       if (state.projectKey && !state.project) {
         const key = state.projectKey.toUpperCase();
         state.project = state.projects.find((item) => String(item.key || '').toUpperCase() === key)
@@ -1299,6 +1303,7 @@
       }
       paintHead();
       paintProjectSelect();
+      syncProjectContext();
       // A different project is a different sheet: what was open in it belonged
       // to the project that is no longer selected.
       closeSheet();
@@ -1313,6 +1318,7 @@
       viewEl.innerHTML = emptyCodeHtml();
       loadFacts();
       await loadTree();
+      if (generation !== state.projectGeneration) return false;
       // A file asked for by whoever opened the workspace. Done after the tree
       // is rooted, because the tree is what the tab bar and the row highlight
       // are drawn against.
@@ -1324,6 +1330,7 @@
       if (next.ticket) state.pendingTicket = String(next.ticket);
       if (next.flowStage) state.pendingFlowStage = String(next.flowStage);
       if (next.sheet) openSheet(String(next.sheet));
+      return true;
     }
 
     await setProject(opts);
@@ -1333,11 +1340,13 @@
       kind: 'workspace',
       label,
       pane,
+      getProjectContext: () => ({ key: state.projectKey, path: root() }),
+      onActivate: syncProjectContext,
       async updateOptions(next) {
         next = next || {};
         const changed = (next.project && next.project !== state.projectKey && next.project !== state.project)
           || (typeof next.worktree === 'string' && next.worktree !== state.worktree);
-        if (changed) await setProject(next);
+        if (changed) { if (!await setProject(next)) return; }
         // A file asked for when the project did not change: setProject never
         // ran, so nothing would have opened it.
         else if (next.file) openFile(String(next.file));
@@ -1365,6 +1374,12 @@
     entry.dispose = entry.destroy;
     panes.set(label, entry);
     return entry;
+
+    function syncProjectContext() {
+      // A hidden workspace must not change the visible pane's context when a
+      // pending project load finishes. onActivate restores it on return.
+      if (pane.isConnected && window.xnautRightPaneSetRoot) window.xnautRightPaneSetRoot(root() || null);
+    }
   }
 
   function destroyWorkspacePanel(label) {

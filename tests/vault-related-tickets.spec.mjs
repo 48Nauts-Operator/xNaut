@@ -25,16 +25,69 @@ const TICKETS = [
     documentation: [], updated_at: '2026-08-20T20:00:00Z' },
 ];
 
-async function openVaultTickets(page) {
-  await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
+async function openVaultTickets(page, tickets = TICKETS) {
+  await page.addInitScript(() => {
+    localStorage.setItem('xnaut-sidebar-visible', '1');
+    localStorage.setItem('xnaut-right-pane-visible', '1');
+  });
   await page.goto('/?stub=1');
   await page.waitForSelector('#btn-help');
-  await page.evaluate((tickets) => { window.__xnautStub.pm_ticket_list = tickets; }, TICKETS);
+  await page.evaluate((tickets) => { window.__xnautStub.pm_ticket_list = tickets; }, tickets);
   await page.waitForTimeout(2000);
   await page.getByRole('button', { name: 'More surfaces', exact: true }).click();
   await page.locator('.sbar-menu-item', { hasText: 'Vault' }).click();
   await expect(page.locator('.sbar-submenu')).toBeVisible();
 }
+
+test('Vault keeps navigation visible and the right Journal follows the open document project', async ({ page }) => {
+  await openVaultTickets(page);
+  await expect(page.getByRole('button', { name: 'Projects', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sessions', exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    window.__xnautStub.project_journal_read = {
+      project: { key: 'SMOKE', name: 'Smoke Test' }, path: 'Development/journal/2026-10-08.md',
+      documents: [], opening: '', entries: [], runs: [], groups: [], observed_at: '2026-10-08T13:00:00Z',
+      continuity: { project: 'SMOKE', tickets: [], assignments: [], diagnostics: [] },
+    };
+    window.xnautRightPaneShow('workspace');
+    window.xnautRightPaneSetRoot('/home/previous-project');
+  });
+  await page.locator('.vp-filter-input').fill('pm-space');
+  await page.locator('.vp-body').getByText('PM Space', { exact: true }).first().click();
+  await expect(page.locator('.rpane-title')).toHaveAttribute('title', '/tmp/smoke');
+  await page.locator('.rpws-nav [data-sub="journal"]').click();
+  await expect(page.locator('.pj [data-title]')).toHaveText('Smoke Test · Live Journal');
+  const calls = await page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'project_journal_read'));
+  expect(calls.at(-1).args.project).toBe('/tmp/smoke');
+  // Opening a document in Chat must not start any ticket history scan.
+  expect(await page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'git_ticket_files').length)).toBe(0);
+  expect(await page.evaluate(() => window.xnautActiveProjectKey())).toBe('SMOKE');
+});
+
+test('large Vault ticket lists render immediately, bound Git work and pause when left', async ({ page }) => {
+  const tickets = Array.from({ length: 500 }, (_, i) => ({ ...TICKETS[1], id: `SMOKE-${i + 1}`, body: 'Large ticket evidence. '.repeat(1000) }));
+  await openVaultTickets(page, tickets);
+  await page.evaluate(() => {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__pendingGit = [];
+    window.__TAURI__.core.invoke = (cmd, args) => {
+      if (cmd !== 'git_ticket_files') return invoke(cmd, args);
+      window.__xnautInvokes.push({ cmd, args });
+      return new Promise(resolve => window.__pendingGit.push(resolve));
+    };
+  });
+  await openNote(page, 'pm-space', 'PM Space');
+  await expect(page.locator('.vp-ticket')).toHaveCount(500);
+  await expect(page.locator('.vp-ticket-text').first()).toBeEmpty();
+  expect(await page.evaluate(() => window.__pendingGit.length)).toBe(1);
+  const tab = await page.locator('.tab.active').getAttribute('data-session-id');
+  await page.evaluate(() => window.xnautAttachMarkdownTab({ filename: 'Other document' }));
+  await page.evaluate(() => window.__pendingGit[0]([]));
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => window.__pendingGit.length)).toBe(1);
+  await page.locator(`.tab[data-session-id="${tab}"]`).click();
+  await expect.poll(() => page.evaluate(() => window.__pendingGit.length)).toBe(2);
+});
 
 // The ticket pane is scoped to a project, and the project comes from the open
 // note, so a note has to be open before there is anything to list.

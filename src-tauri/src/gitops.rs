@@ -292,7 +292,26 @@ pub fn git_worktree_list(repo: String) -> Result<Vec<Worktree>, String> {
 }
 
 #[tauri::command]
-pub fn git_ticket_files(repo: String, ticket_id: String) -> Result<Vec<ChangedFile>, String> {
+pub async fn git_ticket_files(repo: String, ticket_id: String) -> Result<Vec<ChangedFile>, String> {
+    // Synchronous Tauri commands execute on the UI thread. A large ticket
+    // history froze the native event loop for minutes when Vault opened.
+    ticket_files_task(move || ticket_files(repo, ticket_id)).await
+}
+
+static TICKET_FILE_QUERIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+async fn ticket_files_task<F>(query: F) -> Result<Vec<ChangedFile>, String>
+where
+    F: FnOnce() -> Result<Vec<ChangedFile>, String> + Send + 'static,
+{
+    let permit = TICKET_FILE_QUERIES.acquire().await.map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        query()
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn ticket_files(repo: String, ticket_id: String) -> Result<Vec<ChangedFile>, String> {
     let root = Path::new(&repo);
     let hashes = run_git(
         root,
@@ -927,6 +946,40 @@ fn commits_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ticket_history_queries_leave_the_ui_executor_free_and_bound_parallel_work() {
+        use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+        let caller = std::thread::current().id();
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut jobs = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let active = active.clone();
+            let peak = peak.clone();
+            let (notify, ready) = tokio::sync::oneshot::channel();
+            let (respond, ui_response) = std::sync::mpsc::channel();
+            jobs.spawn(async move {
+                let query = ticket_files_task(move || {
+                    assert_ne!(std::thread::current().id(), caller, "Git must not run on the caller's UI thread");
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(count, Ordering::SeqCst);
+                    notify.send(()).unwrap();
+                    // The query cannot finish until the UI executor responds.
+                    // Running it synchronously would deadlock this handshake.
+                    ui_response.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(vec![])
+                });
+                let ui = async move { ready.await.unwrap(); respond.send(()).unwrap(); };
+                let (result, ()) = tokio::join!(query, ui);
+                result.unwrap();
+            });
+        }
+        while let Some(job) = jobs.join_next().await { job.unwrap(); }
+        assert!(peak.load(Ordering::SeqCst) <= 2, "a large project cannot launch an unbounded Git burst");
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn a_remote_becomes_a_release_page_whatever_shape_the_url_is() {

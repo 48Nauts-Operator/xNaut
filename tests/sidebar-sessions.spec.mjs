@@ -36,25 +36,34 @@ const STUB = {
   ],
 };
 
-async function openSidebar(page) {
+async function openSidebar(page, realOpen = false) {
   await page.addInitScript(() => {
     localStorage.clear();
     localStorage.setItem('xnaut-sidebar-visible', '1');
   });
   await page.goto('/?stub=1');
   await page.waitForSelector('#btn-help');
-  await page.evaluate((stub) => {
+  await page.evaluate(({ stub, realOpen }) => {
     Object.assign(window.__xnautStub, stub);
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = (cmd, args) => {
+      const handler = window.__xnautStub[cmd];
+      if (typeof handler !== 'function') return invoke(cmd, args);
+      window.__xnautInvokes.push({ cmd, args });
+      return Promise.resolve().then(() => handler(args));
+    };
     window.__opened = [];
     window.__created = [];
-    window.xnautShowSessionInHost = (name) => { window.__opened.push(name); return 'tab-host'; };
+    if (!realOpen) window.xnautOpenZellijSession = (name) => { window.__opened.push(name); return 'tab-session'; };
+    let nextPty = 0;
+    window.__xnautStub.create_command_session = () => ({ session_id: `session-pty-${++nextPty}` });
     window.__renamed = [];
     window.xnautSessionAlias = (name) => ({ 'cx-blogs': 'Blog drafts', 'me-102303': 'bin-movement' }[name] || '');
     window.xnautRenameSession = (name, alias) => { window.__renamed.push([name, alias]); };
     window.xnautPromptDialog = async () => 'Geo work';
     window.xnautConfirmDialog = async () => false;
     window.createNewTab = () => { window.__created.push('terminal'); };
-  }, STUB);
+  }, { stub: STUB, realOpen });
   await page.waitForTimeout(1200);
   await page.evaluate(() => window.xnautSidebarRefresh());
   await page.getByRole('button', { name: 'Sessions', exact: true }).click();
@@ -122,6 +131,95 @@ test('a click opens the session through the app, and the icon toggles back to pr
   await expect(page.locator('.sbar-projects')).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('xnaut-sidebar-view'))).toBe('projects');
   expect(await errors(page)).toEqual([]);
+});
+
+test('different sidebar sessions keep separate tabs and returning reuses the existing PTY', async ({ page }) => {
+  await openSidebar(page, true);
+  const row = name => page.locator(`.sbar-sess[data-session="${name}"]`);
+  await row('cx-geo').click();
+  await expect(page.locator('.tab.active')).toContainText('cx-geo');
+  await expect(page.locator('.tab.active')).toHaveAttribute('data-backend-session-id', 'session-pty-1');
+  const first = await page.locator('.tab.active').getAttribute('data-session-id');
+  await row('cx-blogs').click();
+  await expect(page.locator('.tab.active')).toContainText('Blog drafts');
+  await expect(page.locator('.tab.tab-manual')).toHaveCount(2);
+  await row('cx-geo').dblclick();
+  await expect(page.locator('.tab.active')).toHaveAttribute('data-session-id', first);
+  const calls = await page.evaluate(() => window.__xnautInvokes.filter(i => ['create_command_session', 'close_terminal'].includes(i.cmd)));
+  expect(calls.filter(i => i.cmd === 'create_command_session')).toHaveLength(2);
+  expect(calls.filter(i => i.cmd === 'close_terminal')).toHaveLength(0);
+});
+
+test('rapid repeated clicks attach each sidebar session only once', async ({ page }) => {
+  await openSidebar(page, true);
+  await page.evaluate(() => {
+    let count = 0;
+    window.__xnautStub.create_command_session = async () => {
+      const session_id = `slow-pty-${++count}`;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      return { session_id };
+    };
+    const row = document.querySelector('.sbar-sess[data-session="cx-geo"]');
+    row.click(); row.click(); row.click();
+  });
+  await expect(page.locator('.tab.active')).toContainText('cx-geo');
+  expect(await page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'create_command_session').length)).toBe(1);
+});
+
+test('different sessions attached in the same millisecond have distinct tabs', async ({ page }) => {
+  await openSidebar(page, true);
+  await page.evaluate(async () => {
+    const now = Date.now, fixed = now();
+    Date.now = () => fixed;
+    try { await Promise.all(['cx-geo', 'cx-blogs'].map(name => window.xnautOpenZellijSession(name))); }
+    finally { Date.now = now; }
+  });
+  const tabs = page.locator('.tab.tab-manual');
+  await expect(tabs).toHaveCount(2);
+  const ids = await tabs.evaluateAll(nodes => nodes.map(node => node.dataset.sessionId));
+  expect(new Set(ids).size).toBe(2);
+});
+
+test('adopted busy sessions show activity despite a stale done or unknown attachment', async ({ page }) => {
+  await openSidebar(page);
+  for (const status of ['done', 'unknown']) {
+    await page.evaluate(status => {
+      window.__xnautStub.zellij_sessions_info.find(s => s.name === 'cx-geo').busy = true;
+      window.__xnautStub.agent_sessions_list = [{ session_id: 'old-attachment', zellij_session: 'cx-geo', status }];
+      window.xnautSidebarRefresh();
+    }, status);
+    const row = page.locator('.sbar-sess[data-session="cx-geo"]');
+    await expect(row).toHaveAttribute('data-state', 'working');
+    await expect(row.locator('.sbar-dot')).toHaveClass(/sbar-run/);
+    expect(await row.locator('.sbar-dot').evaluate(el => getComputedStyle(el, '::before').animationName)).not.toBe('none');
+  }
+});
+
+test('a stale attachment cannot mask a working session regardless of backend row order', async ({ page }) => {
+  await openSidebar(page);
+  for (const reverse of [false, true]) {
+    await page.evaluate(reverse => {
+      const rows = [
+        { session_id: 'current', zellij_session: 'cx-blogs', status: 'working', status_changed_at_ms: 20 },
+        { session_id: 'detached', zellij_session: 'cx-blogs', status: 'done', status_changed_at_ms: 10 },
+      ];
+      window.__xnautStub.agent_sessions_list = reverse ? rows.reverse() : rows;
+      window.xnautSidebarRefresh();
+    }, reverse);
+    await expect(page.locator('.sbar-sess[data-session="cx-blogs"]')).toHaveAttribute('data-state', 'working');
+  }
+});
+
+test('busy sampling preserves permission and waiting states and exited sessions', async ({ page }) => {
+  await openSidebar(page);
+  for (const status of ['permission', 'blocked', 'waiting', 'interrupted']) {
+    await page.evaluate(status => {
+      window.__xnautStub.agent_sessions_list = [{ session_id: 'current', zellij_session: 'cx-geo', status }];
+      window.xnautSidebarRefresh();
+    }, status);
+    await expect(page.locator('.sbar-sess[data-session="cx-geo"]')).toHaveAttribute('data-state', status);
+  }
+  await expect(page.locator('.sbar-sess[data-session="cx-Keep"]')).toHaveAttribute('data-state', 'exited');
 });
 
 test('right-click offers Rename, which stores the name on the session', async ({ page }) => {

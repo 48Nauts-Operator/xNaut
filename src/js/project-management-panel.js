@@ -411,23 +411,31 @@ When fixing, do targeted fixes — do not delete a whole screen and start over u
   }
   // Attach ANY zellij session (Observatory row click) in a new terminal tab.
   // Module scope: must work even before a PM panel exists; loud on failure.
-  window.xnautOpenZellijSession = async (name, options) => {
-    try {
-      const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
-      if (!s) return;
-      let home = '/tmp'; try { home = await invoke('get_home_directory'); } catch (_) {}
-      // `-c` creates the session when the sidebar's + asked for a new one; a
-      // plain attach on a missing name says so instead of creating it.
-      const create = options && options.create ? '-c ' : '';
-      const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach ' + create + '"' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
-      // Spawn at the pane's real size so zellij never reflows on attach.
-      const size = options && options.cols && options.rows ? { cols: options.cols, rows: options.rows } : (window.xnautLastTermSize || {});
-      const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: (options && options.cwd) || home, ...(size.cols ? { cols: size.cols, rows: size.rows } : {}) } });
-      const sid = res.session_id || res.sessionId || res.id;
-      console.log('[zellij-attach]', s, '→ pty', sid);
-      if (window.xnautAttachAgentTab) window.xnautAttachAgentTab(sid, '⎇ ' + s, s, options);
-      else console.error('[zellij-attach] xnautAttachAgentTab missing');
-    } catch (e) { console.error('[zellij-attach] failed:', e); }
+  const zellijSessionOpens = new Map();
+  window.xnautOpenZellijSession = (name, options) => {
+    const s = String(name || '').replace(/[^a-zA-Z0-9._-]/g, '');
+    if (!s) return Promise.resolve(null);
+    if (window.xnautFocusTabForSession?.(s, options)) return Promise.resolve(true);
+    if (zellijSessionOpens.has(s)) return zellijSessionOpens.get(s);
+    const opening = (async () => {
+      try {
+        let home = '/tmp'; try { home = await invoke('get_home_directory'); } catch (_) {}
+        // `-c` creates the session when the sidebar's + asked for a new one; a
+        // plain attach on a missing name says so instead of creating it.
+        const create = options && options.create ? '-c ' : '';
+        const full = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"; zellij attach ' + create + '"' + s + '" 2>/dev/null || { echo "Session ' + s + ' has ended."; echo; exec sh; }';
+        // Spawn at the pane's real size so zellij never reflows on attach.
+        const size = options && options.cols && options.rows ? { cols: options.cols, rows: options.rows } : (window.xnautLastTermSize || {});
+        const res = await invoke('create_command_session', { config: { program: 'sh', args: ['-c', full], workingDir: (options && options.cwd) || home, ...(size.cols ? { cols: size.cols, rows: size.rows } : {}) } });
+        const sid = res.session_id || res.sessionId || res.id;
+        console.log('[zellij-attach]', s, '→ pty', sid);
+        if (window.xnautAttachAgentTab) return window.xnautAttachAgentTab(sid, '⎇ ' + s, s, options);
+        else console.error('[zellij-attach] xnautAttachAgentTab missing');
+      } catch (e) { console.error('[zellij-attach] failed:', e); }
+    })();
+    zellijSessionOpens.set(s, opening);
+    opening.finally(() => zellijSessionOpens.delete(s));
+    return opening;
   };
   // Chat history persists per chat key (project / project:validator) — a reload
   // must not clear the conversation; the agent side already persists via resume.

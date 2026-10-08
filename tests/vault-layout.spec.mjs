@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('Vault replaces the master menu and uses the next pane for its navigator', async ({ page }) => {
+test('Vault keeps global navigation and uses the next pane for its navigator', async ({ page }) => {
   page.on('pageerror', (error) => { throw error; });
   await page.addInitScript(() => localStorage.setItem('xnaut-sidebar-visible', '1'));
   await page.goto('/?stub=1');
@@ -10,7 +10,7 @@ test('Vault replaces the master menu and uses the next pane for its navigator', 
   await page.locator('.sbar-menu-item', { hasText: 'Vault' }).click();
 
   await expect(page.locator('.sbar-submenu')).toBeVisible();
-  await expect(page.locator('.sbar-nav')).toBeHidden();
+  await expect(page.locator('.sbar-nav')).toBeVisible();
   await expect(page.locator('.sbar-projects')).toBeHidden();
   await expect(page.locator('.sbar-submenu-body .vp-master')).toBeVisible();
   await expect(page.locator('.sbar-submenu-body')).toContainText('Work');

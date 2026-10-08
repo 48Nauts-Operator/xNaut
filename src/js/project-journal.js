@@ -153,7 +153,10 @@
           const contentHost=node.querySelector('.pj-body');
           if(entry.run_id && entry.preview){
             const brief=document.createElement('div');markdown(brief,entry.preview,openWiki);contentHost.append(brief);
-            const evidence=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Execution details and evidence';const full=document.createElement('div');full.className='pj-evidence';markdown(full,entry.content,openWiki);evidence.append(summary,full);contentHost.append(evidence);
+            const evidence=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Execution details and evidence';const full=document.createElement('div');full.className='pj-evidence';
+            let rendered=false;
+            evidence.addEventListener('toggle',()=>{if(evidence.open&&!rendered){markdown(full,entry.content,openWiki);rendered=true;}});
+            evidence.append(summary,full);contentHost.append(evidence);
           } else markdown(contentHost,entry.content,openWiki);
           const body=node.querySelector('.pj-body');
           const attribution=body.querySelector('h3 + p');
@@ -184,7 +187,7 @@
       try{await invoke('project_journal_add',{request:{project:data.project.key,ticket,kind,title:kind==='question'?'Your question':kind==='decision'?'Your decision':'Your note',content:text}});if(stopped)return;$('[data-note]').value='';remember();selected=null;fingerprint='';await refresh();}
       catch(err){if(!stopped)status('Note not saved: '+String(err));}finally{if(button.isConnected)button.disabled=false;}
     };
-    void refresh();timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);stopped=true;return;}void refresh();},5000);
+    void refresh();timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);stopped=true;return;}if(!document.hidden&&host.getClientRects().length)void refresh();},5000);
     const instance={dispose(){remember();stopped=true;clearInterval(timer);},refresh};instances.set(host,instance);return instance;
   }
   window.xnautJournal={mount};

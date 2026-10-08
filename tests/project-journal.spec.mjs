@@ -1,4 +1,45 @@
 import {test,expect} from '@playwright/test';
+
+test('hidden Journal stops polling and resumes when shown', async ({ page }) => {
+  await page.clock.install();
+  await start(page);
+  const reads = () => page.evaluate(() => window.journalCalls.filter(c => c.name === 'project_journal_read').length);
+  const before = await reads();
+  await page.evaluate(() => { document.querySelector('#journal').hidden = true; });
+  await page.clock.fastForward(20_000);
+  expect(await reads()).toBe(before);
+  await page.evaluate(() => { document.querySelector('#journal').hidden = false; });
+  await page.clock.fastForward(5_000);
+  await expect.poll(reads).toBe(before + 1);
+});
+
+test('closed execution evidence is rendered on demand and survives refresh', async ({ page }) => {
+  await start(page);
+  await page.evaluate(() => {
+    window.journalData.entries = Array.from({ length: 200 }, (_, i) => ({
+      id: `receipt-${i}`, kind: 'execution', actor: 'Builder', at: '2026-10-08T12:00:00Z',
+      run_id: `run-${i}`, ticket: 'DEMO-1', preview: `### Run ${i}\n\nSummary ${i}`,
+      content: `### Detailed evidence ${i}\n\n` + 'Retained evidence with exact source attribution.\n\n'.repeat(100),
+    }));
+    window.__renderedEvidence = 0;
+    const render = window.xnautMarkdown.render;
+    window.xnautMarkdown.render = text => {
+      if (text.includes('Detailed evidence')) window.__renderedEvidence++;
+      return render(text);
+    };
+    return window.journalInstance.refresh();
+  });
+  await expect(page.locator('.pj-entry')).toHaveCount(200);
+  expect(await page.evaluate(() => window.__renderedEvidence)).toBe(0);
+  const first = page.locator('.pj-entry').first();
+  await first.getByText('Execution details and evidence', { exact: true }).click();
+  await expect(first.locator('.pj-evidence')).toContainText('Detailed evidence 0');
+  expect(await page.evaluate(() => window.__renderedEvidence)).toBe(1);
+  await page.evaluate(() => window.journalInstance.refresh());
+  expect(await page.evaluate(() => window.__renderedEvidence)).toBe(1);
+  await expect(first.locator('details')).toHaveAttribute('open');
+});
+
 async function start(page){
  await page.goto('/wiki-preview.html');
  await page.addScriptTag({url:'/js/project-journal.js'});

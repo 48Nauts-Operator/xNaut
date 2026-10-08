@@ -12,8 +12,10 @@ export const nativeSuites = [
   'project_management::mutation_recovery::tests::', 'project_management::write_guard_tests::',
   'project_continuity::tests::', 'agent_work::tests::', 'repository_review::tests::',
   'run_control::tests::', 'settings::tests::', 'ticket_triage::tests::',
+  'gitops::tests::',
 ];
 export const requiredNative = [
+  'gitops::tests::ticket_history_queries_leave_the_ui_executor_free_and_bound_parallel_work',
   'swarm_plan::tests::overlapping_approvals_recover_under_latest_group_and_keep_its_dispatched_scope',
   'swarm_plan::tests::overlapping_approvals_respect_newest_stop_and_unapproved_partial_plans',
   'run_control::tests::admission_refusal_proof_requires_native_refusal_and_no_execution_evidence',
@@ -37,6 +39,7 @@ export const browserFiles = [
   'console-clean.spec.mjs', 'settings-hidden-lifecycle.spec.mjs',
   'observatory-sessions.spec.mjs', 'sidebar-sessions.spec.mjs',
   'sessions-band.spec.mjs', 'ticket-links.spec.mjs',
+  'workspace-project-context.spec.mjs', 'vault-related-tickets.spec.mjs', 'vault-layout.spec.mjs', 'project-journal.spec.mjs',
 ];
 
 export function checkNative(output, suites = nativeSuites, required = requiredNative) {

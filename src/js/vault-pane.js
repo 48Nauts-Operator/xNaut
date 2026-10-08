@@ -576,6 +576,9 @@
     let currentProjectRoot = '';
     let runView = opts.hideChat ? 'tickets' : 'chat';
     let selectedTicket = null;
+    let ticketGeneration = 0;
+    let loadingTicketFiles = false;
+    let disposed = false;
     const documentChangeListeners = new Set();
     const emitDocumentChange = () => documentChangeListeners.forEach((listener) => {
       try { listener({ vault, rel: currentRel, content: ta.value }); } catch (_) { /* isolated UI listener */ }
@@ -592,7 +595,57 @@
       statusEl: status, notes: [],
       renderView: null,
       mode: () => mode,
+      getProjectContext: () => ({ key: currentProjectKey, path: currentProjectRoot }),
+      onActivate() { syncProjectContext(); void loadTicketFiles(); },
     };
+
+    function syncProjectContext() {
+      if (row.isConnected && window.xnautRightPaneSetRoot) window.xnautRightPaneSetRoot(currentProjectRoot || null);
+    }
+
+    async function ensureTicketFiles(ticket, repo) {
+      if (ticket._files) return ticket._files;
+      if (!ticket._filesPromise) {
+        ticket._filesPromise = invoke('git_ticket_files', { repo, ticketId: ticket.id })
+          .then(files => { ticket._files = files; return files; })
+          .catch(error => { ticket._filesError = String(error); return []; });
+      }
+      return ticket._filesPromise;
+    }
+
+    async function loadTicketFiles() {
+      if (loadingTicketFiles || !currentProjectRoot || disposed) return;
+      loadingTicketFiles = true;
+      const generation = ticketGeneration, repo = currentProjectRoot;
+      try {
+        // One background request at a time. Never queue a project-wide burst
+        // of synchronous Git scans behind the next click (native freeze,
+        // 2026-10-08). Stop scheduling as soon as this view is left.
+        for (const ticket of projectTickets) {
+          if (disposed || generation !== ticketGeneration || runView !== 'tickets'
+              || !row.isConnected || !runHost.getClientRects().length) break;
+          if (!ticket._files && !ticket._filesError) await ensureTicketFiles(ticket, repo);
+          if (disposed || generation !== ticketGeneration) break;
+          const card = [...runHost.querySelectorAll('.vp-ticket')]
+            .find(el => projectTickets[Number(el.dataset.ticketIndex)] === ticket);
+          if (card) paintTicketStats(card.querySelector('.vp-ticket-stats'), ticket);
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        if (!disposed && generation === ticketGeneration && runView === 'tickets'
+            && row.isConnected && runHost.getClientRects().length) renderProjectTickets(currentProjectKey);
+      } finally {
+        loadingTicketFiles = false;
+        if (!disposed && generation !== ticketGeneration) void loadTicketFiles();
+      }
+    }
+
+    function paintTicketStats(button, ticket) {
+      if (!button) return;
+      if (ticket._filesError) { button.textContent = 'Files unavailable'; button.title = ticket._filesError; return; }
+      if (!ticket._files) { button.textContent = 'Files…'; return; }
+      const totals = totalsFor(ticket);
+      button.innerHTML = `<span class="vp-ticket-add">+${totals.additions}</span><span class="vp-ticket-del">−${totals.deletions}</span>`;
+    }
 
     function openAgentFatherFromVault(seed) {
       if (typeof window.xnautOpenAgentFather !== 'function') return false;
@@ -711,6 +764,9 @@
     }
     function renderProjectTickets(projectKey) {
       const target = runHost.querySelector('.vp-run-body');
+      const expanded = new Set([...target.querySelectorAll('.vp-ticket[open]')].map(el => projectTickets[Number(el.dataset.ticketIndex)]?.id));
+      const restOpen = !!target.querySelector('.vp-ticket-rest[open]');
+      const scrollTop = target.scrollTop;
       runHost.querySelector('.vp-run-heading').textContent = projectKey ? `Tickets · ${projectKey} · ${projectTickets.length}` : 'Project tickets';
       if (!projectKey) {
         target.innerHTML = '<div style="padding:6px;color:var(--text-muted,#777)">Open a project document to see its tickets.</div>';
@@ -735,12 +791,25 @@
           + rest.map(card).join(''));
       target.querySelectorAll('.vp-ticket').forEach((ticketEl) => {
         const ticket = projectTickets[Number(ticketEl.dataset.ticketIndex)];
-        window.xnautMarkdown.renderInto(ticketEl.querySelector('.vp-ticket-text'), ticketMarkdown(ticket.body));
-        ticketEl.addEventListener('toggle', () => { if (ticketEl.open) selectedTicket = ticket; });
-        ticketEl.querySelector('.vp-ticket-stats').onclick = (event) => {
-          event.preventDefault(); event.stopPropagation(); selectedTicket = ticket; openTicketFiles(ticket);
+        let rendered = false;
+        paintTicketStats(ticketEl.querySelector('.vp-ticket-stats'), ticket);
+        ticketEl.addEventListener('toggle', () => {
+          if (!ticketEl.open) return;
+          selectedTicket = ticket;
+          if (!rendered) { window.xnautMarkdown.renderInto(ticketEl.querySelector('.vp-ticket-text'), ticketMarkdown(ticket.body)); rendered = true; }
+        });
+        if (expanded.has(ticket.id)) ticketEl.open = true;
+        ticketEl.querySelector('.vp-ticket-stats').onclick = async (event) => {
+          event.preventDefault(); event.stopPropagation(); selectedTicket = ticket;
+          const repo = currentProjectRoot, generation = ticketGeneration;
+          await ensureTicketFiles(ticket, repo);
+          if (generation !== ticketGeneration || disposed) return;
+          paintTicketStats(ticketEl.querySelector('.vp-ticket-stats'), ticket);
+          openTicketFiles(ticket);
         };
       });
+      if (restOpen && target.querySelector('.vp-ticket-rest')) target.querySelector('.vp-ticket-rest').open = true;
+      target.scrollTop = scrollTop;
     }
 
     function showRunView(viewName) {
@@ -757,6 +826,7 @@
       target.style.padding = '8px';
       if (runView === 'tickets') {
         renderProjectTickets(currentProjectKey);
+        void loadTicketFiles();
         return;
       }
       if (runView === 'files') {
@@ -956,9 +1026,11 @@
     showRunView(runView);
 
     async function refreshRunDetail() {
+      const generation = ++ticketGeneration;
       projectTickets = [];
       try {
         const projects = await invoke('pm_project_list').catch(() => []);
+        if (disposed || generation !== ticketGeneration) return;
         const folder = (scopePrefix || String(currentRel || '').split('/')[0]).toLowerCase();
         const ticketPrefix = ((ta.value.match(/\b([A-Z][A-Z0-9]+)-\d+\b/) || [])[1] || '').toLowerCase();
         const project = (projects || []).find((item) => String(item.key).toLowerCase() === String(opts.projectKey || '').toLowerCase())
@@ -967,6 +1039,7 @@
         const projectKey = project && project.key;
         currentProjectKey = projectKey || '';
         currentProjectRoot = project && (project.source_path || project.source_repo || project.repo_path) || '';
+        syncProjectContext();
         // Per-project chat: each project keeps its own thread, so switching
         // projects on the left shows that project's conversation (or an empty
         // one), not the single ever-growing pile shared across all of them.
@@ -975,10 +1048,9 @@
             ? 'vault-document:v2:proj:' + currentProjectKey.toLowerCase()
             : 'vault-document:v2:vault:' + vault);
         }
-        if (projectKey) projectTickets = await invoke('pm_ticket_list', { project: projectKey }).catch(() => []);
-        if (currentProjectRoot) await Promise.all(projectTickets.map(async (ticket) => {
-          ticket._files = await invoke('git_ticket_files', { repo: currentProjectRoot, ticketId: ticket.id }).catch(() => []);
-        }));
+        const tickets = projectKey ? await invoke('pm_ticket_list', { project: projectKey }).catch(() => []) : [];
+        if (disposed || generation !== ticketGeneration) return;
+        projectTickets = tickets;
         selectedTicket = projectTickets.find((ticket) => ticket.id === selectedTicket?.id) || projectTickets[0] || null;
         projectTickets.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
         showRunView(runView);
@@ -1821,6 +1893,8 @@
       }, 400);
     });
     entry.dispose = () => {
+      disposed = true;
+      ticketGeneration++;
       try { unlisten(); } catch (_) { /* already gone */ }
       if (vaultMenuInMaster && vaultMenu.isConnected && typeof window.xnautSidebarShowMain === 'function') window.xnautSidebarShowMain();
       documentChangeListeners.clear();

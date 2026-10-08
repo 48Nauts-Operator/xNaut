@@ -682,16 +682,24 @@
     function openSession(name) {
       state.activeSession = name;
       sessList.querySelectorAll('.sbar-sess').forEach((r) => r.classList.toggle('sbar-row-active', r.dataset.session === name));
-      // The host tab is the one place a session shows; the list is the switcher.
-      if (typeof window.xnautShowSessionInHost === 'function') return window.xnautShowSessionInHost(name);
       if (typeof window.xnautOpenZellijSession === 'function') return window.xnautOpenZellijSession(name, { focus: true });
-      console.warn('[sidebar] xnautShowSessionInHost is not assigned; cannot open', name);
+      console.warn('[sidebar] xnautOpenZellijSession is not assigned; cannot open', name);
     }
     function renderSessions() {
       sessList.innerHTML = '';
       const owned = new Map();
+      const liveStatus = (a) => ['working', 'permission', 'blocked', 'waiting'].includes(a.status);
       for (const a of state.agentSessions || []) {
-        if (a && a.zellij_session) owned.set(a.zellij_session, a);
+        if (!a || !a.zellij_session) continue;
+        const previous = owned.get(a.zellij_session);
+        // The backend HashMap has no ordering. A detached PTY and its still
+        // running zellij session can both have records; the last row must not
+        // arbitrarily turn a running indicator off.
+        if (!previous || Number(liveStatus(a)) > Number(liveStatus(previous))
+            || (liveStatus(a) === liveStatus(previous)
+              && (a.status_changed_at_ms || 0) > (previous.status_changed_at_ms || 0))) {
+          owned.set(a.zellij_session, a);
+        }
       }
       // The app's launches carry the xnaut- prefix; everything else is the
       // owner's, adopted or not, so his rename and his colour hold on it.
@@ -733,7 +741,13 @@
         const now = Date.now();
         if (s.busy) state.busyUntil.set(s.name, now + 15000);
         const busy = s.busy || (state.busyUntil.get(s.name) || 0) > now;
-        const word = s.exited ? 'exited' : (agent ? String(agent.status || 'live') : (busy ? 'working' : 'live'));
+        const reported = String(agent?.status || 'live');
+        // An attachment's done/unknown status describes that client, not the
+        // agent still working inside zellij. Keep explicit attention/waiting
+        // signals, and never override a captured run's completion with CPU.
+        const sampledWorking = busy && !agent?.output_path
+          && ['live', 'unknown', 'idle', 'done'].includes(reported);
+        const word = s.exited ? 'exited' : (sampledWorking ? 'working' : reported);
         row.dataset.state = word;
         let dot = ' sbar-live';
         if (s.exited) dot = ' sbar-exited';
@@ -926,11 +940,14 @@
     root.appendChild(usage);
     root.appendChild(submenu);
 
-    const mainSections = [nav, head, list, usage];
+    // Submenus replace the project tree, while the navigation rail remains
+    // available to leave Vault or switch features.
+    const mainSections = [head, list, usage];
     let collapsedBeforeSubmenu = false;
     const closeSubmenu = () => {
       submenu.hidden = true;
       mainSections.forEach((section) => { section.hidden = false; });
+      applyView();
       applyMasterCollapsed(collapsedBeforeSubmenu);
     };
     submenu.querySelector('.sbar-submenu-back').onclick = closeSubmenu;

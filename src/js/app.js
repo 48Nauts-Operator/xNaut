@@ -3865,11 +3865,11 @@ function showAgentSession(session) {
 // Focus the tab already attached to this zellij session, if there is one.
 // Without it every click on Connect spawns another PTY onto the SAME session —
 // three clicks, three tabs, three status pills, one actual session.
-window.xnautFocusTabForSession = function (zellijSession) {
+window.xnautFocusTabForSession = function (zellijSession, options) {
   if (!zellijSession) return false;
   const tab = (tabs || []).find((t) => t.zellijSession === zellijSession);
   if (!tab) return false;
-  switchTab(tab.id);
+  if (options?.focus !== false) switchTab(tab.id);
   return true;
 };
 
@@ -3901,12 +3901,23 @@ window.xnautFocusedSessionId = function () {
 };
 
 window.xnautActiveProjectPath = function () {
+  const context = activeWorkspaceContext();
+  if (context) return context.path || null;
   return activeProjectPath || null;
 };
 
 window.xnautActiveProjectKey = function () {
+  const context = activeWorkspaceContext();
+  if (context) return context.key || null;
   return activeProjectId && activeProjectId !== 'home' ? activeProjectId : null;
 };
+
+// The Workspace panel remains a Home tab; its selected project is independent
+// of that tab grouping and is the context other project tools must read.
+function activeWorkspaceContext() {
+  const tab = tabs.find(t => t.id === activeTabId);
+  return tab?.terminals?.find(entry => typeof entry.getProjectContext === 'function')?.getProjectContext() || null;
+}
 
 window.xnautProjectHasTabs = function (projectId) {
   return tabs.some(t => (t.projectId || 'home') === projectId);
@@ -4020,6 +4031,7 @@ function openGraphPane(opts) { return window.xnautAttachGraphTab(opts || {}); }
 // Attach a new tab to an existing backend PTY session (used by the agent
 // launcher, mirrors the SSH-session pattern). The tab's createTerminal
 // call sees tab.agentSessionId and skips create_terminal_session.
+let agentTabSequence = 0;
 window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options) {
   // focus defaults to true so every existing caller behaves exactly as before;
   // only the automatic surfacing of a woken agent opts out.
@@ -4035,15 +4047,12 @@ window.xnautAttachAgentTab = function (sessionId, label, zellijSession, options)
       return existing.id;
     }
   }
-  const tabId = `tab-${Date.now()}`;
+  const tabId = `tab-${Date.now()}-agent-${++agentTabSequence}`;
   const tab = {
     id: tabId,
     // Which zellij session this tab is attached to, so clicking the project
     // again returns here instead of opening a second tab on the same session.
     zellijSession: zellijSession || null,
-    // The one tab the sidebar's Sessions list swaps its selection into
-    // (xnautShowSessionInHost). Never more than one, never a tab per session.
-    sessionsHost: !!(options && options.host),
     name: (zellijSession && window.xnautSessionAlias(zellijSession)) || label || `Agent ${tabs.length + 1}`,
     terminals: [],
     focusedPaneIndex: 0,
@@ -4072,29 +4081,6 @@ window.xnautZellijSettle = function (ptySessionId) {
   zellijSettleTimers.set(tab.zellijSession, setTimeout(() => {
     invoke('zellij_scroll_to_bottom', { name: tab.zellijSession }).catch(() => {});
   }, 250));
-};
-
-// The Sessions list is the switcher (André, 2026-09-15: "the session is
-// added as tab on top, not on the left side"). One host tab in the strip
-// shows whichever session the sidebar selected; selecting another detaches
-// the previous (zellij keeps it running) and attaches the new one in the
-// same place. No tab per session, ever.
-window.xnautShowSessionInHost = async function (name) {
-  const wanted = String(name || '');
-  if (!wanted) return null;
-  const host = (tabs || []).find((t) => t.sessionsHost);
-  if (host && host.zellijSession === wanted) { switchTab(host.id); return host.id; }
-  // The size the pane will have, taken from the host being replaced (or the
-  // last fitted terminal). A PTY spawned at the 120x40 default and resized
-  // a moment later makes zellij reflow its scrollback, and the viewport
-  // came back 126 lines above the bottom: the latest output looked missing
-  // (André's recording, 2026-09-16 10:57).
-  const sized = host && host.terminals && host.terminals[0] && host.terminals[0].term
-    ? { cols: host.terminals[0].term.cols, rows: host.terminals[0].term.rows }
-    : (window.xnautLastTermSize || {});
-  if (host) await closeTab(host.id);
-  if (typeof window.xnautOpenZellijSession !== 'function') return null;
-  return window.xnautOpenZellijSession(wanted, { focus: true, host: true, cols: sized.cols, rows: sized.rows });
 };
 
 // Return to an already attached identity-aware agent session. Agent Space uses

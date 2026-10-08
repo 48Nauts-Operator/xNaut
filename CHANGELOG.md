@@ -2,6 +2,19 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.7] - 2026-10-08
+
+### Fixed
+- Keep Vault navigation responsive on large projects. Ticket Git queries run outside the native UI thread, load progressively with bounded concurrency, and stop scheduling when the view is left. Closed ticket bodies and Journal execution evidence render when opened; hidden Journals stop polling.
+- Open each sidebar session in its own tab and focus an existing attachment on return. Coalesce repeated attach requests and keep tab identities distinct during concurrent opens.
+- Show activity for busy adopted sessions even when an old attachment reports done or unknown. A stale attachment cannot mask a working session; explicit waiting and permission states remain visible.
+- Clear the previous worktree when switching projects, and keep the file tree, project context, Wiki and Journal aligned. Vault documents also select their project in the right pane, and returning to a project pane restores its context.
+- Keep the global sidebar navigation visible while browsing Vault.
+
+### Release checks
+- Require a native test proving that ticket history queries leave the UI executor responsive and bound parallel work.
+- Require session attachment, project context, Vault navigation, 500-ticket loading, and Journal visibility and deferred-rendering regressions before release.
+
 ## [1.30.6] - 2026-10-08
 
 ### Fixed
