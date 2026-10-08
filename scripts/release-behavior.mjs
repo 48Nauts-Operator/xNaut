@@ -14,6 +14,7 @@ export const nativeSuites = [
   'run_control::tests::', 'settings::tests::', 'ticket_triage::tests::',
 ];
 export const requiredNative = [
+  'run_control::tests::admission_refusal_proof_requires_native_refusal_and_no_execution_evidence',
   'swarm_plan::tests::refused_continuations_recover_five_retained_runs_without_duplicates_or_destination_changes',
   'swarm_plan::tests::refused_continuations_still_obey_scope_profile_read_only_and_stop',
   'swarm_plan::tests::refused_continuation_conflicts_are_blocked_with_the_recovery_reason',

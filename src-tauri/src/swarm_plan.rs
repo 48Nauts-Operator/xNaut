@@ -2560,6 +2560,19 @@ mod tests {
             }
             assert!(recover_member(&fixture.registry, &mut group, 0, &snapshot, 100), "{conflict}");
             assert_eq!(group.members[0].state, MemberState::Blocked, "{conflict}");
+            let expected = match conflict {
+                "admitted" => "failed after admission",
+                "output" | "session" => "conflicts with execution evidence",
+                "receipt" => "existing or unresolved work",
+                "diagnostic" => "Project recovery is incomplete",
+                "review" => "reconcile its existing work before reopening",
+                _ => unreachable!(),
+            };
+            assert!(group.members[0].reason.contains(expected), "{conflict}: {}", group.members[0].reason);
+            if conflict == "receipt" {
+                assert!(group.members[0].reason.contains("unrelated-run"), "the unrelated receipt must cause the refusal");
+            }
+            assert_eq!(group.members[0].run_id.as_deref(), Some(refused[0].as_str()));
             assert!(!group.members[0].reason.contains("implementation retained"), "{conflict}");
             assert!(group.members[0].reason.contains("recovery refused") || group.members[0].reason.contains("conflicts with execution"), "{conflict}");
             assert_eq!(run_control::load_manifest_in(&fixture.registry, &refused[0]).unwrap().state, RunState::Failed);

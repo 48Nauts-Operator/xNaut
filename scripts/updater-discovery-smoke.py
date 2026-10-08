@@ -25,8 +25,8 @@ spec = importlib.util.spec_from_file_location(
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
 require = smoke.require
-OLD = "1.30.2"
-NEW = "1.30.4"
+OLD = "1.30.4"
+NEW = "1.30.5"
 
 
 def fetch(url):
@@ -297,7 +297,7 @@ def main():
             )
             binary = Path(
                 powershell(
-                    r"$b=@(Get-ChildItem $env:ProgramFiles -Recurse -Depth 3 -Filter xnaut.exe); if($b.Count -ne 1){throw 'Expected one installed executable'}; if($b[0].VersionInfo.ProductVersion -notmatch '^1\.30\.2(?:\.0)?$'){throw 'Wrong executable version'}; $b[0].FullName"
+                    r"$b=@(Get-ChildItem $env:ProgramFiles -Recurse -Depth 3 -Filter xnaut.exe); if($b.Count -ne 1){throw 'Expected one installed executable'}; if($b[0].VersionInfo.ProductVersion -notmatch '^1\.30\.4(?:\.0)?$'){throw 'Wrong executable version'}; $b[0].FullName"
                 )
             )
         report["binary_sha256"] = smoke.digest(binary)

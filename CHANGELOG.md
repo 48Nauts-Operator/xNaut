@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.5] - 2026-10-08
+
+### Fixed
+- Recover approved swarms whose previous continuations were refused before worker execution, including refusals caused by changed repository or approval settings. Retry through the existing run lineage, preserving its branch, worktree and failure evidence while rechecking current authorization and capacity.
+- Report conflicting or incomplete continuation evidence as blocked with the recovery reason instead of treating it as retained implementation work.
+
+### Release checks
+- Require the five-ticket failed-continuation recovery case before release, including persisted receipts, restart, bounded concurrency, queue refill and duplicate prevention. Require negative checks for changed scope/profile, read-only mode, stopped groups and conflicting execution evidence.
+- Verify native updater discovery from 1.30.4 to 1.30.5 after publication.
+
 ## [1.30.4] - 2026-10-08
 
 ### Fixed

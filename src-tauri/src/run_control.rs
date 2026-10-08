@@ -711,6 +711,8 @@ pub(crate) fn spend_prelaunch_refused(run: &RunManifest) -> bool {
         .is_some_and(|proof| proof.phase == PrelaunchPhase::SpendAdmission)
 }
 
+/// A typed repository/spend producer refusal, whether initial or a continuation.
+/// Ordinary policy admission refusals intentionally have no staging phase.
 pub(crate) fn prelaunch_refused(run: &RunManifest) -> bool {
     run.prelaunch_failure.is_some() && admission_refused_before_execution(run)
 }
@@ -2938,6 +2940,43 @@ pub(crate) mod tests {
         assert!(consumes_worker_capacity(&legacy));
         legacy.state = RunState::Done;
         assert!(!consumes_worker_capacity(&legacy));
+    }
+
+    #[test]
+    fn admission_refusal_proof_requires_native_refusal_and_no_execution_evidence() {
+        let dir = directory("admission-refusal-proof");
+        let initial = RunManifest::requested("worker", "fixture", "/preserved",
+            Some("TEST-1".into()), None, &[], 10);
+        let id = initial.run_id.clone();
+        assert!(request_in(&dir, initial, || Err("policy changed".into())).is_err());
+        let refused = load_manifest_in(&dir, &id).unwrap();
+        assert!(admission_refused_before_execution(&refused));
+        assert!(!prelaunch_refused(&refused), "policy proof is not a repository/spend phase");
+        for conflict in ["flag", "state", "kind", "pid", "birth", "pty", "zellij", "hook", "output"] {
+            let mut run = refused.clone();
+            match conflict {
+                "flag" => run.admission_refused = false,
+                "state" => run.state = RunState::Starting,
+                "kind" => run.kind = RunKind::Review,
+                "pid" => run.pid = Some(123),
+                "birth" => run.process_birth = Some("native-process-identity".into()),
+                "pty" => run.pty_session = Some("worker-session".into()),
+                "zellij" => run.zellij_session = Some("worker-session".into()),
+                "hook" => run.last_hook_at = Some(11),
+                "output" => run.capture_bytes = 1,
+                _ => unreachable!(),
+            }
+            assert!(!admission_refused_before_execution(&run), "{conflict}");
+        }
+        let mut next = RunManifest::requested("worker", "fixture", "/preserved",
+            Some("TEST-1".into()), None, &[], 20);
+        bind_pending_in(&dir, &mut next).unwrap();
+        let next = refuse_prelaunch_in(&dir, next, PrelaunchPhase::RepositoryStaging, "staging failed").unwrap();
+        assert_eq!(next.previous_run_id.as_deref(), Some(id.as_str()));
+        assert!(admission_refused_before_execution(&next));
+        assert!(prelaunch_refused(&next));
+        assert!(!initial_admission_refused(&next));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
