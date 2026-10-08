@@ -14,6 +14,9 @@ export const nativeSuites = [
   'run_control::tests::', 'settings::tests::', 'ticket_triage::tests::',
 ];
 export const requiredNative = [
+  'swarm_plan::tests::refused_continuations_recover_five_retained_runs_without_duplicates_or_destination_changes',
+  'swarm_plan::tests::refused_continuations_still_obey_scope_profile_read_only_and_stop',
+  'swarm_plan::tests::refused_continuation_conflicts_are_blocked_with_the_recovery_reason',
   'instance::tests::workstation_coordinates_remote_results_without_local_or_unattended_work',
   'swarm_plan::tests::workstation_remote_swarm_approval_restart_refill_and_duplicate_confirmation',
   'swarm_plan::tests::workstation_swarm_rejects_local_mixed_missing_and_unknown_destinations_before_approval',

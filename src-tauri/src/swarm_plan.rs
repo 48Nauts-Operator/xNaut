@@ -1060,48 +1060,47 @@ fn recover_member(
         .collect();
     if !assignments.is_empty() {
         if group.members[i].started.is_none() {
-            if let Ok(Some(next)) = crate::run_control::continuation_in(registry, ticket) {
-                if crate::run_control::prelaunch_refused(&next)
-                    && crate::agent_work::recovery_guard(&serde_json::json!(snapshot), ticket, Some(&next)).is_ok()
-                {
-                    let staging_attempts = assignments.iter().filter(|a| {
+            let continuation = match crate::run_control::continuation_in(registry, ticket) {
+                Ok(continuation) => continuation,
+                Err(error) => {
+                    let retained_id = group.members[i].run_id.clone();
+                    transition(group, i, MemberState::Blocked,
+                        format!("continuation recovery refused: {error}"), retained_id, now);
+                    return true;
+                }
+            };
+            if let Some(next) = continuation {
+                if next.admission_refused && !crate::run_control::admission_refused_before_execution(&next) {
+                    transition(group, i, MemberState::Blocked,
+                        "admission refusal conflicts with execution evidence; inspect preserved run before retry".into(),
+                        Some(next.run_id), now);
+                    return true;
+                }
+                if crate::run_control::admission_refused_before_execution(&next) {
+                    if let Err(error) = crate::agent_work::recovery_guard(
+                        &serde_json::json!(snapshot), ticket, Some(&next),
+                    ) {
+                        transition(group, i, MemberState::Blocked,
+                            format!("worker never started; continuation recovery refused: {error}"),
+                            Some(next.run_id), now);
+                        return true;
+                    }
+                    let failed_attempts = assignments.iter().filter(|a| {
                         !crate::run_control::load_manifest_in(registry, &a.run_id)
                             .is_ok_and(|run| crate::run_control::spend_prelaunch_refused(&run))
                     }).count();
-                    if staging_attempts >= 3 {
+                    if failed_attempts >= 3 {
                         transition(group, i, MemberState::Blocked,
-                            "prelaunch retry limit reached; inspect preserved staging evidence before further dispatch".into(),
+                            "prelaunch retry limit reached; inspect preserved refusal evidence before further dispatch".into(),
                             Some(next.run_id), now);
                         return true;
                     }
                     transition(group, i, MemberState::Queued,
-                        "native prelaunch refusal proved no worker started; retry preserved workspace".into(),
+                        "native admission refusal proved no worker started; retry preserved workspace".into(),
                         Some(next.run_id), now);
                     return false;
                 }
             }
-        }
-        if group.members[i].started.is_none()
-            && assignments
-                .iter()
-                .filter_map(|a| crate::run_control::load_manifest_in(registry, &a.run_id).ok())
-                .any(|r| {
-                    assignments.iter().all(|a| a.run_id == r.run_id)
-                        && crate::run_control::initial_admission_refused(&r)
-                        && r.last_signal
-                            .starts_with("admission failed: worker capacity:")
-                })
-        {
-            transition(
-                group,
-                i,
-                MemberState::Queued,
-                "capacity refusal proved no worker started; retry existing native continuation"
-                    .into(),
-                None,
-                now,
-            );
-            return false;
         }
         let active = assignments
             .iter()
@@ -2218,6 +2217,58 @@ mod tests {
                 launched: std::sync::Mutex::new(vec![]) }
         }
 
+        // Reproduce the persisted 1.30.2 -> 1.30.4 FORCASTER failure: an
+        // initial repository refusal, then a refused continuation after the
+        // repository setting changed. Neither request reached Starting.
+        fn seed_refused_continuations(&self) -> Vec<String> {
+            use crate::run_control::{self, PrelaunchPhase, RunManifest};
+            let mut group = groups_in(&self.registry, None).unwrap().remove(0);
+            let mut refused = Vec::new();
+            std::fs::create_dir_all(self.registry.join("chat-launches")).unwrap();
+            for (i, planned) in group.plan.runs.iter().enumerate() {
+                let mut initial = RunManifest::requested(&planned.owner, "fixture",
+                    &self.registry.join(format!("work-{}", planned.ticket)).to_string_lossy(),
+                    Some(planned.ticket.clone()), Some(planned.model.clone()), &[], 10);
+                initial.project = group.plan.project.clone();
+                initial.branch = planned.branch.clone();
+                initial.remote_env = planned.environment.clone();
+                let initial = run_control::refuse_prelaunch_in(&self.registry, initial,
+                    PrelaunchPhase::RepositoryPreparation, "Add a repository URL in Project settings (Forgejo or GitHub).").unwrap();
+                let receipt = |run: &RunManifest, previous: Option<&str>| {
+                    let path = crate::agent_work::launch_receipt_path(&self.registry, &self.registry,
+                        &planned.ticket, previous).unwrap();
+                    crate::agent_work::save_launch_receipt(&path, &serde_json::json!({
+                        "ticket": planned.ticket, "project": group.plan.project,
+                        "handle": planned.owner, "branch": run.branch, "worktree_path": run.worktree_path,
+                        "environment": run.remote_env, "repository_root": self.registry,
+                        "continuation_run_id": previous, "launch": {"run_id": run.run_id},
+                        "pending": false, "ok": false, "admission_refused": true,
+                        "execution_started": false, "prelaunch_failure": run.prelaunch_failure,
+                        "refused_run_revision": run.revision,
+                    })).unwrap();
+                };
+                receipt(&initial, None);
+                let mut next = RunManifest::requested(&planned.owner, "fixture",
+                    &self.registry.join(format!("work-{}", planned.ticket)).to_string_lossy(),
+                    Some(planned.ticket.clone()), Some(planned.model.clone()), &[], 20);
+                next.project = group.plan.project.clone();
+                next.remote_env = planned.environment.clone();
+                run_control::bind_pending_in(&self.registry, &mut next).unwrap();
+                let id = next.run_id.clone();
+                assert!(run_control::request_in(&self.registry, next, ||
+                    Err("Approved group owner, scope, repository, runtime or environment changed".into())).is_err());
+                let saved = run_control::load_manifest_in(&self.registry, &id).unwrap();
+                assert!(saved.admission_refused && saved.prelaunch_failure.is_none());
+                receipt(&saved, Some(&initial.run_id));
+                group.members[i].state = MemberState::Tracking;
+                group.members[i].reason = "implementation retained; awaiting review or repair evidence".into();
+                group.members[i].run_id = Some(id.clone());
+                refused.push(id);
+            }
+            save_in(&self.registry, &group).unwrap();
+            refused
+        }
+
         fn new() -> Self {
             let registry = scratch();
             let tickets = vec![
@@ -2282,13 +2333,19 @@ mod tests {
                 .iter()
                 .map(|id| crate::run_control::load_manifest_in(&self.registry, id))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(crate::project_continuity::reconcile(
-                project,
-                &self.tickets,
-                &runs,
-                &[],
-                crate::run_control::now_ms(),
-            ))
+            let mut snapshot = crate::project_continuity::reconcile(
+                project, &self.tickets, &runs, &[], crate::run_control::now_ms(),
+            );
+            let receipts = self.registry.join("chat-launches");
+            if receipts.exists() {
+                for path in std::fs::read_dir(receipts).map_err(|e| e.to_string())? {
+                    let path = path.map_err(|e| e.to_string())?.path();
+                    let receipt: serde_json::Value = serde_json::from_slice(
+                        &std::fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                    crate::project_continuity::add_launch_receipt(&mut snapshot, &receipt, &path.to_string_lossy());
+                }
+            }
+            Ok(snapshot)
         }
         fn pins(&self, run: &PlannedRun, _project: &str) -> Result<bool, String> {
             let bytes = std::fs::read(
@@ -2405,6 +2462,108 @@ mod tests {
                     assert_eq!(run_control::load_manifest_in(&fixture.registry, &id).unwrap().remote_env.as_deref(), Some(environment));
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_continuations_recover_five_retained_runs_without_duplicates_or_destination_changes() {
+        use crate::{instance::Role, run_control::{self, RunState}};
+        let fixture = RefillFixture::five_remote("exe-dev");
+        let refused = fixture.seed_refused_continuations();
+        let old_journals: Vec<_> = refused.iter().map(|id|
+            std::fs::read(fixture.registry.join(format!("{id}.events.jsonl"))).unwrap()).collect();
+        let before = groups_in(&fixture.registry, None).unwrap().remove(0);
+        assert_eq!((report(&before).started.len(), report(&before).queued.len(), report(&before).failed.len()), (0, 0, 0));
+        // Restart must recover from the native journals, including a missing
+        // snapshot, and current explicit approval must still be required.
+        std::fs::remove_file(fixture.registry.join(format!("{}.run.json", refused[0]))).unwrap();
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        assert!(fixture.launched.lock().unwrap().is_empty());
+        confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+        assert_eq!((report(&group).started.len(), report(&group).queued.len(), report(&group).failed.len()), (3, 2, 0));
+        for _ in 0..2 {
+            confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        }
+        assert_eq!(fixture.launched.lock().unwrap().len(), 3);
+        for member in group.members.iter().take(2) {
+            run_control::update_in(&fixture.registry, member.run_id.as_ref().unwrap(), |r| r.state = RunState::Done).unwrap();
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        }
+        let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+        assert_eq!(fixture.launched.lock().unwrap().len(), 5);
+        assert_eq!(run_control::list_ids_in(&fixture.registry).unwrap().len(), 15);
+        for (i, member) in group.members.iter().enumerate() {
+            let current = run_control::load_manifest_in(&fixture.registry, member.run_id.as_ref().unwrap()).unwrap();
+            let prior = run_control::load_manifest_in(&fixture.registry, &refused[i]).unwrap();
+            assert_eq!(current.previous_run_id.as_deref(), Some(refused[i].as_str()));
+            assert_eq!(prior.next_run_id.as_deref(), Some(current.run_id.as_str()));
+            assert_eq!((&current.branch, &current.worktree_path), (&prior.branch, &prior.worktree_path));
+            assert_eq!(current.remote_env.as_deref(), Some("exe-dev"));
+            assert!(prior.admission_refused && prior.state == RunState::Failed);
+            let journal = std::fs::read(fixture.registry.join(format!("{}.events.jsonl", refused[i]))).unwrap();
+            assert!(journal.starts_with(&old_journals[i]), "refusal evidence must only be appended to");
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_continuations_still_obey_scope_profile_read_only_and_stop() {
+        use crate::instance::Role;
+        for gate in ["scope", "profile", "read-only", "sandbox", "stop"] {
+            let mut fixture = RefillFixture::five_remote("exe-dev");
+            fixture.seed_refused_continuations();
+            confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+            match gate {
+                "scope" => for ticket in &mut fixture.tickets { ticket.body.push_str("new instructions"); },
+                "profile" => std::fs::write(fixture.registry.join("profiles/codex.json"), r#"{"model":"changed"}"#).unwrap(),
+                "stop" => {
+                    let mut group = groups_in(&fixture.registry, None).unwrap().remove(0);
+                    stop(&mut group, 100);
+                    save_in(&fixture.registry, &group).unwrap();
+                },
+                _ => {},
+            }
+            for _ in 0..2 {
+                refill_in(&fixture.registry, &fixture.tickets, &fixture,
+                    if gate == "sandbox" { Role::Sandbox } else { Role::Workstation }, gate == "read-only").await.unwrap();
+            }
+            assert!(fixture.launched.lock().unwrap().is_empty(), "{gate}");
+            assert_eq!(crate::run_control::list_ids_in(&fixture.registry).unwrap().len(), 10, "{gate}");
+        }
+    }
+
+    #[test]
+    fn refused_continuation_conflicts_are_blocked_with_the_recovery_reason() {
+        use crate::run_control::{self, RunState};
+        for conflict in ["admitted", "output", "session", "receipt", "diagnostic", "review"] {
+            let fixture = RefillFixture::five_remote("exe-dev");
+            let refused = fixture.seed_refused_continuations();
+            let mut group = groups_in(&fixture.registry, None).unwrap().remove(0);
+            approve(&mut group, 1);
+            match conflict {
+                "admitted" => { run_control::update_in(&fixture.registry, &refused[0], |r| r.admission_refused = false).unwrap(); },
+                "output" => { run_control::update_in(&fixture.registry, &refused[0], |r| r.capture_bytes = 12).unwrap(); },
+                "session" => { run_control::update_in(&fixture.registry, &refused[0], |r| r.pty_session = Some("existing-worker".into())).unwrap(); },
+                _ => {},
+            }
+            let mut snapshot = fixture.snapshot("FORCASTER").unwrap();
+            match conflict {
+                "receipt" => crate::project_continuity::add_launch_receipt(&mut snapshot,
+                    &serde_json::json!({"ticket":"FORCASTER-2", "launch":{"run_id":"unrelated-run"}}), "unresolved receipt"),
+                "diagnostic" => snapshot.diagnostics.push(crate::project_continuity::Diagnostic {
+                    blocking: true, source: "fixture".into(), message: "unreadable evidence".into(),
+                }),
+                "review" => snapshot.tickets.iter_mut().find(|t| t.id == "FORCASTER-2").unwrap().status = "review".into(),
+                _ => {},
+            }
+            assert!(recover_member(&fixture.registry, &mut group, 0, &snapshot, 100), "{conflict}");
+            assert_eq!(group.members[0].state, MemberState::Blocked, "{conflict}");
+            assert!(!group.members[0].reason.contains("implementation retained"), "{conflict}");
+            assert!(group.members[0].reason.contains("recovery refused") || group.members[0].reason.contains("conflicts with execution"), "{conflict}");
+            assert_eq!(run_control::load_manifest_in(&fixture.registry, &refused[0]).unwrap().state, RunState::Failed);
+            assert_eq!(crate::run_control::list_ids_in(&fixture.registry).unwrap().len(), 10);
         }
     }
 

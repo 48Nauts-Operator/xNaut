@@ -712,9 +712,7 @@ pub(crate) fn spend_prelaunch_refused(run: &RunManifest) -> bool {
 }
 
 pub(crate) fn prelaunch_refused(run: &RunManifest) -> bool {
-    run.kind == RunKind::Agent && run.prelaunch_failure.is_some() && run.state == RunState::Failed && run.admission_refused
-        && run.pid.is_none() && run.process_birth.is_none() && run.pty_session.is_none()
-        && run.zellij_session.is_none() && run.last_hook_at.is_none() && run.capture_bytes == 0
+    run.prelaunch_failure.is_some() && admission_refused_before_execution(run)
 }
 
 pub fn update_in(
@@ -3204,13 +3202,20 @@ pub(crate) fn reserve_repair_admitted_in(dir: &Path, id: &str, proof: &Proofs, a
     Ok(next)
 }
 
-/// Native proof that an initial request never reached worker execution.
-/// A failure after admission or any process/session evidence is ineligible.
-pub(crate) fn initial_admission_refused(run: &RunManifest) -> bool {
+/// Native admission records this refusal before entering Starting. It applies
+/// to initial requests and continuations, including legacy policy refusals
+/// without a typed repository/spend prelaunch phase. Missing process evidence
+/// alone is never proof: the persisted admission_refused flag is required.
+pub(crate) fn admission_refused_before_execution(run: &RunManifest) -> bool {
     run.kind == RunKind::Agent && run.state == RunState::Failed && run.admission_refused
-        && run.previous_run_id.is_none() && run.pid.is_none() && run.process_birth.is_none()
+        && run.pid.is_none() && run.process_birth.is_none()
         && run.pty_session.is_none() && run.zellij_session.is_none()
         && run.last_hook_at.is_none() && run.capture_bytes == 0
+}
+
+/// Native proof that an initial request never reached worker execution.
+pub(crate) fn initial_admission_refused(run: &RunManifest) -> bool {
+    run.previous_run_id.is_none() && admission_refused_before_execution(run)
 }
 
 /// Admission and retirement share this lock. A pending successor reserves its
