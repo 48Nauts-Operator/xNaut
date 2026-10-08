@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -18,6 +19,29 @@ spec.loader.exec_module(module)
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_windows_installed_version_matches_selected_baseline_only(self):
+        for version in ("1.30.4", "1.30.6", "1.30.7"):
+            with (
+                self.subTest(version=version),
+                patch.object(
+                    module,
+                    "powershell",
+                    return_value="C:/Program Files/xNAUT/xnaut.exe",
+                ) as shell,
+            ):
+                module.installed_windows_binary(version)
+                script = shell.call_args.args[0]
+                pattern = shell.call_args.kwargs["EXPECTED_BINARY_VERSION_PATTERN"]
+                self.assertIn("-notmatch $env:EXPECTED_BINARY_VERSION_PATTERN", script)
+                for actual in (version, version + ".0"):
+                    self.assertIsNotNone(re.fullmatch(pattern, actual))
+                for actual in ({"1.30.4", "1.30.6", "1.30.7"} - {version}) | {
+                    version + ".1",
+                    version + "-rc.1",
+                    version.replace(".", "x"),
+                }:
+                    self.assertIsNone(re.fullmatch(pattern, actual))
+
     def test_harness_version_inputs_do_not_become_application_overrides(self):
         with tempfile.TemporaryDirectory() as scratch:
             env = {

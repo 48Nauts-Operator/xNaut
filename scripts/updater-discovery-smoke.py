@@ -185,6 +185,15 @@ def powershell(script, **values):
     ).strip()
 
 
+def installed_windows_binary(version):
+    return Path(
+        powershell(
+            "$b=@(Get-ChildItem $env:ProgramFiles -Recurse -Depth 3 -Filter xnaut.exe); if($b.Count -ne 1){throw 'Expected one installed executable'}; if($b[0].VersionInfo.ProductVersion -notmatch $env:EXPECTED_BINARY_VERSION_PATTERN){throw 'Wrong executable version'}; $b[0].FullName",
+            EXPECTED_BINARY_VERSION_PATTERN=rf"^{re.escape(version)}(?:\.0)?$",
+        )
+    )
+
+
 def fresh_config(system):
     require(
         system in ("Darwin", "Windows")
@@ -316,11 +325,7 @@ def main():
                 MSI=msi,
                 LOG=evidence / "install.log",
             )
-            binary = Path(
-                powershell(
-                    r"$b=@(Get-ChildItem $env:ProgramFiles -Recurse -Depth 3 -Filter xnaut.exe); if($b.Count -ne 1){throw 'Expected one installed executable'}; if($b[0].VersionInfo.ProductVersion -notmatch '^1\.30\.4(?:\.0)?$'){throw 'Wrong executable version'}; $b[0].FullName"
-                )
-            )
+            binary = installed_windows_binary(OLD)
         report["binary_sha256"] = smoke.digest(binary)
         report["artifact_hashes"] = {
             p.name: smoke.digest(p) for p in distribution.iterdir() if p.is_file()
