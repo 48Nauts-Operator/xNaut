@@ -217,8 +217,8 @@ def fresh_config(system):
 def main():
     global OLD, NEW
     OLD, NEW = release_versions(
-        os.environ.get("XNAUT_UPDATER_OLD_VERSION", OLD),
-        os.environ.get("XNAUT_UPDATER_NEW_VERSION", NEW),
+        os.environ.get("UPDATER_SMOKE_OLD_VERSION", OLD),
+        os.environ.get("UPDATER_SMOKE_NEW_VERSION", NEW),
     )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(

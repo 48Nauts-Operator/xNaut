@@ -43,8 +43,8 @@ jobs:
       - name: Check through the old production Tauri updater
         env:
           GH_TOKEN: ${{ github.token }}
-          XNAUT_UPDATER_OLD_VERSION: ${{ inputs.old_version }}
-          XNAUT_UPDATER_NEW_VERSION: ${{ inputs.new_version }}
+          UPDATER_SMOKE_OLD_VERSION: ${{ inputs.old_version }}
+          UPDATER_SMOKE_NEW_VERSION: ${{ inputs.new_version }}
         run: python scripts/updater-discovery-smoke.py --target ${{ matrix.target }} --evidence evidence
       - name: Preserve actual discovery and cleanup evidence
         if: always()

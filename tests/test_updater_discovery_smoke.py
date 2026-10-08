@@ -18,6 +18,29 @@ spec.loader.exec_module(module)
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_harness_version_inputs_do_not_become_application_overrides(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "RUNNER_ENVIRONMENT": "github-hosted",
+                "UPDATER_SMOKE_OLD_VERSION": "1.30.6",
+                "UPDATER_SMOKE_NEW_VERSION": "1.30.7",
+            }
+            with (
+                patch.dict(os.environ, env, clear=True),
+                patch.object(Path, "home", return_value=Path(scratch)),
+                patch.object(module.subprocess, "run", return_value=Mock(returncode=1)),
+            ):
+                self.assertEqual(
+                    module.fresh_config("Darwin"),
+                    Path(scratch) / "Library/Application Support/xnaut",
+                )
+                with patch.dict(os.environ, {"XNAUT_SETTINGS_PATH": "/owner/profile"}):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "Inherited xNAUT overrides"
+                    ):
+                        module.fresh_config("Darwin")
+
     def test_release_versions_reject_nonstable_and_nonforward_pairs(self):
         self.assertEqual(
             module.release_versions("1.30.6", "1.30.7"), ("1.30.6", "1.30.7")
