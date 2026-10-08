@@ -2,6 +2,21 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.8] - 2026-10-09
+
+### Added
+- Local crash recovery for native Agent Space conversations, including NautBot, in the open-source application. Turn requests, model responses and tool results are checkpointed to local storage without a paid Registry dependency. Reopening xNAUT resumes interrupted turns automatically.
+- Restore recovered replies, worker receipts and approval cards to the original conversation, even when another project or thread is selected. Save the conversation before acknowledging a recovered result.
+- Reuse committed model and tool results. Interrupted operations explicitly classified as safe to replay can retry; uncertain writes retain their intent and require reconciliation instead of being blindly repeated. Recovery does not automatically approve or dispatch a restored plan.
+
+### Release checks
+- Require process-kill tests around tool intent, external effects and result commits, plus model-loop restart checks for Chat Completions and Responses providers.
+- Require browser regressions for original-thread recovery, submission retries, persistence failures and restored worker and approval cards.
+
+### Credits and scope
+- Inspired by [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable), by Mario Zechner and contributors, under the MIT license. This is a native Rust implementation of the checkpoint and replay approach.
+- Applies to native Agent Space turns. External CLI sessions, shared chat and legacy frontend action chains have separate execution paths. Recovery runs while xNAUT is open; it resumes when the application is reopened after a crash.
+
 ## [1.30.7] - 2026-10-08
 
 ### Fixed
