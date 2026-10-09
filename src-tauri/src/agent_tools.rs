@@ -1155,10 +1155,13 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                 .and_then(Value::as_array)
                 .map(|ids| ids.iter().filter_map(Value::as_str).map(str::to_string).collect())
                 .unwrap_or_default();
-            let environment = args.get("environment").and_then(Value::as_str);
-            let plan = match crate::swarm_plan::build_with_environment(&project, &requested, environment) {
-                Ok(plan) => plan,
-                Err(error) => return json!({ "ok": false, "error": error }),
+            let environment = args.get("environment").and_then(Value::as_str).map(str::to_owned);
+            let plan = match tokio::task::spawn_blocking(move ||
+                crate::swarm_plan::build_with_environment(&project, &requested, environment.as_deref())
+            ).await {
+                Ok(Ok(plan)) => plan,
+                Ok(Err(error)) => return json!({ "ok": false, "error": error }),
+                Err(_) => return json!({ "ok": false, "error": "Repository planning check could not complete" }),
             };
             let skipped = serde_json::to_value(&plan.skipped).unwrap_or(Value::Null);
             match crate::swarm_plan::offer(&plan) {

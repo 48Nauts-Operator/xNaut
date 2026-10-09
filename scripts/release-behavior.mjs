@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'repository_transfer::tests::repository_admission_',
   'swarm_plan::tests::', 'dispatch::tests::', 'instance::tests::',
   'sandbox::launch_env::tests::', 'agent_tools::tests::swarm_tools_',
   'project_management::mutation_recovery::tests::', 'project_management::write_guard_tests::',
@@ -16,6 +17,11 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'repository_transfer::tests::repository_admission_classifies_git_failures_without_leaking_credentials',
+  'repository_transfer::tests::repository_admission_real_git_reports_desktop_stage_and_missing_repository',
+  'swarm_plan::tests::replanning_keeps_approved_remote_destination_despite_local_preview_or_profile',
+  'swarm_plan::tests::repository_outage_blocks_five_members_without_run_attempts_and_recovers_continuations',
+  'swarm_plan::tests::group_requeues_only_proven_prelaunch_lineage_and_bounds_repeated_failures',
   'durable_turn::tests::process_kill_at_every_effect_boundary_preserves_results_and_prevents_duplicate_writes',
   'durable_turn::tests::changed_provider_repository_and_tools_fail_before_replay',
   'durable_turn::tests::failed_result_commit_leaves_recoverable_uncertainty',

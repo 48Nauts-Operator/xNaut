@@ -109,64 +109,107 @@ pub fn validate_remote(value: &str) -> Result<String, String> {
     Ok(value.into())
 }
 
+// Retain only bounded diagnostic bytes, but drain both pipes to EOF so a verbose
+// failure cannot deadlock the child. Never return raw stderr (it may contain tokens).
+fn drain_git_output(mut input: impl std::io::Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut data = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 { return Ok(data); }
+        let keep = read.min(limit.saturating_sub(data.len()));
+        data.extend_from_slice(&buffer[..keep]);
+    }
+}
+
+fn git_failure(operation: &str, stderr: &[u8]) -> String {
+    let error = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    let detail = if error.contains("host key verification failed") || error.contains("remote host identification has changed") {
+        "SSH host verification failed. Verify the forge's host key on this computer."
+    } else if error.contains("permission denied (publickey") || error.contains("authentication failed")
+        || error.contains("could not read username") || error.contains("terminal prompts disabled") {
+        "Repository authentication failed on this computer. Check the SSH identity or Git credentials for the configured clone URL."
+    } else if error.contains("cannot find repository") || error.contains("repository not found")
+        || error.contains("does not appear to be a git repository")
+        || (error.contains("repository") && error.contains("not found")) {
+        "The repository was not found or access was denied. Check the owner/repository in Project settings and this computer's access to it."
+    } else if error.contains("could not resolve") || error.contains("name or service not known") {
+        "The repository host could not be resolved on this computer. Check its address and network connection."
+    } else if error.contains("connection refused") || error.contains("connection timed out")
+        || error.contains("no route to host") || error.contains("network is unreachable") {
+        "This computer could not connect to the repository host. Check its port and network connection."
+    } else {
+        "Git failed on this computer. Check the configured repository, access and local checkout."
+    };
+    format!("Git {operation} failed: {detail}")
+}
+
 fn git_command(dir: &Path, args: &[&str]) -> Command {
     use std::process::Stdio;
     let mut command = crate::worktree::git_command();
-    command
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+    command.arg("-C").arg(dir).args(args)
+        .env("GIT_TERMINAL_PROMPT", "0").env("LC_ALL", "C")
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     command
 }
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    use std::io::Read;
+    git_with_timeout(dir, args, std::time::Duration::from_secs(180))
+}
+
+fn git_with_timeout(dir: &Path, args: &[&str], timeout: std::time::Duration) -> Result<String, String> {
+    let operation = args.first().copied().unwrap_or("command");
     let mut command = git_command(dir, args);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let mut child = command.spawn().map_err(|e| format!("Cannot start Git on this computer: {e}"))?;
     let stdout = child.stdout.take().ok_or("Git output unavailable")?;
-    let reader = std::thread::spawn(move || {
-        let mut data = Vec::new();
-        let _ = stdout.take(4 * 1024 * 1024).read_to_end(&mut data);
-        data
-    });
+    let stderr = child.stderr.take().ok_or("Git diagnostics unavailable")?;
+    let reader = std::thread::spawn(move || drain_git_output(stdout, 4 * 1024 * 1024));
+    let diagnostics = std::thread::spawn(move || drain_git_output(stderr, 64 * 1024));
     let start = std::time::Instant::now();
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        if start.elapsed() > std::time::Duration::from_secs(180) {
-            // Own process group: this never signals another user's Git command.
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? { break status; }
+        if start.elapsed() > timeout {
             #[cfg(unix)]
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL); }
+            #[cfg(windows)]
+            let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"])
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader.join();
-            return Err(format!(
-                "Git {} timed out; data is retained for retry.",
-                args[0]
-            ));
+            let _ = diagnostics.join();
+            return Err(format!("Git {operation} timed out on this computer; data is retained for retry."));
         }
         std::thread::sleep(std::time::Duration::from_millis(30));
     };
-    let stdout = reader.join().map_err(|_| "Git output reader failed")?;
-    if !status.success() {
-        return Err(format!(
-            "Git {} failed; check the configured repository and credentials.",
-            args[0]
-        ));
-    }
+    let stdout = reader.join().map_err(|_| "Git output reader failed")?
+        .map_err(|_| "Cannot read Git output")?;
+    let stderr = diagnostics.join().map_err(|_| "Git diagnostic reader failed")?
+        .map_err(|_| "Cannot read Git diagnostics")?;
+    if !status.success() { return Err(git_failure(operation, &stderr)); }
     Ok(String::from_utf8_lossy(&stdout).trim().into())
+}
+
+fn remote_heads(source: &Path, remote: &str) -> Result<String, String> {
+    git_with_timeout(source, &["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"],
+        std::time::Duration::from_secs(20))
+        .map_err(|error| format!("Desktop repository check failed before worker setup. {error}"))
+}
+
+/// Read-only shared prerequisite: no run, worktree, credentials or worker is created.
+pub(crate) fn preflight(source: &Path, configured: &str) -> Result<(), String> {
+    let configured = validate_remote(configured)?;
+    let remote = desktop_remote(source, &configured)?;
+    let refs = remote_heads(source, &remote)?;
+    if !refs.lines().any(|line| line.starts_with("ref: refs/heads/")) {
+        return Err("The configured repository needs a default branch with an initial commit. No worker was started.".into());
+    }
+    Ok(())
 }
 
 /// SSH route on this desktop. The repository path always comes from project
@@ -439,10 +482,7 @@ fn task_base(
     remote: &str,
     source: &str,
 ) -> Result<String, String> {
-    let refs = git(
-        path,
-        &["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"],
-    )?;
+    let refs = remote_heads(path, remote)?;
     let default = refs
         .lines()
         .find_map(|line| {
@@ -1037,6 +1077,64 @@ pub async fn tick(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repository_admission_classifies_git_failures_without_leaking_credentials() {
+        for (stderr, expected) in [
+            ("git@forge: Permission denied (publickey).", "authentication failed on this computer"),
+            ("fatal: Authentication failed for https://secret-token@forge/team/repo", "authentication failed on this computer"),
+            ("remote: Forgejo: Cannot find repository: team/repo", "repository was not found"),
+            ("fatal: repository 'https://secret-token@forge/team/repo' not found", "repository was not found"),
+            ("Host key verification failed.", "host verification failed"),
+            ("ssh: Could not resolve hostname forge", "could not be resolved"),
+            ("ssh: connect to host forge port 2222: Connection refused", "could not connect"),
+            ("unknown error: secret-token", "Git failed on this computer"),
+        ] {
+            let message = git_failure("ls-remote", stderr.as_bytes());
+            assert!(message.contains(expected), "{message}");
+            assert!(!message.contains("secret-token"));
+        }
+    }
+
+    #[test]
+    fn repository_admission_drains_verbose_diagnostics_with_bounded_memory() {
+        let bytes = vec![b'x'; 256 * 1024];
+        let mut stream = std::io::Cursor::new(&bytes);
+        let retained = drain_git_output(&mut stream, 64 * 1024).unwrap();
+        assert_eq!(retained.len(), 64 * 1024);
+        assert_eq!(stream.position(), bytes.len() as u64);
+    }
+
+    #[test]
+    fn repository_admission_real_git_reports_desktop_stage_and_missing_repository() {
+        let root = std::env::temp_dir();
+        let missing = root.join(format!("xnaut-missing-repository-{}", uuid::Uuid::new_v4()));
+        let error = remote_heads(&root, missing.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("before worker setup"), "{error}");
+        assert!(error.contains("repository was not found"), "{error}");
+        assert!(!error.contains(missing.to_str().unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_admission_timeout_stops_owned_git_process_tree() {
+        let started = std::time::Instant::now();
+        let error = git_with_timeout(&std::env::temp_dir(),
+            &["-c", "alias.stalled=!sleep 10", "stalled"], std::time::Duration::from_millis(100)).unwrap_err();
+        assert!(error.contains("timed out on this computer"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_admission_drains_real_git_stderr_pipe_and_classifies_failure() {
+        // A repository-local Git alias exercises concurrent pipe draining without network.
+        let root = std::env::temp_dir();
+        let alias = "alias.noisy=!printf 'Permission denied (publickey).\n' >&2; i=0; while test $i -lt 9000; do printf 'secret-token-padding\n' >&2; i=$((i+1)); done; exit 1";
+        let error = git_with_timeout(&root, &["-c", alias, "noisy"], std::time::Duration::from_secs(5)).unwrap_err();
+        assert!(error.contains("authentication failed"), "{error}");
+        assert!(!error.contains("secret-token"));
+    }
+
     #[test]
     fn desktop_ssh_route_preserves_identity_and_exact_configured_destination() {
         let configured = "ssh://git@forge.example:2222/Team/Repo.git";

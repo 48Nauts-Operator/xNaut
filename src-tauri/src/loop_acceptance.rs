@@ -262,7 +262,7 @@ mod tests {
 /// Native preparation seam for the isolated acceptance driver; approval and
 /// dispatch still use the normal confirmed-plan command and admissions.
 #[tauri::command]
-pub fn loop_acceptance_plan(
+pub async fn loop_acceptance_plan(
     project: String,
     tickets: Vec<String>,
     environment: Option<String>,
@@ -276,7 +276,9 @@ pub fn loop_acceptance_plan(
     if !repo.starts_with(root()) {
         return Err("Acceptance PM escaped its marked root".into());
     }
-    let plan = crate::swarm_plan::build_with_environment(&project, &tickets, environment.as_deref())?;
+    let plan = tokio::task::spawn_blocking(move ||
+        crate::swarm_plan::build_with_environment(&project, &tickets, environment.as_deref())
+    ).await.map_err(|_| "Repository planning check could not complete")??;
     crate::swarm_plan::remember(plan.clone())?;
     Ok(plan)
 }

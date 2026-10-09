@@ -806,6 +806,18 @@ pub fn build(project: &str, requested: &[String]) -> Result<SwarmPlan, String> {
     build_with_environment(project, requested, None)
 }
 
+// Replanning retains the owner's last approved destination even when the
+// model omits it. An unapproved preview cannot change that intent.
+fn replan_environment<'a>(explicit: Option<&'a str>, groups: &'a [Group], ticket: &str) -> Option<&'a str> {
+    explicit.or_else(|| latest_approved_group(groups, ticket)
+        .and_then(|group| group.plan.runs.iter().find(|run| run.ticket == ticket))
+        .and_then(|run| run.environment.as_deref()))
+}
+
+fn needs_repository(run: &PlannedRun) -> bool {
+    matches!(run.environment.as_deref(), Some("exe-dev" | "gitvm"))
+}
+
 fn resolve_environment(
     requested: Option<&str>,
     execution: crate::agent_profiles::AgentExecution,
@@ -880,16 +892,22 @@ pub fn build_with_environment(
         .to_string_lossy()
         .to_string();
     let settings = crate::settings::load_or_default();
+    let previous = groups_in(&registry, Some(project))?;
     for run in &mut plan.runs {
         let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())?;
         run.repository_root = Some(root.clone());
         run.runtime_id = Some(profile.runtime_id.clone());
-        run.environment = Some(resolve_environment(environment, profile.execution, &settings.sandboxes)?.key().into());
-        run.requested_environment = environment.map(str::to_owned);
+        let destination = replan_environment(environment, &previous, &run.ticket);
+        run.environment = Some(resolve_environment(destination, profile.execution, &settings.sandboxes)?.key().into());
+        run.requested_environment = destination.map(str::to_owned);
         run.repository_remote = projects
             .iter()
             .find(|p| p.key == project)
             .map(|p| p.forge_remote.clone());
+    }
+    if let Some(run) = plan.runs.iter().find(|run| needs_repository(run)) {
+        crate::repository_transfer::preflight(Path::new(&root),
+            run.repository_remote.as_deref().unwrap_or_default())?;
     }
     plan.dispatch_hold = ensure_dispatch_role(crate::instance::role(), &plan).err();
     Ok(plan)
@@ -1048,8 +1066,13 @@ pub(crate) fn managed_tickets(registry: &Path) -> Result<HashSet<String>, String
         .collect())
 }
 
+fn waits_for_repository(member: &Member) -> bool {
+    member.state == MemberState::Blocked && member.refusal.as_ref()
+        .is_some_and(|r| r.kind == crate::dispatch::RefusalKind::RepositoryAccess)
+}
+
 fn slot_available(member: &Member, live: usize, cap: usize) -> bool {
-    member.state == MemberState::Queued && live < cap
+    (member.state == MemberState::Queued || waits_for_repository(member)) && live < cap
 }
 
 fn recover_member(
@@ -1094,8 +1117,10 @@ fn recover_member(
                         return true;
                     }
                     let failed_attempts = assignments.iter().filter(|a| {
-                        !crate::run_control::load_manifest_in(registry, &a.run_id)
-                            .is_ok_and(|run| crate::run_control::spend_prelaunch_refused(&run))
+                        crate::run_control::load_manifest_in(registry, &a.run_id).map_or(true, |run| {
+                            run.started_at >= group.approved_at.unwrap_or(i64::MAX)
+                                && !crate::run_control::spend_prelaunch_refused(&run)
+                        })
                     }).count();
                     if failed_attempts >= 3 {
                         transition(group, i, MemberState::Blocked,
@@ -1103,6 +1128,9 @@ fn recover_member(
                             Some(next.run_id), now);
                         return true;
                     }
+                    // Rechecking an unchanged repository outage is not a new
+                    // queue transition; keep its original refusal and event trail.
+                    if waits_for_repository(&group.members[i]) { return false; }
                     transition(group, i, MemberState::Queued,
                         "native admission refusal proved no worker started; retry preserved workspace".into(),
                         Some(next.run_id), now);
@@ -1157,6 +1185,8 @@ fn recover_member(
 /// Native services are kept at this seam so restart/error-isolation tests drive
 /// the same persisted refill loop without starting a Tauri app or real worker.
 trait RefillBackend: Sync {
+    fn repository_preflight(&self, run: PlannedRun) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>>;
     fn reconcile(&self, project: &str, ticket: &str) -> Result<(), String>;
     fn snapshot(&self, project: &str)
         -> Result<crate::project_continuity::ProjectSnapshot, String>;
@@ -1182,6 +1212,15 @@ trait RefillBackend: Sync {
 
 struct NativeRefill<'a>(&'a tauri::AppHandle);
 impl RefillBackend for NativeRefill<'_> {
+    fn repository_preflight(&self, run: PlannedRun) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || crate::repository_transfer::preflight(
+                Path::new(run.repository_root.as_deref().ok_or("Approved repository folder missing")?),
+                run.repository_remote.as_deref().ok_or("Approved repository URL missing")?,
+            )).await.map_err(|_| "Desktop repository check could not complete")?
+        })
+    }
     fn reconcile(&self, project: &str, ticket: &str) -> Result<(), String> {
         crate::agent_work::reconcile_prelaunch(project, ticket).map(|_| ())
     }
@@ -1301,6 +1340,7 @@ async fn refill_in(
     }) {
         return Err("Group registry membership is inconsistent; refill refused".into());
     }
+    let mut repository_checks: HashMap<_, Result<(), String>> = HashMap::new();
     for mut group in groups
         .iter()
         .filter(|g| g.approved_at.is_some() && g.stopped_at.is_none())
@@ -1381,7 +1421,7 @@ async fn refill_in(
                 save_in(registry, &group)?;
                 continue;
             }
-            if group.members[i].state != MemberState::Queued {
+            if group.members[i].state != MemberState::Queued && !waits_for_repository(&group.members[i]) {
                 continue;
             }
             if let Err(refusal) = crate::dispatch::approved_dispatch_policy(role, read_only, run.environment.as_deref()) {
@@ -1419,6 +1459,27 @@ async fn refill_in(
                 );
                 save_in(registry, &group)?;
                 continue;
+            }
+            if needs_repository(&run) {
+                let key = (group.plan.project.clone(), run.repository_root.clone(), run.repository_remote.clone());
+                let check = match repository_checks.get(&key) {
+                    Some(result) => result.clone(),
+                    None => {
+                        let result = backend.repository_preflight(run.clone()).await;
+                        repository_checks.insert(key, result.clone());
+                        result
+                    }
+                };
+                if let Err(error) = check {
+                    let reason = crate::project_wiki::redact(&format!("Repository access must recover before dispatch: {error} No new run was created."));
+                    group.members[i].refusal = Some(crate::dispatch::DispatchRefusal {
+                        kind: crate::dispatch::RefusalKind::RepositoryAccess, reason: reason.clone(),
+                    });
+                    let id = group.members[i].run_id.clone();
+                    transition(&mut group, i, MemberState::Blocked, reason, id, now);
+                    save_in(registry, &group)?;
+                    continue;
+                }
             }
             if let Err(refusal) = backend.admission(&run, &group.plan.project) {
                 let state = if refusal.retryable() {
@@ -1534,6 +1595,73 @@ pub async fn swarm_plan_dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replanning_keeps_approved_remote_destination_despite_local_preview_or_profile() {
+        let fixture = RefillFixture::five_remote("exe-dev");
+        let mut approved = groups_in(&fixture.registry, None).unwrap().remove(0);
+        approve(&mut approved, 1);
+        save_in(&fixture.registry, &approved).unwrap();
+        let mut preview = approved.plan.clone();
+        preview.id = "local-preview".into();
+        preview.created_at = 2;
+        for run in &mut preview.runs {
+            run.environment = Some("local".into());
+            run.requested_environment = None;
+        }
+        remember_in(&fixture.registry, preview).unwrap();
+        let groups = groups_in(&fixture.registry, Some("FORCASTER")).unwrap();
+        for run in &approved.plan.runs {
+            let inherited = replan_environment(None, &groups, &run.ticket);
+            assert_eq!(inherited, Some("exe-dev"));
+            let providers = [crate::settings::SandboxProviderSettings {
+                kind: "exe-dev".into(), base_url: String::new(), api_key: None,
+            }];
+            assert_eq!(resolve_environment(inherited, crate::agent_profiles::AgentExecution::Local,
+                &providers).unwrap(), crate::sandbox::launch_env::LaunchEnv::ExeDev);
+            assert_eq!(replan_environment(Some("local"), &groups, &run.ticket), Some("local"));
+        }
+        assert_eq!(replan_environment(None, &groups, "OTHER-1"), None);
+        assert!(groups.iter().find(|g| g.plan.id == "local-preview").unwrap().approved_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn repository_outage_blocks_five_members_without_run_attempts_and_recovers_continuations() {
+        use crate::{instance::Role, run_control};
+        use std::sync::atomic::Ordering;
+        for retained in [false, true] {
+            let mut fixture = RefillFixture::five_remote("exe-dev");
+            if retained { fixture.seed_refused_continuations(); }
+            let before = run_control::list_ids_in(&fixture.registry).unwrap();
+            confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+            fixture.repository_error = Some("Desktop repository check failed before worker setup: authentication failed".into());
+            let mut outage_events = None;
+            for sweep in 1..=3 {
+                refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+                let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+                assert!(group.members.iter().all(|m| m.state == MemberState::Blocked
+                    && m.refusal.as_ref().unwrap().kind == crate::dispatch::RefusalKind::RepositoryAccess));
+                assert!(fixture.launched.lock().unwrap().is_empty());
+                if let Some(count) = outage_events { assert_eq!(group.events.len(), count, "unchanged outage cannot flood the event trail"); }
+                outage_events = Some(group.events.len());
+                assert_eq!(run_control::list_ids_in(&fixture.registry).unwrap(), before);
+                assert_eq!(fixture.repository_checks.load(Ordering::SeqCst), sweep,
+                    "one repository probe per shared destination per sweep, not five");
+            }
+            fixture.repository_error = None;
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            assert_eq!(fixture.launched.lock().unwrap().len(), 3);
+            let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+            assert_eq!(report(&group).queued.len(), 2);
+            for member in group.members.iter().take(3) {
+                let run = run_control::load_manifest_in(&fixture.registry, member.run_id.as_ref().unwrap()).unwrap();
+                assert_eq!(run.remote_env.as_deref(), Some("exe-dev"));
+                if retained { assert!(run.previous_run_id.is_some()); }
+            }
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            assert_eq!(fixture.launched.lock().unwrap().len(), 3, "no duplicate launches");
+        }
+    }
 
     #[test]
     fn explicit_swarm_destination_survives_storage_and_overrides_local_profile() {
@@ -2126,6 +2254,20 @@ mod tests {
         }
         assert_eq!(runs.len(), 6);
         assert!(runs.iter().all(|r| r.branch == "agent/preserved" && r.worktree_path == "/preserved"));
+        // A fresh, explicitly approved scope may retry after the prerequisite was
+        // repaired. Reconfirming the old plan never resets its retry budget.
+        let mut fresh = group.plan.clone();
+        fresh.id = "prelaunch-repaired".into();
+        fresh.created_at = 200;
+        remember_in(&dir, fresh).unwrap();
+        let mut fresh = groups_in(&dir, None).unwrap().into_iter()
+            .find(|g| g.plan.id == "prelaunch-repaired").unwrap();
+        approve(&mut fresh, 201);
+        let snapshot = crate::project_continuity::reconcile("XNAUT", &[task], &runs, &[], 202);
+        assert!(!recover_member(&dir, &mut fresh, 0, &snapshot, 202));
+        assert_eq!(fresh.members[0].state, MemberState::Queued);
+        assert_eq!(run_control::list_ids_in(&dir).unwrap().len(), 6);
+
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2221,6 +2363,8 @@ mod tests {
         fail_snapshot: Option<String>,
         launched: std::sync::Mutex<Vec<String>>,
         append_dispatch_note: bool,
+        repository_error: Option<String>,
+        repository_checks: std::sync::atomic::AtomicUsize,
     }
     impl RefillFixture {
         fn five_remote(environment: &str) -> Self {
@@ -2238,7 +2382,8 @@ mod tests {
             std::fs::write(registry.join("profiles/codex.json"),
                 serde_json::to_vec(&serde_json::json!({"model": models()["codex"]})).unwrap()).unwrap();
             Self { registry, tickets, fail_reconcile: None, fail_snapshot: None,
-                launched: std::sync::Mutex::new(vec![]), append_dispatch_note: false }
+                launched: std::sync::Mutex::new(vec![]), append_dispatch_note: false,
+                repository_error: None, repository_checks: std::sync::atomic::AtomicUsize::new(0) }
         }
 
         // Reproduce the persisted 1.30.2 -> 1.30.4 FORCASTER failure: an
@@ -2331,6 +2476,8 @@ mod tests {
                 fail_snapshot: None,
                 launched: std::sync::Mutex::new(vec![]),
                 append_dispatch_note: false,
+                repository_error: None,
+                repository_checks: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
@@ -2340,6 +2487,13 @@ mod tests {
         }
     }
     impl RefillBackend for RefillFixture {
+        fn repository_preflight(&self, _run: PlannedRun) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+            Box::pin(async move {
+                self.repository_checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.repository_error.clone().map_or(Ok(()), Err)
+            })
+        }
         fn reconcile(&self, _project: &str, ticket: &str) -> Result<(), String> {
             if self.fail_reconcile.as_deref() == Some(ticket) {
                 Err("exact pending launch receipt is unreadable".into())

@@ -35,6 +35,7 @@ pub struct DispatchResult {
 pub enum RefusalKind {
     Policy,
     Capacity,
+    RepositoryAccess,
     ExistingAssignment,
     Uncertain,
 }
