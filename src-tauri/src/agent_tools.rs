@@ -613,7 +613,7 @@ pub fn tool_specs() -> Vec<Value> {
                             "items": { "type": "string" },
                             "description": "The ticket ids to put agents on. Omit it for every open ticket the project has."
                         },
-                        "environment": { "type": "string", "enum": ["local", "exe-dev", "gitvm"], "description": "Explicit destination for every member of this plan. Preserve the owner's requested exe.dev or GitVM destination when replanning by passing exe-dev or gitvm. Omit only to use each owner's saved Compute setting. Never substitute local for a requested remote destination." }
+                        "environment": { "type": "string", "enum": ["local", "exe-dev", "gitvm"], "description": "Explicit destination for every member of this plan. Preserve the owner's requested exe.dev or GitVM destination when replanning by passing exe-dev or gitvm. When omitted during replanning, each ticket keeps its latest approved destination; new tickets use their owner's saved Compute setting. Supply a different destination only when the owner requests that change. Never substitute local for a requested remote destination." }
                     },
                     "required": ["project"]
                 }
@@ -2680,6 +2680,8 @@ mod tests {
         let plan = specs.iter().find(|s| s["function"]["name"] == "swarm_plan").unwrap();
         assert_eq!(plan["function"]["parameters"]["properties"]["environment"]["enum"],
             serde_json::json!(["local", "exe-dev", "gitvm"]));
+        assert!(plan["function"]["parameters"]["properties"]["environment"]["description"]
+            .as_str().unwrap().contains("latest approved destination"));
         let dispatch = specs.iter().find(|s| s["function"]["name"] == "swarm_dispatch").unwrap();
         let description = dispatch["function"]["description"].as_str().unwrap();
         assert!(description.contains("queued"));
