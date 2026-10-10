@@ -12,7 +12,7 @@ export const nativeSuites = [
   'handback::tests::',
   'agent_profiles::compute_choice_tests::remote_',
   'repository_transfer::tests::repository_admission_',
-  'repository_transfer::tests::repository_publisher_protocol_suite',
+  ...(process.platform === 'win32' ? [] : ['repository_transfer::tests::repository_publisher_protocol_suite']),
   'swarm_plan::tests::', 'dispatch::tests::', 'instance::tests::',
   'sandbox::launch_env::tests::', 'agent_tools::tests::swarm_tools_',
   'project_management::mutation_recovery::tests::', 'project_management::write_guard_tests::',

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { checkNative, checkBrowser, checkReceipt, nativeSuites, requiredNative, browserFiles } from '../scripts/release-behavior.mjs';
 
 test('native evidence requires actual passing executions of every required behavior', () => {
@@ -52,4 +53,18 @@ test('manual release cannot reuse partial, dirty, missing or different-commit ev
     { status: 'partial' }, { scope: 'native-only' }, { working_tree_changes: ' M source.rs' },
     { source_commit: 'yesterday' }, { finished_at: null }, { native: [] }, { browser: [] },
   ]) assert.throws(() => checkReceipt({ ...receipt, ...changes }, 'candidate'));
+});
+
+// cfg(unix) Rust tests have no Windows execution to attest. Keep the platform
+// requirement aligned while retaining this live worker protocol gate on macOS.
+test('publisher protocol evidence is required only where its Rust test is compiled', () => {
+  const suite = 'repository_transfer::tests::repository_publisher_protocol_suite';
+  for (const platform of ['darwin', 'win32']) {
+    const script = `Object.defineProperty(process, 'platform', {value:${JSON.stringify(platform)}});
+      const m = await import('./scripts/release-behavior.mjs');
+      console.log(JSON.stringify([m.nativeSuites.includes(${JSON.stringify(suite)}),m.requiredNative.includes(${JSON.stringify(suite)})]));`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {encoding:'utf8'});
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [platform !== 'win32', platform !== 'win32']);
+  }
 });
