@@ -454,17 +454,13 @@ async fn dispatch_with_findings_gate(
         }
     }
 
-    if !crate::run_control::runtime_meets_in(
+    crate::run_control::dispatch_model_admission_in(
         &crate::agents::registry_dir()?,
         &profile.runtime_id,
         &profile.model,
         &ticket.model_requirement,
-    )? {
-        return Err(format!(
-            "@{handle} model {} does not meet ticket requirement {}",
-            profile.model, ticket.model_requirement
-        ));
-    }
+        destination,
+    )?;
     crate::agent_work::reconcile_prelaunch(&project, &ticket.id)?;
     let continuation =
         crate::run_control::continuation_in(&crate::agents::registry_dir()?, &ticket.id)?;

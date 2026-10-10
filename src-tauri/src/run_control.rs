@@ -3754,9 +3754,52 @@ pub fn runtime_meets_in(
     }))
 }
 
+/// A remote launch checks the installed command, credentials and model on its
+/// actual worker (agent_profiles::remote_runtime_ready), before execution.
+/// Runtime-wide history belongs to local triage; a failed run on another
+/// worker/provider cannot permanently veto a newly verified remote route.
+pub(crate) fn dispatch_model_admission_in(
+    dir: &Path,
+    runtime: &str,
+    model: &str,
+    requirement: &str,
+    environment: crate::sandbox::launch_env::LaunchEnv,
+) -> Result<(), String> {
+    if !model_meets(model, requirement) {
+        return Err(format!("Selected model {model} does not meet ticket requirement {requirement}"));
+    }
+    if environment == crate::sandbox::launch_env::LaunchEnv::Local
+        && !runtime_meets_in(dir, runtime, model, requirement)?
+    {
+        return Err(format!("Local runtime {runtime} is withheld by its recorded failure or model health; inspect that runtime before retrying"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod runtime_policy_tests {
     use super::*;
+    #[test]
+    fn failed_runtime_history_does_not_veto_a_remote_route_with_the_required_model() {
+        use crate::sandbox::launch_env::LaunchEnv;
+        let dir = tests::directory("remote-dispatch-model-history");
+        let mut run = tests::run();
+        run.runtime_id = "claude".into();
+        run.model = Some("required".into());
+        let run = request_in(&dir, run, || Ok(())).unwrap();
+        update_in(&dir, &run.run_id, |r| {
+            r.state = RunState::Failed;
+            r.last_signal = "pid does not answer; previous worker stopped".into();
+        }).unwrap();
+        let before = serde_json::to_value(load_manifest_in(&dir, &run.run_id).unwrap()).unwrap();
+        assert!(dispatch_model_admission_in(&dir, "claude", "required", "required", LaunchEnv::Local).is_err());
+        for destination in [LaunchEnv::ExeDev, LaunchEnv::GitVm] {
+            assert!(dispatch_model_admission_in(&dir, "claude", "required", "required", destination).is_ok());
+            assert!(dispatch_model_admission_in(&dir, "claude", "wrong", "required", destination).is_err());
+        }
+        assert_eq!(before, serde_json::to_value(load_manifest_in(&dir, &run.run_id).unwrap()).unwrap(), "Admission must retain failure evidence");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn adoption_refreshes_the_holder_but_cannot_reclaim_a_retiring_writer() {
         let dir = tests::directory("adopt-swap-holder");

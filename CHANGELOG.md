@@ -9,6 +9,7 @@ All notable changes to xNAUT are documented in this file.
 - Reject repository workers that prohibit shell commands or conflict with an exact ticket model before offering an executable plan.
 - Run unattended Claude repository tasks in noninteractive streaming mode, so a custom API-key confirmation cannot leave them waiting at a terminal prompt. Preserve the configured tool permissions.
 - Preserve saved provider connections and model choices on restart instead of replacing them with stale browser settings. Explicit AI Settings edits still update the saved connection.
+- Check remote runtime readiness on the selected worker instead of refusing a matching model because an earlier run of the same harness failed. Keep exact model requirements and retained-work guards.
 
 ### Added
 - Give NautBot native dispatch diagnostics for the selected route, worker readiness, capacity and retained process evidence. Saved run state and live observations are reported separately.
