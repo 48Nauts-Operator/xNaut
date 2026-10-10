@@ -32,7 +32,7 @@ NATIVE_IDS = ['identity', 'sidebar', 'right-pane', 'snippets', 'browser', 'markd
               'workspace', 'worktrees', 'more', 'help', 'settings', 'roster', 'refresh-usage', 'restore']
 NATIVE_IDS += ['settings-' + key for key in ['ai','voice','tasksmode','appearance','shortcuts','mobile',
                                            'nautify','guardrails','coreteam','issueintake','triggers']]
-NATIVE_IDS += ['view-' + key for key in ['agent','buildrun','nautflowrun','nfvalidate','nfdesign']]
+NATIVE_IDS += ['view-' + key for key in ['journal','buildrun','nautflowrun','nfvalidate','nfdesign']]
 
 def summary():
     return {'id':'fixture', 'host':'fixture-host', 'suite':'gui-smoke', 'app_version':'1.30.0-dev',
