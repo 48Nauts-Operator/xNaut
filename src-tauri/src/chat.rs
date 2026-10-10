@@ -859,6 +859,7 @@ async fn list_model_entries_for(llm: &crate::settings::LlmSettings) -> Result<Ve
 #[tauri::command]
 pub async fn chat_list_provider_models(
     state: tauri::State<'_, crate::state::AppState>,
+    all_connections: Option<bool>,
 ) -> Result<Vec<ProviderModel>, String> {
     let settings = state.settings.lock().await.clone();
     let mut providers = settings
@@ -880,7 +881,7 @@ pub async fn chat_list_provider_models(
         });
     }
     providers.retain(|p| !settings.llm_providers.iter().any(|r| r.name.eq_ignore_ascii_case(&p.name) && !r.enabled));
-    if gateway_enabled(&settings) {
+    if all_connections != Some(true) && gateway_enabled(&settings) {
         let gateway = selected_llm(&settings, "nautgate")?;
         providers = vec![crate::settings::LlmProviderSettings { name: gateway.provider, endpoint: gateway.endpoint, api_key: gateway.api_key, enabled: true }];
     }

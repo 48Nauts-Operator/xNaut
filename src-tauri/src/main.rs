@@ -114,6 +114,7 @@ mod seal;
 mod secrets;
 mod review_gate;
 mod settings;
+mod cloud_model;
 mod shared_notes;
 mod signoff_scope;
 mod skills;

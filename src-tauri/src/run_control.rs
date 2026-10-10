@@ -96,6 +96,8 @@ pub struct RunManifest {
     pub agent_handle: String,
     pub runtime_id: String,
     pub model: Option<String>,
+    #[serde(default)]
+    pub cloud_model: Option<crate::cloud_model::Pin>,
     pub worktree_path: String,
     pub branch: String,
     pub pty_session: Option<String>,
@@ -256,6 +258,7 @@ impl RunManifest {
             agent_handle: handle.trim_start_matches('@').to_lowercase(),
             runtime_id: runtime.into(),
             model,
+            cloud_model: None,
             worktree_path: worktree.into(),
             branch: git_value(worktree, &["symbolic-ref", "--short", "HEAD"]),
             pty_session: None,
@@ -1995,6 +1998,7 @@ pub(crate) mod tests {
             agent_handle: "codex".into(),
             runtime_id: "codex".into(),
             model: None,
+            cloud_model: None,
             worktree_path: "/not-needed-by-the-pure-verdict".into(),
             branch: "agent/test".into(),
             pty_session: Some("test-session".into()),
@@ -3227,6 +3231,7 @@ pub(crate) fn reserve_repair_admitted_in(dir: &Path, id: &str, proof: &Proofs, a
         }
     }
     let mut next = RunManifest::requested(&previous.agent_handle,&previous.runtime_id,&previous.worktree_path,previous.ticket.clone(),previous.model.clone(),&[],at);
+    next.cloud_model = previous.cloud_model.clone();
     next.remote_env = previous.remote_env.clone();
     next.project = previous.project.clone(); next.branch = previous.branch.clone(); next.previous_run_id = Some(previous.run_id.clone()); next.last_commit = proof.commit.clone();
     next.last_signal = format!("independent review requested author repair after {}",previous.run_id);

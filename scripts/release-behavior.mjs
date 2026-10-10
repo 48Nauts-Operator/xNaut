@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'cloud_model::tests::',
   'agent_profiles::compute_choice_tests::remote_',
   'repository_transfer::tests::repository_admission_',
   'swarm_plan::tests::', 'dispatch::tests::', 'instance::tests::',
@@ -18,6 +19,9 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'cloud_model::tests::shared_cloud_choice_is_identical_across_destinations_and_preserves_local_profiles',
+  'cloud_model::tests::cloud_launch_overrides_worker_defaults_without_putting_credentials_in_argv',
+  ...(process.platform === 'win32' ? [] : ['cloud_model::tests::worker_model_protocol_suite']),
   'agent_profiles::compute_choice_tests::remote_prompt_modes_refuse_undeliverable_tasks_and_preserve_explicit_carriers',
   ...(process.platform === 'win32' ? [] : [
     'agent_profiles::compute_choice_tests::remote_pi_process_receives_the_exact_task_model_provider_env_and_identity',
@@ -54,6 +58,7 @@ export const requiredNative = [
   'agent_tools::tests::swarm_tools_expose_destination_and_durable_queue_contract',
 ];
 export const browserFiles = [
+  'cloud-agent-model.spec.mjs',
   'update-banner.spec.mjs',
   'durable-agent-turns.spec.mjs',
   'nautbot-swarm.spec.mjs', 'dispatch-from-ticket.spec.mjs', 'approval-inbox.spec.mjs',

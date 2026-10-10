@@ -8,6 +8,28 @@ import sys
 
 
 def check(request):
+    cloud = request.get("cloud")
+    if not cloud:
+        return check_runtime(request)
+    status = cloud_probe(cloud)
+    if status != "ready":
+        return status
+    directory = cloud_directory(request["cloud_id"])
+    if directory.exists():
+        return "check_failed"
+    status = "check_failed"
+    try:
+        request = dict(request)
+        request["env"] = dict(request["env"], **cloud_environment(
+            cloud, request["cloud_id"], request["binary"]))
+        status = check_runtime(request)
+        return status
+    finally:
+        if request.get("probe_only") or status != "ready":
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+def check_runtime(request):
     env = dict(os.environ, **request["env"])
     binary = request["binary"]
     if not shutil.which(binary, path=env.get("PATH")):
@@ -23,6 +45,24 @@ def check(request):
         return "ready" if result.returncode == 0 else "authentication_missing"
     if request.get("standard_pi"):
         args = request["args"]
+
+        if request.get("cloud"):
+            # Older supported Pi images have no `auth` subcommand: those words
+            # would be interpreted as a task. Discovery is read-only on both
+            # versions and verifies that Pi loaded the isolated model/auth.
+            result = subprocess.run(
+                [binary, "--no-extensions", "--no-skills", "--no-prompt-templates", "--list-models", request["model"]],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=15, text=True,
+            )
+            found = any(line.split()[:2] == ["xnaut-cloud", request["model"]]
+                        for line in (result.stdout + "\n" + result.stderr).splitlines())
+            return "ready" if result.returncode == 0 and found else "authentication_missing"
+
+        help_result = subprocess.run([binary, "auth", "--help"], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8, text=True)
+        if "pi auth check" not in help_result.stdout:
+            return "runtime_unsupported"
 
         def option(flag):
             value = None

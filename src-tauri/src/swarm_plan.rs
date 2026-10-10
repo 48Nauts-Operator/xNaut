@@ -33,14 +33,10 @@ pub struct PlannedRun {
     /// The agent handle the ticket is assigned to. Dispatch reads this off the
     /// ticket too; the plan only shows it so the card names who is going.
     pub owner: String,
-    /// The model that owner's profile launches with.
-    ///
-    /// Per OWNER, never per swarm. The pane had one dropdown that overrode the
-    /// model for every run in the batch, which is how a runtime gets launched
-    /// with a name its CLI has never heard of (XNAUT-266). The profile already
-    /// answers this question for the fleet; the swarm asks it rather than
-    /// keeping a second answer.
+    /// Effective model shown to the owner and frozen by approval.
     pub model: String,
+    #[serde(default)]
+    pub cloud_model: Option<crate::cloud_model::Pin>,
     pub branch: String,
     pub scope: String,
     #[serde(default)]
@@ -198,6 +194,7 @@ pub fn plan_from(
             title: ticket.title.clone(),
             owner,
             model: model.clone(),
+            cloud_model: None,
             scope: scope(ticket),
             repository_root: None,
             runtime_id: None,
@@ -546,11 +543,9 @@ fn current_pins(run: &PlannedRun, project: &str) -> Result<bool, String> {
     let root = Path::new(crate::project_management::local_source_path(p).trim())
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    let environment = resolve_environment(
-        run.requested_environment.as_deref(),
-        profile.execution,
-        &crate::settings::load_or_default().sandboxes,
-    )?;
+    let settings = crate::settings::load_or_default();
+    let environment = resolve_environment(run.requested_environment.as_deref(), profile.execution, &settings.sandboxes)?;
+    let (profile, cloud) = crate::cloud_model::apply(&settings, &profile, environment.key())?;
     Ok(!p.owner_only
         && pins_match(
             run,
@@ -559,6 +554,7 @@ fn current_pins(run: &PlannedRun, project: &str) -> Result<bool, String> {
             &profile.model,
             &profile.runtime_id,
             environment.key(),
+            cloud.as_ref().map(|c| &c.pin),
         ))
 }
 fn pins_match(
@@ -568,8 +564,10 @@ fn pins_match(
     model: &str,
     runtime: &str,
     environment: &str,
+    cloud: Option<&crate::cloud_model::Pin>,
 ) -> bool {
-    run.repository_root.as_deref() == root
+    run.cloud_model.as_ref() == cloud
+        && run.repository_root.as_deref() == root
         && root.is_some()
         && run.repository_remote.as_deref() == Some(remote)
         && run.model == model
@@ -691,6 +689,7 @@ pub(crate) fn worker_admission_for_ticket_in(
                 && (run.agent_handle != planned.owner
                     || run.runtime_id != planned.runtime_id.as_deref().unwrap_or("")
                     || run.model.as_deref().unwrap_or("") != planned.model
+                    || run.cloud_model != planned.cloud_model
                     || run.remote_env.as_deref().unwrap_or("local")
                         != planned.environment.as_deref().unwrap_or(""))
             {
@@ -899,7 +898,10 @@ pub fn build_with_environment(
         run.runtime_id = Some(profile.runtime_id.clone());
         let destination = replan_environment(environment, &previous, &run.ticket);
         run.environment = Some(resolve_environment(destination, profile.execution, &settings.sandboxes)?.key().into());
-        if needs_repository(run) { crate::agent_profiles::validate_remote_runtime(&profile)?; }
+        let (profile, cloud) = crate::cloud_model::apply(&settings, &profile, run.environment.as_deref().unwrap_or("local"))?;
+        run.model = profile.model.clone();
+        run.cloud_model = cloud.as_ref().map(|c| c.pin.clone());
+        if needs_repository(run) { crate::agent_profiles::validate_remote_runtime_with(&profile, cloud.as_ref())?; }
         run.requested_environment = destination.map(str::to_owned);
         run.repository_remote = projects
             .iter()
@@ -1222,11 +1224,15 @@ impl RefillBackend for NativeRefill<'_> {
         Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                let profile = crate::agent_profiles::agent_profile_get(run.owner)?;
+                let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())?;
+                let (profile, cloud) = crate::cloud_model::apply(&crate::settings::load_or_default(), &profile, run.environment.as_deref().unwrap_or("local"))?;
+                if run.cloud_model != cloud.as_ref().map(|c| c.pin.clone()) || run.model != profile.model {
+                    return Err("Approved cloud model or connection changed; renew approval.".into());
+                }
                 if run.environment.as_deref() == Some("exe-dev") {
-                    crate::agent_profiles::preflight_exe_runtime(&profile)
+                    crate::agent_profiles::preflight_exe_runtime(&profile, cloud.as_ref())
                 } else {
-                    crate::agent_profiles::validate_remote_runtime(&profile)
+                    crate::agent_profiles::validate_remote_runtime_with(&profile, cloud.as_ref())
                 }
             }).await.map_err(|_| "Worker runtime check could not complete")?
         })
@@ -1272,7 +1278,9 @@ impl RefillBackend for NativeRefill<'_> {
         crate::dispatch::approved_group_admission(&run.ticket, project, run.environment.as_deref())?;
         let profile = crate::agent_profiles::agent_profile_get(run.owner.clone())
             .map_err(crate::dispatch::DispatchRefusal::uncertain)?;
-        if profile.model != run.model {
+        let (profile, cloud) = crate::cloud_model::apply(&crate::settings::load_or_default(), &profile,
+            run.environment.as_deref().unwrap_or("local")).map_err(crate::dispatch::DispatchRefusal::uncertain)?;
+        if profile.model != run.model || run.cloud_model != cloud.map(|c| c.pin) {
             return Err(crate::dispatch::DispatchRefusal {
                 kind: crate::dispatch::RefusalKind::Policy,
                 reason: "approved owner profile/model changed".into(),
@@ -2222,7 +2230,8 @@ mod tests {
             "ssh://forge/team/repo.git",
             &run.model,
             "claude-code",
-            "gitvm"
+            "gitvm",
+            None
         ));
         for field in ["root", "remote", "model", "runtime", "environment"] {
             assert!(
@@ -2252,10 +2261,23 @@ mod tests {
                         "exe-dev"
                     } else {
                         "gitvm"
-                    }
+                    },
+                    None
                 ),
                 "{field}"
             );
+        }
+        let mut cloud_run = run.clone();
+        let connection = crate::cloud_model::Pin { provider: "gateway".into(), model: run.model.clone(), endpoint: "https://models.example/v1".into() };
+        cloud_run.cloud_model = Some(connection.clone());
+        let cloud_run: PlannedRun = serde_json::from_slice(&serde_json::to_vec(&cloud_run).unwrap()).unwrap();
+        assert!(pins_match(&cloud_run, Some("/approved/repository"), "ssh://forge/team/repo.git",
+            &run.model, "claude-code", "gitvm", Some(&connection)));
+        for changed in [None, Some(crate::cloud_model::Pin { provider: "other".into(), ..connection.clone() }),
+            Some(crate::cloud_model::Pin { endpoint: "https://other.example/v1".into(), ..connection.clone() }),
+            Some(crate::cloud_model::Pin { model: "other-model".into(), ..connection.clone() })] {
+            assert!(!pins_match(&cloud_run, Some("/approved/repository"), "ssh://forge/team/repo.git",
+                &run.model, "claude-code", "gitvm", changed.as_ref()));
         }
         let mut legacy = run.clone();
         legacy.runtime_id = None;
@@ -2265,7 +2287,8 @@ mod tests {
             "ssh://forge/team/repo.git",
             &run.model,
             "claude-code",
-            "gitvm"
+            "gitvm",
+            None
         ));
         std::fs::remove_dir_all(dir).unwrap();
     }

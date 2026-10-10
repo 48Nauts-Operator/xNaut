@@ -3106,6 +3106,8 @@ mod repair_loop_tests {
         f.reload();
         let proof = f.proof();
         let author = f.parent.run_id.clone();
+        let cloud = crate::cloud_model::Pin { provider: "fixture".into(), model: "fixture-model".into(), endpoint: "https://models.example/v1".into() };
+        run_control::update_in(&f.registry, &author, |run| run.cloud_model = Some(cloud.clone())).unwrap();
         reserve_repair_at(
             &f.store,
             &f.registry,
@@ -3117,6 +3119,7 @@ mod repair_loop_tests {
         )
         .unwrap();
         let reserved = f.q.repair_child.clone().unwrap();
+        assert_eq!(run_control::load_manifest_in(&f.registry, &reserved).unwrap().cloud_model, Some(cloud));
         f.reload();
         // Restart can discover exactly the existing native reservation.
         assert_eq!(

@@ -2058,12 +2058,14 @@ pub async fn agent_profile_launch(
     let pinned = req.environment.as_deref().map(|key| LaunchEnv::from_key(key)
         .ok_or_else(|| format!("Unknown execution environment: {key}. Choose local, exe-dev or gitvm."))).transpose()?
         .or_else(|| profile.execution.pinned_environment());
-    let sandboxes = crate::settings::load_or_default().sandboxes;
+    let settings = crate::settings::load_or_default();
+    let sandboxes = &settings.sandboxes;
     let env = crate::sandbox::launch_env::resolve(pinned, &sandboxes);
     let route = env
         .route(&sandboxes)
         .map_err(|why| format!("@{} {why}", profile.handle))?;
-    if !matches!(route, LaunchRoute::Local) { validate_remote_runtime(&profile)?; }
+    let (profile, cloud) = crate::cloud_model::apply(&settings, &profile, env.key())?;
+    if !matches!(route, LaunchRoute::Local) { validate_remote_runtime_with(&profile, cloud.as_ref())?; }
     // Resolved HERE so a refusal is immediate, acted on at the bottom so
     // everything between (the spend gate, the composed prompt, the identity)
     // happens once for every environment rather than once per branch.
@@ -2088,6 +2090,7 @@ pub async fn agent_profile_launch(
                     (!profile.model.trim().is_empty()).then(|| profile.model.clone()),
                     &crate::run_control::ProjectSite::board(), crate::run_control::now_ms(),
                 );
+                refused.cloud_model = cloud.as_ref().map(|c| c.pin.clone());
                 refused.remote_env = Some(env.key().into());
                 crate::run_control::bind_pending_in(&registry, &mut refused)?;
                 crate::run_control::refuse_prelaunch_in(&registry, refused,
@@ -2133,6 +2136,7 @@ pub async fn agent_profile_launch(
         // Without this the reconciler observes the run with LOCAL proofs — a
         // local pid, a local zellij session, a local capture file — finds none
         // of them, and fails a working agent inside the grace window.
+        run.cloud_model = cloud.as_ref().map(|c| c.pin.clone());
         run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::GitVm.key().to_string());
         crate::run_control::bind_pending_in(&registry, &mut run)?;
         crate::agent_work::pin_model_reservation_in(&registry, &mut run)?;
@@ -2184,7 +2188,7 @@ pub async fn agent_profile_launch(
     // would run, and be nobody.
     match route {
         LaunchRoute::ExeDev => {
-            return launch_on_exe_dev(app, state, &profile, &req, prompt, identity_env, &project)
+            return launch_on_exe_dev(app, state, &profile, cloud.as_ref(), &req, prompt, identity_env, &project)
                 .await
         }
         LaunchRoute::GitVm => {
@@ -2192,6 +2196,7 @@ pub async fn agent_profile_launch(
                 app,
                 state,
                 &profile,
+                cloud.as_ref(),
                 &req,
                 prompt,
                 identity_env,
@@ -2379,6 +2384,7 @@ async fn launch_on_exe_dev(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
     profile: &AgentProfile,
+    cloud: Option<&crate::cloud_model::Resolved>,
     req: &LaunchAgentProfileRequest,
     prompt: Option<String>,
     identity_env: std::collections::HashMap<String, String>,
@@ -2391,6 +2397,7 @@ async fn launch_on_exe_dev(
         (!profile.model.trim().is_empty()).then(|| profile.model.clone()),
         &crate::run_control::ProjectSite::board(), crate::run_control::now_ms(),
     );
+    run.cloud_model = cloud.as_ref().map(|c| c.pin.clone());
     run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::ExeDev.key().into());
     let registry = crate::agents::registry_dir()?;
     crate::run_control::bind_pending_in(&registry, &mut run)?;
@@ -2411,7 +2418,10 @@ async fn launch_on_exe_dev(
         }
     };
     let prompt = Some(format!("{}{}", prompt.unwrap_or_default(), crate::repository_transfer::instructions(&transfer)));
-    let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
+    let (cfg, command) = remote_launch_command(profile, cloud, prompt, identity_env)?;
+    let cloud_id = format!("cloud-{}", uuid::Uuid::new_v4());
+    let command = crate::cloud_model::command(command, cloud, &cloud_id);
+    let mut cloud_preparation = crate::cloud_model::Preparation::new(transfer.worker.clone(), &cloud_id, cloud.is_some());
     let workdir = transfer.workdir.clone();
     let session = crate::sandbox::launch_env::repository_session_name(&profile.handle, &run_id);
     let script = crate::repository_transfer::run_script(&transfer, &command, &crate::sandbox::launch_env::onboarding_seed(&cfg));
@@ -2420,13 +2430,14 @@ async fn launch_on_exe_dev(
         let mut snapshot = transfer.clone();
         let session = session.clone();
         let runtime = cfg.clone();
+        let cloud = cloud.cloned();
         let model = profile.model.clone();
         let settings = state.settings.lock().await.clone();
         tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
             exe::ensure()?;
             let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
                 &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
-            remote_runtime_ready(&runtime, &model, &snapshot.worker)?;
+            remote_runtime_ready(&runtime, &model, &snapshot.worker, cloud.as_ref(), &cloud_id, false)?;
             snapshot.worker_remote = Some(access.remote.clone());
             crate::repository_transfer::stage(&snapshot, &access)?;
             let relative = format!(".git/{session}.sh");
@@ -2468,6 +2479,7 @@ async fn launch_on_exe_dev(
         session_name: None,
         session_layout: None,
     };
+    cloud_preparation.handed_off(); // After this point, a viewport error is not proof the worker stayed stopped.
     let session_id = crate::pty::create_pty_session(app.clone(), state.clone(), pty_config)
         .await
         .map_err(|error| {
@@ -2549,6 +2561,7 @@ async fn launch_on_gitvm(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::state::AppState>,
     profile: &AgentProfile,
+    cloud: Option<&crate::cloud_model::Resolved>,
     req: &LaunchAgentProfileRequest,
     prompt: Option<String>,
     identity_env: std::collections::HashMap<String, String>,
@@ -2569,7 +2582,10 @@ async fn launch_on_gitvm(
     // contract preserves a pending outbox even if the sandbox is later reaped.
     transfer.workdir = format!("/workspace/.xnaut-runs/{run_id}");
     let prompt = Some(format!("{}{}", prompt.unwrap_or_default(), crate::repository_transfer::instructions(&transfer)));
-    let (cfg, command) = remote_launch_command(profile, prompt, identity_env)?;
+    let (cfg, command) = remote_launch_command(profile, cloud, prompt, identity_env)?;
+    let cloud_id = format!("cloud-{}", uuid::Uuid::new_v4());
+    let command = crate::cloud_model::command(command, cloud, &cloud_id);
+    let mut cloud_preparation = crate::cloud_model::Preparation::new(transfer.worker.clone(), &cloud_id, cloud.is_some());
     let session = crate::sandbox::launch_env::repository_session_name(&profile.handle, &run_id);
     let script = crate::repository_transfer::run_script(&transfer, &command, &crate::sandbox::launch_env::onboarding_seed(&cfg));
     crate::repository_transfer::save(&transfer)?;
@@ -2608,6 +2624,7 @@ async fn launch_on_gitvm(
         let session = session.clone();
         let beacon = beacon.clone();
         let runtime = cfg.clone();
+        let cloud = cloud.cloned();
         let model = profile.model.clone();
         let settings = state.settings.lock().await.clone();
         let mut snapshot = transfer.clone();
@@ -2624,7 +2641,7 @@ async fn launch_on_gitvm(
             cli::warm_up(&dir)?;
             let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
                 &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
-            remote_runtime_ready(&runtime, &model, &snapshot.worker)?;
+            remote_runtime_ready(&runtime, &model, &snapshot.worker, cloud.as_ref(), &cloud_id, false)?;
             snapshot.worker_remote = Some(access.remote.clone());
             crate::repository_transfer::stage(&snapshot, &access)?;
             let guest = cli::guest(&dir)?;
@@ -2698,6 +2715,7 @@ async fn launch_on_gitvm(
         session_name: None,
         session_layout: None,
     };
+    cloud_preparation.handed_off(); // After this point, a viewport error is not proof the worker stayed stopped.
     let session_id = crate::pty::create_pty_session(app.clone(), state.clone(), pty_config)
         .await
         .map_err(|error| {
@@ -2830,6 +2848,7 @@ fn uses_standard_codex_login(cfg: &crate::agents::AgentConfig) -> bool {
 
 fn remote_launch_command(
     profile: &AgentProfile,
+    cloud: Option<&crate::cloud_model::Resolved>,
     prompt: Option<String>,
     identity_env: std::collections::HashMap<String, String>,
 ) -> Result<(crate::agents::AgentConfig, String), String> {
@@ -2838,6 +2857,7 @@ fn remote_launch_command(
         .find(&profile.runtime_id)
         .ok_or_else(|| format!("unknown agent runtime: {}", profile.runtime_id))?
         .clone();
+    let cfg = crate::cloud_model::runtime(&cfg, cloud)?;
     let command = remote_command_for(&cfg, prompt.as_deref(), Some(&profile.model), identity_env)?;
     Ok((cfg, command))
 }
@@ -2876,31 +2896,32 @@ fn remote_command_for(
     Ok(remote_command(&argv, &env))
 }
 
-pub(crate) fn validate_remote_runtime(profile: &AgentProfile) -> Result<(), String> {
-    let registry = crate::agents::load_or_seed_registry()?;
-    let cfg = registry.find(&profile.runtime_id).ok_or("Unknown remote agent runtime")?;
-    remote_command_for(cfg, Some("task delivery check"), Some(&profile.model), Default::default()).map(|_| ())
+pub(crate) fn validate_remote_runtime_with(profile: &AgentProfile, cloud: Option<&crate::cloud_model::Resolved>) -> Result<(), String> {
+    remote_launch_command(profile, cloud, Some("task delivery check".into()), Default::default()).map(|_| ())
 }
 
 /// Probe the approved exe.dev destination before a new attempt is allocated.
-/// GitVM needs its worktree-bound sandbox, so it checks after warm-up instead.
-pub(crate) fn preflight_exe_runtime(profile: &AgentProfile) -> Result<(), String> {
-    let registry = crate::agents::load_or_seed_registry()?;
-    let cfg = registry.find(&profile.runtime_id).ok_or("Unknown remote agent runtime")?;
-    remote_command_for(cfg, Some("task delivery check"), Some(&profile.model), Default::default())?;
+/// GitVM checks the same contract after its worktree-bound sandbox is available.
+pub(crate) fn preflight_exe_runtime(profile: &AgentProfile, cloud: Option<&crate::cloud_model::Resolved>) -> Result<(), String> {
+    let (cfg, _) = remote_launch_command(profile, cloud, Some("task delivery check".into()), Default::default())?;
     crate::sandbox::exe::ensure()?;
-    remote_runtime_ready(cfg, &profile.model, &crate::worker_bootstrap::Target::ExeDev)
+    remote_runtime_ready(&cfg, &profile.model, &crate::worker_bootstrap::Target::ExeDev, cloud,
+        &format!("probe-{}", uuid::Uuid::new_v4()), true)
 }
 
 fn remote_runtime_ready(cfg: &crate::agents::AgentConfig, model: &str,
-    target: &crate::worker_bootstrap::Target) -> Result<(), String> {
+    target: &crate::worker_bootstrap::Target, cloud: Option<&crate::cloud_model::Resolved>,
+    cloud_id: &str, probe_only: bool) -> Result<(), String> {
     let input = serde_json::to_vec(&serde_json::json!({
         "binary": cfg.launch_cmd, "env": cfg.env, "args": cfg.extra_args, "model": model,
+        "cloud": cloud.map(|c| serde_json::json!({"provider": c.pin.provider, "model": c.pin.model,
+            "endpoint": c.pin.endpoint, "api_key": c.api_key})),
+        "cloud_id": cloud_id, "probe_only": probe_only,
         "standard_codex": uses_standard_codex_login(cfg),
         "standard_pi": cfg.id == "pi" && cfg.launch_cmd == "pi",
     })).map_err(|e| e.to_string())?;
     let output = target.exchange(&format!("python3 -c {}",
-        crate::sandbox::exe::shell_single_quote(include_str!("worker_runtime.py"))), &input, 25)?;
+        crate::sandbox::exe::shell_single_quote(&format!("{}\n{}", include_str!("worker_model.py"), include_str!("worker_runtime.py")))), &input, 35)?;
     let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_default();
     let status = receipt["status"].as_str().unwrap_or("check_failed");
     if output.status.success() && status == "ready" { return Ok(()); }
@@ -2908,6 +2929,9 @@ fn remote_runtime_ready(cfg: &crate::agents::AgentConfig, model: &str,
         "binary_missing" => "its configured command is not installed on the worker",
         "authentication_missing" => "its selected provider has no usable authentication on the worker",
         "check_timeout" => "its authentication check timed out",
+        "endpoint_unreachable" => "the selected model endpoint is unreachable from this worker",
+        "model_unavailable" => "the selected model is not in the provider catalog",
+        "runtime_unsupported" => "this Pi version has no authentication check; configure the shared cloud model in Settings or update Pi",
         _ => "its readiness check could not be verified",
     };
     Err(format!("Runtime {} is not ready: {reason}. Configure this worker before retrying. No agent was started.", cfg.id))
@@ -5147,7 +5171,7 @@ mod compute_choice_tests {
         let dir = std::env::temp_dir().join(format!("xnaut-runtime-probe-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let binary = dir.join("pi");
-        std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,os,sys\nassert sys.argv[1:]==['auth','check','--json','--model','provider/model']\nprint(json.dumps({'status':os.environ['FIXTURE_AUTH'], 'credential':'never-disclose-this'}))\n").unwrap();
+        std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,os,sys\nif sys.argv[1:]==['auth','--help']: print('pi auth check'); sys.exit(0)\nassert sys.argv[1:]==['auth','check','--json','--model','provider/model']\nprint(json.dumps({'status':os.environ['FIXTURE_AUTH'], 'credential':'never-disclose-this'}))\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
         for (binary, auth, expected) in [
             (binary.to_string_lossy().to_string(), "ready", "ready"),

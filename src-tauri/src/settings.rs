@@ -396,6 +396,9 @@ pub struct Settings {
     pub llm_providers: Vec<LlmProviderSettings>,
     #[serde(default)]
     pub agent_chat_selection: AgentChatSelection,
+    /// One explicit model and provider connection shared by remote agent workers.
+    #[serde(default)]
+    pub cloud_agent_model: crate::cloud_model::Selection,
     pub engram: EngramSettings,
     #[serde(default)]
     pub project_management: ProjectManagementSettings,
@@ -531,6 +534,7 @@ impl Default for Settings {
             },
             llm_providers: Vec::new(),
             agent_chat_selection: AgentChatSelection::default(),
+            cloud_agent_model: crate::cloud_model::Selection::default(),
             engram: EngramSettings::default(),
             project_management: ProjectManagementSettings::default(),
             loops: LoopsSettings::default(),
@@ -815,6 +819,7 @@ pub async fn settings_set(
     state: tauri::State<'_, crate::state::AppState>,
     settings: Settings,
 ) -> Result<(), String> {
+    crate::cloud_model::resolve(&settings)?;
     save(&settings)?;
     *state.settings.lock().await = settings;
     crate::tool_support::forget_all();

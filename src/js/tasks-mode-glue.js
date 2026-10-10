@@ -441,6 +441,15 @@ window.xnautAttachTasksTab = (opts) =>
         <button class="btn" id="tm-add-forge" style="font-size:12px; margin-top:4px;">+ Add forge</button>
       </div>
 
+      <h3>Cloud agent model</h3>
+      <div class="settings-group">
+        <p style="color:var(--text-secondary); font-size:12px; margin:0 0 8px;">Choose once for all cloud workers, including exe.dev and GitVM. Local agents keep their profile models. A model must be compatible with the assigned agent's harness.</p>
+        <div class="settings-row"><label for="tm-cloud-provider">Provider connection</label><select id="tm-cloud-provider"><option value="">Use each agent's profile</option></select></div>
+        <div class="settings-row"><label for="tm-cloud-model">Model</label><input id="tm-cloud-model" type="text" list="tm-cloud-models" placeholder="Choose or enter a model ID"><datalist id="tm-cloud-models"></datalist></div>
+        <div class="settings-row"><label for="tm-cloud-endpoint">Worker endpoint (optional)</label><input id="tm-cloud-endpoint" type="url" placeholder="Use the selected provider's address"></div>
+        <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Uses the selected connection's API key. If that connection uses localhost, enter an address reachable from your workers. New plans show this model; changing the model or connection requires renewed approval.</p>
+      </div>
+
       <h3>Worker access</h3>
       <div class="settings-group">
         <p style="color:var(--text-secondary); font-size:12px; margin:0 0 8px;">Every repository task automatically prepares its tools and repository access using the project's forge connection. Tailscale is optional: leave these fields empty for GitHub, an internet-accessible Forgejo server, or a worker that already has access through your network or VPN.</p>
@@ -484,6 +493,33 @@ window.xnautAttachTasksTab = (opts) =>
     $('tm-llm-model').value = s.llm.model || '';
     $('tm-llm-key').value = s.llm.api_key || '';
     const chatModelPicker = window.xnautChatModelPicker.mountSettings(host, s);
+    const cloudSelection = s.cloud_agent_model || {};
+    const cloudProviders = new Set((s.llm_providers || []).filter(p => p.enabled).map(p => p.name));
+    if (s.llm.provider) cloudProviders.add(s.llm.provider);
+    if (cloudSelection.provider) cloudProviders.add(cloudSelection.provider);
+    for (const provider of cloudProviders) {
+      $('tm-cloud-provider').add(new Option(provider, provider));
+    }
+    $('tm-cloud-provider').value = cloudSelection.provider || '';
+    $('tm-cloud-model').value = cloudSelection.model || '';
+    $('tm-cloud-endpoint').value = cloudSelection.worker_endpoint || '';
+    let cloudModels = window.xnautModelCatalog.all();
+    const refreshCloudModels = () => {
+      const provider = $('tm-cloud-provider').value;
+      $('tm-cloud-model').disabled = !provider;
+      $('tm-cloud-endpoint').disabled = !provider;
+      $('tm-cloud-models').replaceChildren(...cloudModels
+        .filter(m => m.provider.toLowerCase() === provider.toLowerCase())
+        .map(m => new Option(m.name || m.id, m.id)));
+    };
+    $('tm-cloud-provider').addEventListener('change', refreshCloudModels);
+    refreshCloudModels();
+    invoke('chat_list_provider_models', { allConnections: true }).then(models => {
+      if (!host.isConnected || !Array.isArray(models)) return;
+      cloudModels = models.map(m => ({ provider: m.provider, id: m.model, name: m.label || m.model }));
+      refreshCloudModels();
+    }).catch(() => { /* keep cached choices and allow a manually entered model ID */ });
+
     $('tm-engram-on').checked = !!s.engram.enabled;
     $('tm-engram-url').value = s.engram.url || '';
     $('tm-pm-module-on').checked = !!(s.project_management && s.project_management.enabled);
@@ -650,6 +686,11 @@ window.xnautAttachTasksTab = (opts) =>
           model: $('tm-llm-model').value.trim(),
           api_key: $('tm-llm-key').value.trim() || null,
         },
+        cloud_agent_model: $('tm-cloud-provider').value ? {
+          provider: $('tm-cloud-provider').value,
+          model: $('tm-cloud-model').value.trim(),
+          worker_endpoint: $('tm-cloud-endpoint').value.trim(),
+        } : { provider: '', model: '', worker_endpoint: '' },
         engram: { enabled: $('tm-engram-on').checked, url: $('tm-engram-url').value.trim() },
         project_management: {
           ...(s.project_management || {}),

@@ -422,11 +422,6 @@ async fn dispatch_with_findings_gate(
         .filter(|owner| !owner.is_empty())
         .ok_or("assign an owner before dispatching this ticket")?;
     let profile = crate::agent_profiles::agent_profile_get(handle.clone())?;
-    if approved.is_some_and(|run| {
-        !crate::swarm_plan::authorized(run, &ticket) || run.model != profile.model
-    }) {
-        return Err("approved group scope, owner or model changed before native dispatch".into());
-    }
     use crate::sandbox::launch_env::LaunchEnv;
     let requested = environment
         .as_deref()
@@ -436,12 +431,18 @@ async fn dispatch_with_findings_gate(
             })
         })
         .transpose()?;
-    let sandboxes = crate::settings::load_or_default().sandboxes;
+    let settings = crate::settings::load_or_default();
+    let sandboxes = &settings.sandboxes;
     let destination = crate::sandbox::launch_env::resolve(
         requested.or_else(|| profile.execution.pinned_environment()),
         &sandboxes,
     );
     destination.route(&sandboxes)?;
+    let (profile, cloud) = crate::cloud_model::apply(&settings, &profile, destination.key())?;
+    if approved.is_some_and(|run| !crate::swarm_plan::authorized(run, &ticket)
+        || run.model != profile.model || run.cloud_model != cloud.as_ref().map(|c| c.pin.clone())) {
+        return Err("Approved group scope, owner, model or connection changed before native dispatch; renew approval.".into());
+    }
     if let Some(run) = approved {
         approved_dispatch_policy(crate::instance::role(), crate::switches::load().read_only,
             run.environment.as_deref()).map_err(|refusal| refusal.reason)?;
