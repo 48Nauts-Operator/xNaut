@@ -150,7 +150,9 @@
     }
     render();
     if (!panel.open) {
-      previousFocus = document.activeElement;
+      const focused = document.activeElement;
+      previousFocus = focused !== document.body && focused?.getClientRects().length
+        ? focused : document.getElementById('btn-more-menu');
       panel.showModal();
       panel.querySelector('[data-close]').focus();
     }

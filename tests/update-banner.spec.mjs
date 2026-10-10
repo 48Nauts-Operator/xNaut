@@ -317,3 +317,20 @@ test('conversation writes queued while installation finishes are saved before re
   await expect(status(page)).toContainText('Update installed; restart failed: Conversation changes are not saved');
   expect(await page.evaluate(() => window.__updates.restarts)).toBe(0);
 });
+
+test('update dialog is centred, readable, and returns keyboard focus on Escape', async ({ page }) => {
+  await fixture(page); await open(page);
+  await expect(action(page)).toHaveText('Download update');
+  const visual = await page.evaluate(() => {
+    const rect = document.getElementById('update-panel').getBoundingClientRect();
+    const style = getComputedStyle(document.querySelector('#update-panel [data-primary]'));
+    const luminance = value => value.match(/[\d.]+/g).slice(0, 3).map(Number).map(n => n / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+    const colors = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => b - a);
+    return { offsetX: Math.abs(rect.left + rect.width / 2 - innerWidth / 2), offsetY: Math.abs(rect.top + rect.height / 2 - innerHeight / 2), contrast: (colors[0] + .05) / (colors[1] + .05) };
+  });
+  expect(visual.offsetX).toBeLessThan(2); expect(visual.offsetY).toBeLessThan(2);
+  expect(visual.contrast).toBeGreaterThanOrEqual(4.5);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#update-panel')).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'More actions', exact: true })).toBeFocused();
+});
