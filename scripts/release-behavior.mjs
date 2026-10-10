@@ -20,7 +20,7 @@ export const nativeSuites = [
   'sandbox::launch_env::tests::', 'agent_tools::tests::swarm_tools_',
   'project_management::mutation_recovery::tests::', 'project_management::write_guard_tests::',
   'project_continuity::tests::', 'agent_work::tests::', 'repository_review::tests::',
-  'run_control::tests::', 'settings::tests::', 'ticket_triage::tests::',
+  'run_control::tests::', 'run_control::runtime_policy_tests::', 'settings::tests::', 'ticket_triage::tests::',
   'gitops::tests::',
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
