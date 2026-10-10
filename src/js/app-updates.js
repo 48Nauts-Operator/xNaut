@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   const RELEASE = 'https://github.com/48Nauts-Operator/xNaut/releases/latest';
-  const FEED = 'https://github.com/48Nauts-Operator/xNaut/releases/latest/download/latest.json';
+  const RELEASE_API = 'https://api.github.com/repos/48Nauts-Operator/xNaut/releases/latest';
   const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
   const RETRY_INTERVAL = 15 * 60 * 1000;
   const CHECK_TIMEOUT = 20000;
@@ -177,14 +177,16 @@
       if (window.__TAURI__.updater?.check) {
         candidate = await window.__TAURI__.updater.check({ timeout: CHECK_TIMEOUT });
       } else {
-        // Same release manifest as the native updater. Without the plugin we
-        // can announce a version, but must not claim to download or verify it.
+        // GitHub's asset redirect does not allow browser CORS; the API does.
+        // This fallback can announce a release, never download or verify it.
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT);
         try {
-          const response = await fetch(FEED, { signal: controller.signal, cache: 'no-store' });
+          const response = await fetch(RELEASE_API, { signal: controller.signal, cache: 'no-store' });
           if (!response.ok) throw new Error(`Release server returned HTTP ${response.status}`);
-          candidate = await response.json();
+          const release = await response.json();
+          if (release.draft || release.prerelease) throw new Error('The release server returned an unpublished or prerelease build');
+          candidate = { version: release.tag_name, body: release.body };
         } finally { clearTimeout(timer); }
       }
       if (candidate && !stableVersion(candidate.version)) throw new Error('The release server returned an invalid stable version');

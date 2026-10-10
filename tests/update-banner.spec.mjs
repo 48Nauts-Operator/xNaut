@@ -3,7 +3,7 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 const APP_VERSION = JSON.parse(await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8')).version;
-const FEED = 'https://github.com/48Nauts-Operator/xNaut/releases/latest/download/latest.json';
+const RELEASE_API = 'https://api.github.com/repos/48Nauts-Operator/xNaut/releases/latest';
 const MB = 1048576;
 
 async function fixture(page, options = {}) {
@@ -39,7 +39,7 @@ async function fixture(page, options = {}) {
     };
     await route.fulfill({ response, body: `${await response.text()}\n(${script.toString()})(${JSON.stringify({ current: APP_VERSION, ...options })});` });
   });
-  await page.route(FEED, route => route.fulfill({ json: { version: '99.0.0', notes: 'Fallback release notes' } }));
+  await page.route(RELEASE_API, route => route.fulfill({ json: { tag_name: 'v99.0.0', body: 'Fallback release notes' } }));
   await page.goto('/?stub=1');
   await page.waitForFunction(() => !!document.getElementById('btn-more-menu')?.onclick);
 }
@@ -103,7 +103,7 @@ for (const path of ['/tmp/.worktrees/test/xNAUT.app', '/tmp/target/debug', '/tmp
   });
 }
 
-test('fallback uses release feed, safe text notes and an honest external download action', async ({ page }) => {
+test('fallback uses the CORS-enabled API, safe text notes and an honest external download action', async ({ page }) => {
   await fixture(page, { plugin: false }); await open(page);
   await expect(action(page)).toHaveText('Download from website');
   await page.getByText('What’s new', { exact: true }).click();
