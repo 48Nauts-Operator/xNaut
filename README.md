@@ -13,7 +13,7 @@
 
 **A native terminal for working with a fleet of coding agents.**
 
-[![Version](https://img.shields.io/badge/version-1.29.1-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
+[![Version](https://img.shields.io/badge/version-1.30.11-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
