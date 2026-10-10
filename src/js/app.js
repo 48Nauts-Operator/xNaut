@@ -2423,9 +2423,14 @@ window.xnautSyncChatSettingsFromAiSettings = async function(options = {}) {
       configuredProviders.push(update);
       return;
     }
+    // Startup is a migration of missing providers, never an edit of saved
+    // connections. Another Settings surface or native tool may have changed
+    // them since this webview last wrote its legacy cache.
+    if (!options.overrideDefault) return;
     configuredProviders[index] = {
       ...configuredProviders[index],
       ...update,
+      enabled: configuredProviders[index].enabled,
       api_key: update.api_key || configuredProviders[index].api_key || null,
     };
   });
@@ -2440,14 +2445,14 @@ window.xnautSyncChatSettingsFromAiSettings = async function(options = {}) {
       // harness_local rides along even when no default model is picked yet —
       // agent_launch reads it, and a fresh install has no model selected.
       chat_model_source: options.overrideDefault ? 'ai' : current.chat_model_source,
-      llm: endpoint && model && (options.overrideDefault || current.chat_model_source !== 'workspace') ? {
+      llm: endpoint && model && (options.overrideDefault || !current.llm?.provider) ? {
         ...(current.llm || {}),
         provider,
         endpoint,
         model,
         api_key: aiSettingsChatApiKey(provider) || null,
         harness_local: !!settings.harnessLocal,
-      } : { ...(current.llm || {}), harness_local: !!settings.harnessLocal },
+      } : { ...(current.llm || {}), ...(options.overrideDefault ? { harness_local: !!settings.harnessLocal } : {}) },
       llm_providers: configuredProviders,
     },
   });
@@ -4652,17 +4657,17 @@ async function loadSettings() {
     }
 
     // Provider credentials historically lived only in WebKit localStorage,
-    // while chat and agents read the Rust settings store. Hydrate missing UI
-    // values from the durable registry, then migrate the visible Settings-page
-    // values back before any conversation surface is mounted.
+    // while chat and agents read the Rust settings store. Hydrate the UI
+    // values from the durable registry. Saved native settings take precedence
+    // over stale webview values; only absent connections may be migrated back.
     if (window.__TAURI__?.core?.invoke) {
       const durable = await invoke('settings_get').catch(() => null);
       const providers = durable?.llm_providers || [];
       const nautgate = providers.find((item) => String(item?.name || '').toLowerCase() === 'nautgate')
         || (String(durable?.llm?.provider || '').toLowerCase() === 'nautgate' ? durable.llm : null);
       if (nautgate) {
-        if (!settings.nautgateUrl && nautgate.endpoint) settings.nautgateUrl = nautgate.endpoint;
-        if (!settings.apiKeyNautGate && nautgate.api_key) settings.apiKeyNautGate = nautgate.api_key;
+        if (nautgate.endpoint) settings.nautgateUrl = nautgate.endpoint;
+        settings.apiKeyNautGate = nautgate.api_key || '';
       }
       // The local providers need the same hydration. Their URL lived only in
       // localStorage and defaulted to the vendor's stock port, so an install on
@@ -4673,9 +4678,18 @@ async function loadSettings() {
       const originOf = (url) => String(url || '').replace(/\/+$/, '').replace(/\/v1$/i, '');
       const byName = (n) => providers.find((item) => String(item?.name || '').toLowerCase() === n);
       const lmstudio = byName('lmstudio');
-      if (!settings.lmstudioUrl && lmstudio?.endpoint) settings.lmstudioUrl = originOf(lmstudio.endpoint);
+      if (lmstudio?.endpoint) settings.lmstudioUrl = originOf(lmstudio.endpoint);
       const ollama = byName('ollama');
-      if (!settings.ollamaUrl && ollama?.endpoint) settings.ollamaUrl = originOf(ollama.endpoint);
+      if (ollama?.endpoint) settings.ollamaUrl = originOf(ollama.endpoint);
+      for (const [name, field] of [['openai', 'apiKeyOpenAI'], ['openrouter', 'apiKeyOpenRouter'], ['perplexity', 'apiKeyPerplexity']]) {
+        const entry = byName(name);
+        if (entry) settings[field] = entry.api_key || '';
+      }
+      if (durable?.llm?.provider) {
+        settings.llmProvider = durable.llm.provider;
+        settings.llmModel = durable.llm.model;
+        settings.harnessLocal = !!durable.llm.harness_local;
+      }
       localStorage.setItem('xnaut-settings', JSON.stringify(settings));
       await window.xnautSyncChatSettingsFromAiSettings?.().catch(() => false);
     }

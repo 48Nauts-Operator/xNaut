@@ -1,4 +1,76 @@
 import {test,expect} from '@playwright/test';
+
+// Persist the fake backend independently from the legacy webview cache so a
+// real page reload exercises startup reconciliation, not a direct helper call.
+async function persistedSettings(page, durable, legacy) {
+ await page.addInitScript(({legacy})=>{
+  if (!localStorage.getItem('__settings_fixture_seeded')) {
+   localStorage.setItem('xnaut-settings', JSON.stringify(legacy));
+   localStorage.setItem('__settings_fixture_seeded', 'yes');
+  }
+ }, {legacy});
+ await page.route('**/__stub.js', async route=>{
+  const response=await route.fetch();
+  await route.fulfill({response,body:await response.text()+`\n{
+   window.__xnautStub.settings_get = JSON.parse(localStorage.getItem('__durable_settings_fixture')) || {...window.__xnautStub.settings_get, ...${JSON.stringify(durable)}};
+   const invoke = window.__TAURI__.core.invoke;
+   window.__TAURI__.core.invoke = async (name,args) => {
+    const result = await invoke(name,args);
+    if (name === 'settings_set') localStorage.setItem('__durable_settings_fixture', JSON.stringify(window.__xnautStub.settings_get));
+    return result;
+   };
+  }`});
+ });
+ await page.goto('/?stub=1');
+ await expect.poll(()=>page.evaluate(()=>window.xnautStartupHealth?.sealed())).toBe(true);
+}
+
+test('restart preserves native provider repairs despite conflicting legacy settings and explicit edits remain durable',async({page})=>{
+ const durable={
+  llm:{provider:'nautgate',endpoint:'https://gateway.fixture/v1',model:'claude-fixture',api_key:'native-token',harness_local:false},
+  cloud_agent_model:{provider:'lmstudio',model:'default-qwen',worker_endpoint:'http://worker.fixture:1238'},
+  llm_providers:[
+   {name:'nautgate',endpoint:'https://gateway.fixture/v1',api_key:'native-token',enabled:true},
+   {name:'lmstudio',endpoint:'http://desktop.fixture:1238/v1',api_key:null,enabled:false},
+   {name:'ollama',endpoint:'http://ollama.fixture:11434/v1',api_key:null,enabled:false},
+   {name:'openai',endpoint:'https://api.openai.com/v1',api_key:null,enabled:false},
+  ]
+ };
+ await persistedSettings(page,durable,{nautgateUrl:'http://localhost:8090/v1',apiKeyNautGate:'stale-token',lmstudioUrl:'http://localhost:1234',llmProvider:'ollama',llmModel:'No models found',harnessLocal:true,apiKeyOpenAI:'revoked-token'});
+ for (let n=0;n<2;n++) {
+  expect(await page.evaluate(()=>window.__xnautStub.settings_get)).toMatchObject(durable);
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('xnaut-settings')))).toMatchObject({nautgateUrl:'https://gateway.fixture/v1',apiKeyNautGate:'native-token',lmstudioUrl:'http://desktop.fixture:1238',apiKeyOpenAI:'',llmProvider:'nautgate',llmModel:'claude-fixture',harnessLocal:false});
+  await page.reload();
+  await expect.poll(()=>page.evaluate(()=>window.xnautStartupHealth?.sealed())).toBe(true);
+ }
+ await page.evaluate(()=>window.xnautOpenSettingsSection('ai'));
+ await expect(page.locator('#set-nautgate-url')).toHaveValue('https://gateway.fixture/v1');
+ await page.locator('#set-nautgate-url').fill('https://edited-gateway.fixture/v1');
+ // The explicit save also works when discovery is unavailable: a user's
+ // manually selected model must not turn into a discovery error placeholder.
+ await page.locator('#set-default-model').evaluate(el=>{el.innerHTML='<option value="claude-fixture">Claude fixture</option>';el.value='claude-fixture';});
+ await page.locator('#btn-save-ai').click();
+ await expect.poll(()=>page.evaluate(()=>window.__xnautStub.settings_get.llm_providers.find(p=>p.name==='nautgate').endpoint)).toBe('https://edited-gateway.fixture/v1');
+ await page.reload();
+ await expect.poll(()=>page.evaluate(()=>window.xnautStartupHealth?.sealed())).toBe(true);
+ const saved=await page.evaluate(()=>window.__xnautStub.settings_get);
+ expect(saved.llm_providers.find(p=>p.name==='nautgate')).toMatchObject({endpoint:'https://edited-gateway.fixture/v1',api_key:'native-token',enabled:true});
+ expect(saved.cloud_agent_model).toEqual(durable.cloud_agent_model);
+ expect(saved.llm_providers.find(p=>p.name==='lmstudio').enabled).toBe(false);
+});
+
+test('first startup migrates a legacy connection once and later native edits survive reload',async({page})=>{
+ await persistedSettings(page,{llm:{provider:'',model:'',endpoint:''},llm_providers:[]},{nautgateUrl:'https://legacy-gateway.fixture/v1',apiKeyNautGate:'legacy-token',llmProvider:'nautgate',llmModel:'legacy-model'});
+ expect(await page.evaluate(()=>window.__xnautStub.settings_get.llm)).toMatchObject({provider:'nautgate',endpoint:'https://legacy-gateway.fixture/v1',model:'legacy-model'});
+ await page.evaluate(async()=>{
+  const current=await window.__TAURI__.core.invoke('settings_get');
+  current.llm_providers.find(p=>p.name==='nautgate').endpoint='https://native-repair.fixture/v1';
+  await window.__TAURI__.core.invoke('settings_set',{settings:current});
+ });
+ await page.reload();
+ await expect.poll(()=>page.evaluate(()=>window.xnautStartupHealth?.sealed())).toBe(true);
+ expect(await page.evaluate(()=>window.__xnautStub.settings_get.llm_providers.find(p=>p.name==='nautgate').endpoint)).toBe('https://native-repair.fixture/v1');
+});
 async function models(page){
  await page.goto('/?stub=1');await page.waitForSelector('#btn-help');
  await page.evaluate(async()=>{
@@ -80,7 +152,7 @@ test('agent chat choice stores its provider without changing the coding model',a
  const runtime=await page.locator('[name=model]').inputValue();const provider=await page.locator('[name=provider]').inputValue();
  await page.locator('[name=chat_model]').selectOption('openrouter/google/gemini-3.7-flash');
  await expect(page.locator('[name=chat_provider]')).toHaveValue('nautgate');await expect(page.locator('[name=model]')).toHaveValue(runtime);await expect(page.locator('[name=provider]')).toHaveValue(provider);
- await page.locator('[data-form]').evaluate(form=>form.requestSubmit());
+ await page.locator('form.as-form-page[data-form]').evaluate(form=>form.requestSubmit());
  await expect.poll(async()=>page.evaluate(()=>window.__xnautInvokes.filter(i=>i.cmd==='agent_profile_update').length)).toBeGreaterThan(0);
  const saved=await page.evaluate(()=>window.__xnautInvokes.findLast(i=>i.cmd==='agent_profile_update').args.profile);
  expect(saved).toMatchObject({chat_provider:'nautgate',chat_model:'openrouter/google/gemini-3.7-flash',model:runtime,provider});

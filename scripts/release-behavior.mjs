@@ -80,6 +80,7 @@ export const requiredNative = [
 export const browserFiles = [
   'journal-console.spec.mjs', 'actions-rows.spec.mjs',
   'cloud-agent-model.spec.mjs',
+  'chat-model-picker.spec.mjs',
   'update-banner.spec.mjs',
   'durable-agent-turns.spec.mjs',
   'nautbot-swarm.spec.mjs', 'dispatch-from-ticket.spec.mjs', 'approval-inbox.spec.mjs',
