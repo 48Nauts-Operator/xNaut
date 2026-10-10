@@ -7,6 +7,7 @@ All notable changes to xNAUT are documented in this file.
 ### Fixed
 - Honor an enabled NautGate connection for cloud workers on every execution provider. Preserve the agent's selected model, or use Auto for gateway selection, without replacing the saved shared default. Preview, approval and launch use the same route.
 - Reject repository workers that prohibit shell commands or conflict with an exact ticket model before offering an executable plan.
+- Run unattended Claude repository tasks in noninteractive streaming mode, so a custom API-key confirmation cannot leave them waiting at a terminal prompt. Preserve the configured tool permissions.
 
 ### Added
 - Give NautBot native dispatch diagnostics for the selected route, worker readiness, capacity and retained process evidence. Saved run state and live observations are reported separately.

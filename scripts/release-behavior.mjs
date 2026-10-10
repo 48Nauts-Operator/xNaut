@@ -40,6 +40,7 @@ export const requiredNative = [
   'cloud_model::tests::cloud_launch_overrides_worker_defaults_without_putting_credentials_in_argv',
   ...(process.platform === 'win32' ? [] : ['cloud_model::tests::worker_model_protocol_suite']),
   'agent_profiles::compute_choice_tests::remote_prompt_modes_refuse_undeliverable_tasks_and_preserve_explicit_carriers',
+  'agent_profiles::compute_choice_tests::remote_claude_repository_tasks_use_noninteractive_mode_and_keep_permissions',
   ...(process.platform === 'win32' ? [] : [
     'agent_profiles::compute_choice_tests::remote_pi_process_receives_the_exact_task_model_provider_env_and_identity',
     'agent_profiles::compute_choice_tests::remote_runtime_probe_checks_the_actual_command_and_pi_auth_without_leaking_output',

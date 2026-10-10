@@ -2873,6 +2873,30 @@ fn remote_command_for(
     identity_env: std::collections::HashMap<String, String>,
 ) -> Result<String, String> {
     use crate::agents::PromptInjectionMode;
+    // Repository workers must finish without a person at their terminal. The
+    // interactive Claude argv path stops at its custom API-key confirmation,
+    // even after onboarding. Keep configured permissions; change only delivery
+    // and output mode, using the same print/JSONL contract as Agent Space.
+    let mut unattended = cfg.clone();
+    if cfg.id == "claude" && cfg.launch_cmd == "claude" && prompt.is_some() {
+        if cfg.prompt_injection_mode != PromptInjectionMode::Argv {
+            return Err("Remote Claude repository tasks require positional prompt delivery in noninteractive mode".into());
+        }
+        let mut args = cfg.extra_args.iter();
+        unattended.extra_args.clear();
+        while let Some(arg) = args.next() {
+            if arg == "--output-format" { args.next(); }
+            else if !arg.starts_with("--output-format=") { unattended.extra_args.push(arg.clone()); }
+        }
+        if !unattended.extra_args.iter().any(|a| a == "--print" || a == "-p") {
+            unattended.extra_args.push("--print".into());
+        }
+        if !unattended.extra_args.iter().any(|a| a == "--verbose") {
+            unattended.extra_args.push("--verbose".into());
+        }
+        unattended.extra_args.extend(["--output-format".into(), "stream-json".into()]);
+    }
+    let cfg = &unattended;
     let standard_pi = cfg.id == "pi" && cfg.launch_cmd == "pi"
         && cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart
         && cfg.draft_prompt_env_var.is_none();
@@ -5131,6 +5155,25 @@ mod compute_choice_tests {
             "id":id, "label":id, "detect_cmd":id, "launch_cmd":id,
             "extra_args":[], "expected_process":id, "prompt_injection_mode":mode, "env":{}
         })).unwrap()
+    }
+
+    #[test]
+    fn remote_claude_repository_tasks_use_noninteractive_mode_and_keep_permissions() {
+        let mut cfg = runtime("claude", "argv");
+        cfg.extra_args = vec!["--allowedTools".into(), "Read,Bash".into(), "--output-format=json".into()];
+        let command = remote_command_for(&cfg, Some("inspect, test and publish"), Some("claude-explicit"), Default::default()).unwrap();
+        assert!(command.contains("'--print' '--verbose' '--output-format' 'stream-json'"));
+        assert!(command.contains("'--allowedTools' 'Read,Bash'"));
+        assert!(command.ends_with("'--model' 'claude-explicit' 'inspect, test and publish'"));
+        assert!(!command.contains("skip-permissions"));
+        assert!(!command.contains("--output-format=json"));
+        assert!(!crate::agents::build_launch(&cfg, Some("interactive"), None).0.contains(&"--print".into()));
+        cfg.extra_args.extend(["-p".into(), "--verbose".into()]);
+        let command = remote_command_for(&cfg, Some("task"), None, Default::default()).unwrap();
+        assert_eq!(command.matches("'--verbose'").count(),1);
+        assert!(!command.contains("'--print'"));
+        cfg.prompt_injection_mode = crate::agents::PromptInjectionMode::FlagPromptInteractive;
+        assert!(remote_command_for(&cfg, Some("task"), None, Default::default()).is_err());
     }
 
     #[test]
