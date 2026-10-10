@@ -2,7 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.30.12] - 2026-10-10
+## [1.30.13] - 2026-10-10
 
 ### Added
 - Keep a concise project summary and deployed workers together in the Live Journal. Separate Actions, Tickets, Notes and Handoffs with tabs while retaining date and ticket filters.
@@ -10,6 +10,7 @@ All notable changes to xNAUT are documented in this file.
 - Browse project actions by date and event type, group repeated events, and load earlier actions without mixing other projects into the feed.
 
 ### Fixed
+- Return portable Wiki document paths on Windows so prior Journals and handoffs remain readable. Keep traversal and backslash input rejection intact.
 - Serialize Journal capture before reading the current page and tolerate a busy Wiki writer without dropping concurrent entries.
 - Label swarm launch counts as cumulative so replaying a completed plan is not reported as newly starting workers.
 - Persist new swarm previews while a coordinator sweep is advancing. Planning no longer fails because the execution lease is occupied; dispatch remains serialized and existing approvals cannot be overwritten.

@@ -405,7 +405,10 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Value>) {
             walk(root, &p, out)
         } else if p.extension().is_some_and(|e| e == "md") {
             if let (Ok(rel), Ok(content)) = (p.strip_prefix(root), read(&p)) {
-                let rel = rel.to_string_lossy();
+                // The Wiki API uses portable slash paths. Native Windows
+                // separators must not reach safe(), which rejects backslashes.
+                let rel = rel.components().map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>().join("/");
                 out.push(json!({"path":rel,"title":title(&content,&rel),"section":rel.split('/').nth(1).unwrap_or("Documents")}));
             }
         }
@@ -874,6 +877,25 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+    #[test]
+    fn enumerated_document_paths_round_trip_without_weakening_path_guards() {
+        let f = Fixture::new();
+        for rel in ["Development/journal/2026-10-10.md", "Development/handoffs/review.md"] {
+            save_in(&f.0, rel, "# Saved evidence", None, "Owner", "Capture").unwrap();
+        }
+        let mut docs = Vec::new();
+        walk(&f.0, &f.0, &mut docs);
+        assert_eq!(docs.len(), 2);
+        for doc in docs {
+            let rel = doc["path"].as_str().unwrap();
+            assert!(!rel.contains('\\'));
+            assert!(rel.starts_with("Development/"));
+            assert_eq!(doc["section"].as_str().unwrap(), rel.split('/').nth(1).unwrap());
+            assert!(doc_in(&f.0, rel).unwrap().content.contains("Saved evidence"));
+        }
+        assert!(safe(&f.0, r"Development\journal\2026-10-10.md").is_err());
+        assert!(safe(&f.0, "../outside.md").is_err());
     }
     #[test]
     fn manual_and_agent_edits_keep_creator_and_every_revision() {

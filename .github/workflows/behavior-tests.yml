@@ -36,6 +36,10 @@ jobs:
             ~/.cargo/git
             src-tauri/target
           key: behavior-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          # A package-version bump changes Cargo.lock too. Reuse dependencies,
+          # then rebuild and execute all required checks on the new source.
+          restore-keys: |
+            behavior-${{ runner.os }}-
       - run: npm ci
       - run: npx playwright install chromium
       - uses: actions/setup-python@v5

@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'project_wiki::tests::enumerated_document_paths_round_trip_without_weakening_path_guards',
   'project_wiki::journal::',
   'cloud_model::tests::',
   'handback::tests::',
@@ -22,6 +23,7 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'project_wiki::tests::enumerated_document_paths_round_trip_without_weakening_path_guards',
   ...(process.platform === 'win32' ? [] : ['repository_transfer::tests::repository_publisher_protocol_suite']),
   'project_wiki::journal::tests::journal_capture_waits_for_an_active_wiki_writer_without_losing_an_entry',
   'project_wiki::journal::console::tests::journal_actions_scope_before_limit_and_keep_old_dates',
