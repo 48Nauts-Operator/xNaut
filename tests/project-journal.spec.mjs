@@ -58,6 +58,7 @@ async function start(page){
   window.journalInstance=window.xnautJournal.mount(document.querySelector('#journal'),'DEMO',path=>{window.openedWiki=path;});
  });
  await expect(page.locator('[data-title]')).toHaveText('Backup review · Live Journal');
+ await page.getByRole('tab',{name:'Notes',exact:true}).click();
 }
 test('working document shows history, highlighted decisions, human notes and expandable code',async({page})=>{await start(page);await expect(page.locator('[data-opening]')).toContainText('Restore validation remains open');await expect(page.locator('.pj-decision')).toContainText('Agreed by André');await expect(page.locator('.pj-note')).toContainText('André');await expect(page.locator('.pj-body details')).not.toHaveAttribute('open');await page.locator('.pj-body summary').click();await expect(page.locator('pre')).toContainText('check(17)');await page.locator('[data-wiki]').click();expect(await page.evaluate(()=>window.openedWiki)).toBe('Development/journal/2026-10-03.md');});
 test('live refresh retains expanded code, reading position and note draft',async({page})=>{await page.clock.install();await start(page);await page.locator('.pj-body summary').click();await page.getByText('Add your note or question',{exact:true}).click();await page.locator('[data-note]').fill('Keep my draft');await page.locator('.pj-scroll').evaluate(e=>{e.scrollTop=170;});const scroll=await page.locator('.pj-scroll').evaluate(e=>e.scrollTop);await page.evaluate(()=>window.journalData.entries.push({...window.journalData.entries[0],id:'four',kind:'fix',content:'### Fix recorded\n\nPreserve the previous key.'}));await page.clock.fastForward(5500);await expect(page.locator('.pj-fix')).toContainText('Preserve the previous key');await expect(page.locator('.pj-body details')).toHaveAttribute('open');await expect(page.locator('[data-note]')).toHaveValue('Keep my draft');expect(await page.locator('.pj-scroll').evaluate(e=>e.scrollTop)).toBe(scroll);});
@@ -67,7 +68,7 @@ test('workstream filtering and source links keep exact identity',async({page})=>
 test('untrusted content cannot execute and narrow panes do not overflow',async({page})=>{await start(page);await page.evaluate(()=>{window.journalData.entries.push({...window.journalData.entries[0],id:'unsafe',kind:'finding',content:'<script>window.pwned=true</script>\n<img src=x onerror="window.pwned=true">\n[bad](javascript:alert(1))'});return window.journalInstance.refresh();});expect(await page.evaluate(()=>window.pwned)).toBeUndefined();await expect(page.locator('.pj script,.pj [onerror],.pj a[href^="javascript:"]')).toHaveCount(0);await page.locator('#journal').evaluate(e=>{e.style.width='420px';});expect(await page.locator('.pj-scroll').evaluate(e=>e.scrollWidth<=e.clientWidth)).toBeTruthy();});
 test('slow polling does not overlap requests',async({page})=>{await page.clock.install();await start(page);await page.evaluate(()=>{const invoke=window.__TAURI__.core.invoke;window.pendingCount=0;window.__TAURI__.core.invoke=(name,args)=>{if(name==='project_journal_read'){window.pendingCount++;return new Promise(resolve=>{window.finishRead=async()=>resolve(await invoke(name,args));});}return invoke(name,args);};});await page.clock.fastForward(21000);expect(await page.evaluate(()=>window.pendingCount)).toBe(1);await page.evaluate(()=>window.finishRead());});
 
-test('saved context links open the exact Wiki page offline',async({page})=>{await start(page);await page.locator('[data-opening]').getByRole('button',{name:'Previous Journal'}).click();expect(await page.evaluate(()=>window.openedWiki)).toBe('Development/journal/2026-10-02.md');});
+test('saved context links open the exact Wiki page offline',async({page})=>{await start(page);await page.getByText('Saved context & previous journals',{exact:true}).click();await page.locator('[data-opening]').getByRole('button',{name:'Previous Journal'}).click();expect(await page.evaluate(()=>window.openedWiki)).toBe('Development/journal/2026-10-02.md');});
 
 test('run details are folded behind a readable review summary',async({page})=>{await start(page);await page.evaluate(()=>{window.journalData.entries.push({...window.journalData.entries[0],id:'receipt',run_id:'run-1',preview:'### Backup review\n\nReview: changes requested. The diff is missing.',content:'### Full record\n\n```json\n{"input_hash":"technical-evidence"}\n```'});return window.journalInstance.refresh();});await expect(page.locator('[data-id="receipt"]')).toContainText('Review: changes requested');await expect(page.locator('[data-id="receipt"] pre')).not.toBeVisible();await page.getByText('Execution details and evidence',{exact:true}).click();await expect(page.locator('[data-id="receipt"] pre')).toContainText('technical-evidence');});
 
@@ -81,8 +82,8 @@ async function currentWork(page) {
  });
 }
 
-test('Where we stand includes ticket-only assignments, blockers and attributed claims',async({page})=>{
- await start(page);await currentWork(page);
+test('Tickets includes ticket-only assignments, blockers and attributed claims',async({page})=>{
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await expect(page.locator('[data-continuity]')).toContainText('Verify restore');
  await expect(page.locator('[data-continuity]')).toContainText('Owner: codex');
  await expect(page.locator('[data-continuity]')).toContainText('Inspect the missing restore proof.');
@@ -91,15 +92,16 @@ test('Where we stand includes ticket-only assignments, blockers and attributed c
  await expect(page.locator('[data-continuity]')).toContainText('Submitted 2026-10-03T19:00:00Z');
  await expect(page.locator('[data-continuity]')).toContainText('Source: run-1/handback.json');
  await expect(page.locator('[data-continuity]')).not.toContainText('Verification recorded');
- await page.locator('[data-continuity-run="run-1"]').click();
+ await page.locator('[data-continuity] [data-continuity-run="run-1"]').click();
  await expect(page.locator('dialog')).toContainText('Recorded state');
  const source=await page.evaluate(()=>window.journalCalls.find(c=>c.name==='project_wiki_source'));
  expect(source.args).toEqual({project:'DEMO',kind:'run',id:'run-1'});
 });
 
 test('snapshot-only changes refresh and reopen while preserving historical notes and drafts',async({page})=>{
- await start(page);await currentWork(page);
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await page.locator('[data-continuity-ticket="DEMO-1"] summary').click();
+ await page.getByRole('tab',{name:'Notes',exact:true}).click();
  await page.getByText('Add your note or question',{exact:true}).click();await page.locator('[data-note]').fill('Keep my recovery question');
  const opening=await page.locator('[data-opening]').textContent();
  await page.evaluate(()=>{
@@ -119,7 +121,7 @@ test('snapshot-only changes refresh and reopen while preserving historical notes
 });
 
 test('historical Journal date keeps current state explicitly separate and workstream filter includes assignments',async({page})=>{
- await start(page);await currentWork(page);
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await page.getByLabel('Journal date').selectOption('Development/journal/2026-10-03.md');
  await expect(page.locator('[data-continuity-time]')).toContainText('independent of the selected Journal date');
  await expect(page.locator('[data-history-date]')).toContainText('2026-10-03');
@@ -129,7 +131,7 @@ test('historical Journal date keeps current state explicitly separate and workst
 });
 
 test('foreign project snapshots are excluded from both summary and filter',async({page})=>{
- await start(page);await currentWork(page);
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await page.evaluate(()=>{window.journalInstance=window.xnautJournal.mount(document.querySelector('#journal'),'OTHER',()=>{});});
  await expect(page.locator('[data-title]')).toHaveText('Other · Live Journal');
  await expect(page.locator('[data-continuity]')).not.toContainText('Verify restore');
@@ -138,7 +140,7 @@ test('foreign project snapshots are excluded from both summary and filter',async
 });
 
 test('unavailable, incomplete and failed refresh states cannot look like no current work',async({page})=>{
- await start(page);await currentWork(page);
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await page.evaluate(()=>{window.journalData.continuity={project:'DEMO',observed_at:1791230520000,tickets:[],assignments:[],diagnostics:[{source:'runs/broken/manifest.json',message:'Run record is unreadable'}]};return window.journalInstance.refresh();});
  await expect(page.locator('[data-continuity]')).toContainText('Current state is incomplete.');
  await expect(page.locator('[data-continuity]')).toContainText('Work could not be established');
@@ -151,7 +153,7 @@ test('unavailable, incomplete and failed refresh states cannot look like no curr
 });
 
 test('outcomes and orphaned run evidence remain inspectable, escaped and scoped',async({page})=>{
- await start(page);await currentWork(page);
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await page.evaluate(()=>{
   const t=window.journalData.continuity.tickets[0];t.state='verified';t.status='done';t.title='<img src=x onerror="window.pwned=true">';
   window.journalData.continuity.assignments.push({run_id:'orphan',ticket:null,owner:'codex',state:'stalled',next_action:'Inspect missing ticket reference',evidence:[{kind:'handback',source:'<script>window.pwned=true</script>',detail:'<img src=x onerror="window.pwned=true">'}]});
@@ -169,7 +171,7 @@ test('outcomes and orphaned run evidence remain inspectable, escaped and scoped'
 });
 
 test('date changes during a slow read queue the selected document without showing stale context',async({page})=>{
- await start(page);await currentWork(page);
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await page.evaluate(()=>{
   const invoke=window.__TAURI__.core.invoke;let first=true;
   window.__TAURI__.core.invoke=async(name,args)=>{
@@ -189,7 +191,7 @@ test('date changes during a slow read queue the selected document without showin
 });
 
 test('recent project work precedes older reviews while live workers stay first',async({page})=>{
- await start(page);await currentWork(page);
+ await start(page);await currentWork(page);await page.getByRole('tab',{name:'Tickets',exact:true}).click();
  await page.evaluate(()=>{
   const sample=window.journalData.continuity.tickets[0];
   window.journalData.continuity.tickets=[
@@ -251,7 +253,7 @@ async function approvedGroups(page) {
 }
 
 test('approved groups show queued work and scoped controls without internal approval scope',async({page})=>{
- await start(page);await approvedGroups(page);
+ await start(page);await approvedGroups(page);await page.getByRole('tab',{name:'Actions',exact:true}).click();
  await expect(page.locator('[data-group]')).toHaveCount(1);
  await expect(page.locator('[data-groups]')).toContainText('1 queued · 1 active · 1 blocked');
  await expect(page.locator('[data-groups]')).toContainText('Active workers retain their current work.');
@@ -267,7 +269,7 @@ test('approved groups show queued work and scoped controls without internal appr
 });
 
 test('group stop uses the native command once and survives polling, reopen and project switching',async({page})=>{
- await start(page);await approvedGroups(page);
+ await start(page);await approvedGroups(page);await page.getByRole('tab',{name:'Actions',exact:true}).click();
  await page.evaluate(()=>{window.delayGroupStop=true;});
  await page.getByRole('button',{name:'Stop further dispatch',exact:true}).click();
  await expect(page.getByRole('button',{name:'Stopping…',exact:true})).toBeDisabled();
@@ -291,7 +293,7 @@ test('group stop uses the native command once and survives polling, reopen and p
 });
 
 test('failed group stop stays retryable and does not claim dispatch stopped',async({page})=>{
- await start(page);await approvedGroups(page);
+ await start(page);await approvedGroups(page);await page.getByRole('tab',{name:'Actions',exact:true}).click();
  await page.evaluate(()=>{window.failGroupStop=true;});
  await page.getByRole('button',{name:'Stop further dispatch',exact:true}).click();
  await expect(page.locator('[data-group] [role="status"]')).toContainText('Coordinator store is busy');

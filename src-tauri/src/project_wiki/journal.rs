@@ -3,6 +3,7 @@
 //! canonical; deterministic entry IDs and Wiki CAS protect concurrent writers.
 use super::*;
 mod activity;
+mod console;
 const MARK: &str = "<!-- xnaut-journal-entry ";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
@@ -305,6 +306,9 @@ fn group_views(registry: &Path, project: &str) -> Result<Value, String> {
     }).collect()))
 }
 pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> {
+    read_journal_page(key, selected, None)
+}
+fn read_journal_page(key: &str, selected: Option<&str>, action_before: Option<usize>) -> Result<Value, String> {
     let p = project(key)?;
     let docs = documents(&p);
     let rel = selected.map(String::from).unwrap_or_else(|| path(&now()));
@@ -363,7 +367,9 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let current: Vec<_> = runs(&p.key)
+    let all_runs = runs(&p.key);
+    let console = console::read(&p, &rel, &all_runs, action_before);
+    let current: Vec<_> = all_runs
         .into_iter()
         .filter(|r| !r.state.terminal())
         .collect();
@@ -385,12 +391,12 @@ pub fn read_journal(key: &str, selected: Option<&str>) -> Result<Value, String> 
             ),
         };
     Ok(
-        json!({"groups":groups,"groups_error":groups_error,"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"continuity":continuity,"continuity_error":continuity_error,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
+        json!({"console":console,"groups":groups,"groups_error":groups_error,"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"continuity":continuity,"continuity_error":continuity_error,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
     )
 }
 #[tauri::command]
-pub async fn project_journal_read(project: String, path: Option<String>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || read_journal(&project, path.as_deref()))
+pub async fn project_journal_read(project: String, path: Option<String>, action_before: Option<usize>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || read_journal_page(&project, path.as_deref(), action_before))
         .await
         .map_err(|e| e.to_string())?
 }

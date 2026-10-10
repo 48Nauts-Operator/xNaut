@@ -57,9 +57,8 @@ test('Agent Space owns the second-left library and bounded agent threads', async
   await expect(page.locator('.as-title h1')).toHaveText('NautBot');
   await expect(page.locator('.as-handle')).toHaveText('@nautbot');
   await expect(page.getByLabel('Message @nautbot')).toBeVisible();
-  // The compute view has a right-pane slot now; without one the quick pane
-  // registered itself and had nowhere to render (XNAUT-144).
-  await expect(page.locator('[data-rpane-view="agent"]')).toHaveCount(1);
+  // The Journal replaces the duplicate Agent overview (XNAUT-489).
+  await expect(page.locator('[data-rpane-view="agent"]')).toHaveCount(0);
   await expect(page.locator('[data-rpane-view="chat"]')).toHaveCount(0);
 });
 

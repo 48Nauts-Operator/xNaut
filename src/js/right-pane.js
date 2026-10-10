@@ -49,7 +49,6 @@
   const LIBRARIAN_VIEW = null;
   const VIEW_ORDER = [
     { key: 'workspace', title: 'Workspace' },
-    { key: 'agent', title: 'Agent' },
     { key: 'voice', title: 'Voice' },
     { key: 'files', title: 'Files' },
     { key: 'search', title: 'Search' },
@@ -64,8 +63,7 @@
     // Global, not a Build-run sub-tab: the ask was a brief readable during any
     // kind of work, and the log is keyed by project rather than by build.
     { key: 'decisions', title: 'Decisions' },
-    // Flow watch and Verify are not tabs: both live inside the Agent view's
-    // date timeline now (André 2026-08-30, "too many tabs").
+    // Deployed workers and actions live in Workspace → Journal (XNAUT-489).
     { key: 'buildrun', title: 'Build run' },
     { key: 'nautflowrun', title: 'NautFlow run' },
     { key: 'nfvalidate', title: 'Validation report' },
@@ -695,6 +693,7 @@
     });
 
     function setActive(key) {
+      if(key==='agent'||key==='flowwatch'){window.xnautOpenProjectJournal?.();return;}
       mountedState.activeKey = key;
       hostElement.querySelectorAll('.rpane-tab').forEach((b) => b.classList.toggle('rpane-active', b.dataset.rpaneView === key));
       viewSlots.forEach((slot, k) => slot.el.classList.toggle('rpane-view-active', k === key));
