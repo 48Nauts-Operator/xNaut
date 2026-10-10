@@ -2,6 +2,20 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.12] - 2026-10-10
+
+### Added
+- Keep a concise project summary and deployed workers together in the Live Journal. Separate Actions, Tickets, Notes and Handoffs with tabs while retaining date and ticket filters.
+- Inspect a worker's run record and saved output from its Journal card. Open a terminal only when the session identity matches the run.
+- Browse project actions by date and event type, group repeated events, and load earlier actions without mixing other projects into the feed.
+
+### Fixed
+- Persist new swarm previews while a coordinator sweep is advancing. Planning no longer fails because the execution lease is occupied; dispatch remains serialized and existing approvals cannot be overwritten.
+
+### Changed
+- Move approvals to their dedicated section and replace the right-pane Agent overview with the Journal. Computers and verification remain available in an on-demand drawer.
+- Require Journal behavior, project isolation, and concurrent preview persistence checks before release.
+
 ## [1.30.10] - 2026-10-10
 
 ### Added
