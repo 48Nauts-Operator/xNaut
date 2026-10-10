@@ -2,6 +2,21 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.9] - 2026-10-10
+
+### Fixed
+- Check repository access before offering a remote swarm plan or allocating another dispatch attempt. Repository failures identify the failed desktop check and retain existing ticket and run history.
+- Recover failed pre-execution continuations after a repaired scope receives fresh approval. Preserve the last approved sandbox destination, branches and worktrees; repeated confirmation cannot create duplicate workers or reset the retry budget.
+- Keep configured agent environment variables in remote launches and deliver Pi's initial task through its supported message argument. Check worker runtime readiness and refuse unsupported task delivery before creating another failed attempt.
+- Track the completed successor of a recovered run instead of displaying an older failed record. Keep remote launch scripts private when they contain runtime configuration.
+
+### Release checks
+- Require repository outage recovery, runtime readiness, task delivery, approved destination inheritance and completed-continuation regressions.
+- Live acceptance on Tron dispatched three Codex-based profiles to exe.dev, verified their published commits and test results, and preserved worker identities across an app restart without duplicate runs.
+
+### Known limitations
+- Grok installation/readiness and Pi provider configuration on the selected exe.dev worker remain separate setup issues (XNAUT-311 and XNAUT-478). This update does not select a different runtime, provider or model for those agents.
+
 ## [1.30.8] - 2026-10-09
 
 ### Added
