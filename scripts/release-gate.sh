@@ -80,7 +80,7 @@ NATIVE_CASES = {
     "refresh-usage", "restore",
     *["settings-" + key for key in ("ai", "voice", "tasksmode", "appearance",
       "shortcuts", "mobile", "nautify", "guardrails", "coreteam", "issueintake", "triggers")],
-    *["view-" + key for key in ("agent", "buildrun", "nautflowrun", "nfvalidate", "nfdesign")],
+    *["view-" + key for key in ("journal", "buildrun", "nautflowrun", "nfvalidate", "nfdesign")],
 }
 
 class Refusal(ValueError):

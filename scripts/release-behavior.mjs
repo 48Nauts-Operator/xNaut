@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'project_wiki::journal::',
   'cloud_model::tests::',
   'handback::tests::',
   'agent_profiles::compute_choice_tests::remote_',
@@ -20,6 +21,7 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'project_wiki::journal::console::tests::journal_actions_scope_before_limit_and_keep_old_dates',
   'handback::tests::command_result_verification_evidence_preserves_the_pi_handback_contract',
   'run_control::tests::explicit_conversations_do_not_consume_legacy_worker_capacity',
   'cloud_model::tests::shared_cloud_choice_is_identical_across_destinations_and_preserves_local_profiles',
@@ -61,6 +63,7 @@ export const requiredNative = [
   'agent_tools::tests::swarm_tools_expose_destination_and_durable_queue_contract',
 ];
 export const browserFiles = [
+  'journal-console.spec.mjs', 'actions-rows.spec.mjs',
   'cloud-agent-model.spec.mjs',
   'update-banner.spec.mjs',
   'durable-agent-turns.spec.mjs',

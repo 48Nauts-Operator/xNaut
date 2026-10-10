@@ -686,6 +686,11 @@ textarea.rpwl-ed-in { resize:vertical; line-height:1.5; }
       applyActive();
       loadTab(key);
     }
+    window.xnautOpenProjectJournal = () => {
+      if (window.xnautEnsureRightPane) window.xnautEnsureRightPane();
+      if (window.xnautRightPaneShow) window.xnautRightPaneShow('workspace');
+      switchTab('journal');
+    };
     // Warm-up timer: a live elapsed clock in the state chip while running, so
     // it's obviously alive even when provisioning is quiet.
     function mmss(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }

@@ -4,6 +4,7 @@
   const instances = new WeakMap();
   const drafts = new Map();
   const groupActions = new Map();
+  let mountId = 0;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
   const date = s => { const d = new Date(s); return Number.isNaN(d.getTime()) ? 'Time not recorded' : d.toLocaleString([], {dateStyle:'medium',timeStyle:'short'}); };
@@ -75,13 +76,95 @@
   }
   function mount(host, root, openWiki) {
     instances.get(host)?.dispose();
-    let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, groupsFingerprint='', timer;
-    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header><div class="pj-scroll"><article class="pj-document"><section class="pj-opening"><div class="pj-eyebrow">START HERE</div><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-continuity></div><section data-groups></section><h3>Saved context</h3><p class="pj-muted" data-history-date>Earlier reports retain their original dates and are not fresh verification.</p><div data-opening></div></section><section data-current></section><details class="pj-notes"><summary>Add your note or question</summary><form data-form><input data-ticket aria-label="Existing project ticket" placeholder="Ticket, e.g. XNAUT-455" required><select data-kind aria-label="Note type"><option value="note">Note</option><option value="question">Question</option><option value="decision">Decision</option></select><textarea data-note aria-label="Journal note" placeholder="Add context for the next person, a decision, or a question…" required></textarea><button type="submit">Save to Journal</button><small>Your name and time are recorded. Questions are saved here; use chat to ask an agent to answer.</small></form></details><section><div class="pj-eyebrow">AS THE WORK DEVELOPS</div><h2>Working notes</h2><p data-empty class="pj-muted"></p><div data-entries></div></section></article></div></section>`;
+    let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, groupsFingerprint='', timer, sessions=[], sessionsError='', tab='actions', actionKind='', actionBefore=null;
+    const id=++mountId;
+    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header>
+      <div class="pj-live-context"><section class="pj-summary"><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-summary></div></section><section aria-label="Deployed agents" class="pj-deployed"><div class="pj-section-heading"><h3>Deployed agents <small>· current project</small></h3><button data-approvals>Approvals ↗</button></div><div data-agents class="pj-agent-grid"></div></section></div>
+      <nav class="pj-tabs" role="tablist" aria-label="Journal sections">${['actions','tickets','notes','handoffs'].map(k=>`<button role="tab" id="pj-${id}-${k}" aria-controls="pj-${id}-${k}-panel" aria-selected="${k===tab}" tabindex="${k===tab?0:-1}" data-journal-tab="${k}">${k[0].toUpperCase()+k.slice(1)}</button>`).join('')}</nav>
+      <div class="pj-scroll"><article class="pj-document">
+      <section role="tabpanel" id="pj-${id}-actions-panel" aria-labelledby="pj-${id}-actions" data-panel="actions"><div class="pj-section-heading"><h2>Actions</h2><button data-tools>Computers & verification</button></div><p class="pj-muted" data-actions-date></p><section data-groups></section><div data-actions></div></section>
+      <section role="tabpanel" id="pj-${id}-tickets-panel" aria-labelledby="pj-${id}-tickets" data-panel="tickets" hidden><h2>Tickets <small>· current state</small></h2><div data-continuity></div><section data-current></section></section>
+      <section role="tabpanel" id="pj-${id}-notes-panel" aria-labelledby="pj-${id}-notes" data-panel="notes" hidden><h2>Notes</h2><p class="pj-muted" data-history-date></p><details class="pj-notes"><summary>Add your note or question</summary><form data-form><input data-ticket aria-label="Existing project ticket" placeholder="Ticket, e.g. XNAUT-455" required><select data-kind aria-label="Note type"><option value="note">Note</option><option value="question">Question</option><option value="decision">Decision</option></select><textarea data-note aria-label="Journal note" placeholder="Add context for the next person, a decision, or a question…" required></textarea><button type="submit">Save to Journal</button><small>Your name and time are recorded. Questions are saved here; use chat to ask an agent to answer.</small></form></details><details class="pj-saved-context"><summary>Saved context & previous journals</summary><div class="pj-evidence" data-opening></div></details><p data-empty class="pj-muted"></p><div data-entries></div></section>
+      <section role="tabpanel" id="pj-${id}-handoffs-panel" aria-labelledby="pj-${id}-handoffs" data-panel="handoffs" hidden><h2>Handoffs <small>· current recorded outcomes</small></h2><div data-handoffs></div></section>
+      </article></div></section>`;
     const $ = q => host.querySelector(q);
     const status = s => { $('[data-status]').textContent=s; };
     const remember = () => drafts.set(root,{text:$('[data-note]').value,ticket:$('[data-ticket]').value,kind:$('[data-kind]').value});
     const draft=drafts.get(root); if(draft){$('[data-note]').value=draft.text;$('[data-ticket]').value=draft.ticket;$('[data-kind]').value=draft.kind;}
     $('[data-form]').oninput=remember;
+    function switchTab(key, focus=false) {
+      tab=key;
+      host.querySelectorAll('[data-journal-tab]').forEach(b=>{const active=b.dataset.journalTab===key;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;if(active&&focus)b.focus();});
+      host.querySelectorAll('[data-panel]').forEach(p=>{p.hidden=p.dataset.panel!==key;});
+      $('[data-panel="'+key+'"]').scrollTop=0;
+    }
+    host.querySelectorAll('[data-journal-tab]').forEach((b,i,list)=>{
+      b.onclick=()=>switchTab(b.dataset.journalTab);
+      b.onkeydown=e=>{let n=i;if(e.key==='ArrowRight')n=(i+1)%list.length;else if(e.key==='ArrowLeft')n=(i+list.length-1)%list.length;else if(e.key==='Home')n=0;else if(e.key==='End')n=list.length-1;else return;e.preventDefault();switchTab(list[n].dataset.journalTab,true);};
+    });
+    $('[data-approvals]').onclick=()=>window.xnautOpenMesh?.();
+    $('[data-tools]').onclick=()=>window.xnautOpenAgentTools?.(data?.project);
+    function paintConsole(snapshot) {
+      const c=data.console?.project===data.project.key?data.console:null;
+      const tickets=(snapshot?.tickets || []).filter(t=>!filter||t.id===filter);
+      const counts=['active','blocked','stalled','review','unknown'].map(k=>[k,tickets.filter(t=>t.state===k).length]).filter(([,n])=>n);
+      const diagnostics=snapshot?.diagnostics || [];
+      const summaryMarkup=(snapshot?`<p class="pj-counts">${counts.length?counts.map(([k,n])=>`<span><strong>${n}</strong> ${esc({active:'active',blocked:'blocked',stalled:'stalled',review:'awaiting review',unknown:'need inspection'}[k])}</span>`).join(''):'No work needs attention in this selection.'}</p>`:`<p class="pj-continuity-warning">${esc(data.continuity_error || 'Current project state is unavailable.')}</p>`)+(diagnostics.length?`<details class="pj-diagnostics"><summary>Current state is incomplete · ${diagnostics.length} source warning${diagnostics.length===1?'':'s'}</summary>${diagnostics.map(d=>`<p>${esc(d.message)} <small>${esc(d.source)}</small></p>`).join('')}</details>`:'');
+      const summaryHost=$('[data-summary]');
+      if(summaryHost.dataset.fingerprint!==summaryMarkup){const open=summaryHost.querySelector('details')?.open;summaryHost.innerHTML=summaryMarkup;summaryHost.dataset.fingerprint=summaryMarkup;if(open&&summaryHost.querySelector('details'))summaryHost.querySelector('details').open=true;}
+      const agents=c?.deployed || [];
+      const markup=agents.map(r=>{
+        // A harness name or owner is not a session identity. Adoption can change
+        // PTY id, so permit only the exact durable zellij identity as fallback.
+        const candidates=sessions.filter(s=>s.session_id===r.pty_session || (r.zellij_session&&s.zellij_session===r.zellij_session&&s.remote_env===(r.destination==='local'?null:r.destination)));
+        const live=candidates.length===1?candidates[0]:null;
+        return `<section class="pj-agent" title="${esc(r.signal || 'No progress message recorded')} · Observed ${esc(date(live?.last_output_at_ms || r.observed_at))} · ${esc(r.machine || '')}" data-agent-run="${esc(r.run_id)}"><div><strong>@${esc(r.agent)}</strong><span class="pj-agent-state">${esc(live?.status || r.state)}${live?'':' · recorded'}</span></div><small>${esc(r.ticket || 'No ticket')} · ${esc(r.destination)}</small><div class="pj-agent-links">${live?`<button data-session="${esc(live.session_id)}" aria-label="Open session for ${esc(r.agent)}">Session ↗</button>`:''}<button data-inspect="${esc(r.run_id)}">Inspect</button><button data-agent-settings="${esc(r.agent)}" aria-label="Settings for ${esc(r.agent)}" title="Agent settings">⚙</button></div></section>`;
+      }).join('');
+      const agentHost=$('[data-agents]');
+      const content=(sessionsError?`<p class="pj-muted">${esc(sessionsError)}</p>`:'')+(markup || `<p class="pj-muted">${c?'No deployed workers recorded for this project.':'Deployed-agent records are unavailable.'}</p>`);
+      if(agentHost.dataset.fingerprint!==content){agentHost.innerHTML=content;agentHost.dataset.fingerprint=content;}
+      agentHost.querySelectorAll('[data-session]').forEach(b=>{b.onclick=()=>window.xnautOpenAgentSession?.(b.dataset.session,'Agent session');});
+      agentHost.querySelectorAll('[data-inspect]').forEach(b=>{b.onclick=()=>showSource(b.dataset.inspect);});
+      agentHost.querySelectorAll('[data-agent-settings]').forEach(b=>{b.onclick=()=>window.xnautOpenAgentSettings?.(b.dataset.agentSettings);});
+      $('[data-actions-date]').textContent='Recorded actions · '+data.path.split('/').pop().replace('.md','')+' (UTC)'+(filter?' · '+filter:'');
+      const actions=(c?.activity?.entries || []).filter(e=>!filter||e.ticket===filter);
+      const actionHost=$('[data-actions]');
+      const groups=[];
+      for(const e of actions.filter(e=>!actionKind||e.kind===actionKind)){
+        const key=JSON.stringify([e.run_id,e.ticket,e.agent,e.kind,e.detail,e.session]);
+        const previous=groups.at(-1);
+        if(previous?.key===key)previous.rows.push(e);else groups.push({key,rows:[e]});
+      }
+      const actionsKey=JSON.stringify([groups,actionKind,c?.error,c?.activity?.total,c?.activity?.next_before,actionBefore,sessions.map(s=>s.session_id)]);
+      if(actionHost.dataset.fingerprint!==actionsKey){
+        const open=new Set([...actionHost.querySelectorAll('details[open]')].map(d=>d.dataset.actionRepeat));
+        actionHost.innerHTML=c?.error?`<p class="pj-continuity-warning">${esc(c.error)}</p>`:!c?'<p class="pj-muted">Project actions are unavailable.</p>':`${actionKind?`<p class="pj-action-filter">${esc(actionKind)} <button data-act-clear-kind>Clear action filter</button></p>`:''}${c.activity.total>c.activity.limit?`<p class="pj-muted">${actionBefore==null?'Latest':'Earlier'} actions · ${c.activity.total} recorded for this date.</p>`:''}<div class="pj-toolbar">${c.activity.next_before!=null?'<button data-older-actions>Older actions</button>':''}${actionBefore!=null?'<button data-latest-actions>Latest actions</button>':''}</div>${groups.length?groups.map(({key,rows})=>{
+          const e=rows[0];
+          return `<article class="pj-action"><div><time>${esc(date(e.at))}</time><button data-act-kind="${esc(e.kind)}">${esc(e.kind.replace(/_/g,' '))}</button></div><small>@${esc(e.agent)}</small> ${e.ticket?`<button data-act-ticket="${esc(e.ticket)}">${esc(e.ticket)}</button>`:''}<p>${esc(e.detail)}</p>${e.run_id?`<button data-action-run="${esc(e.run_id)}">Execution record ↗</button>`:''}${e.session&&sessions.some(s=>s.session_id===e.session)?`<button data-act-session="${esc(e.session)}">Open session ↗</button>`:''}${rows.length>1?`<details data-action-repeat="${esc(key)}"><summary>${rows.length} occurrences</summary>${rows.map(row=>`<p>${esc(date(row.at))} · ${esc(row.detail)}</p>`).join('')}</details>`:''}</article>`;
+        }).join(''):'<p class="pj-muted">No actions recorded for this selection.</p>'}`;
+        actionHost.dataset.fingerprint=actionsKey;
+        actionHost.querySelectorAll('[data-action-repeat]').forEach(d=>{d.open=open.has(d.dataset.actionRepeat);});
+        actionHost.querySelectorAll('[data-action-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.actionRun);});
+        actionHost.querySelectorAll('[data-act-ticket]').forEach(b=>{b.onclick=()=>window.xnautOpenDelivery?.({project:data.project.key,ticket:b.dataset.actTicket,tab:'tests'});});
+        actionHost.querySelectorAll('[data-act-session]').forEach(b=>{b.onclick=()=>window.xnautOpenAgentSession?.(b.dataset.actSession,'Agent session');});
+        actionHost.querySelectorAll('[data-act-kind]').forEach(b=>{b.onclick=()=>{const kind=b.dataset.actKind;actionKind=actionKind===kind?'':kind;paintConsole(snapshot);[...actionHost.querySelectorAll('[data-act-kind]')].find(n=>n.dataset.actKind===kind)?.focus();};});
+        const older=actionHost.querySelector('[data-older-actions]');if(older)older.onclick=()=>{actionBefore=c.activity.next_before;void refresh();};
+        const latest=actionHost.querySelector('[data-latest-actions]');if(latest)latest.onclick=()=>{actionBefore=null;void refresh();};
+        const clear=actionHost.querySelector('[data-act-clear-kind]');if(clear)clear.onclick=()=>{actionKind='';paintConsole(snapshot);actionHost.querySelector('[data-act-kind]')?.focus();};
+      }
+      const handoffs=(snapshot?.assignments || []).filter(a=>(!filter||a.ticket===filter)&&(a.pr_url||(a.evidence || []).some(e=>['handback','transfer','review','verification'].includes(e.kind))));
+      const target=$('[data-handoffs]');
+      // Keep expanded evidence across polling and tab changes.
+      const key=JSON.stringify([handoffs,c?.handoffs]);
+      if(target.dataset.fingerprint!==key){
+        const expanded=new Set([...target.querySelectorAll('details[open]')].map(d=>d.dataset.handoff));
+        target.innerHTML=(handoffs.length?handoffs.map(a=>`<details data-handoff="${esc(a.run_id)}"><summary>${esc(a.ticket || 'Run')} · @${esc(a.owner)} · ${esc(continuityLabels[a.state] || a.state)}</summary><div class="pj-evidence">${assignmentMarkup(a)}</div></details>`).join(''):'<p class="pj-muted">No handoff evidence recorded for this selection.</p>')+((c?.handoffs || []).length?`<h3>Project handoff documents</h3><p class="pj-muted">Saved documents for the whole project, across dates.</p>${c.handoffs.map(d=>`<p><button data-handoff-wiki="${esc(d.path)}">${esc(d.title || d.path)} ↗</button></p>`).join('')}`:'');
+        target.dataset.fingerprint=key;
+        target.querySelectorAll('[data-handoff]').forEach(d=>{d.open=expanded.has(d.dataset.handoff);});
+        target.querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});
+        target.querySelectorAll('[data-handoff-wiki]').forEach(b=>{b.onclick=()=>openWiki?.(b.dataset.handoffWiki);});
+      }
+    }
     function source(entry) {
       if (entry.run_id) showSource(entry.run_id);
       else if (entry.thread_id && entry.agent && window.xnautOpenAgentSpace) window.xnautOpenAgentSpace(entry.agent,entry.thread_id);
@@ -91,14 +174,21 @@
       try {
         const record=await invoke('project_wiki_source',{project:data.project.key,kind:'run',id});
         if(stopped)return;
-        const dialog=document.createElement('dialog');dialog.className='pj-dialog';dialog.innerHTML=`<h2>${esc(record.title)}</h2><pre>${esc(record.text)}</pre><button>Close</button>`;
-        host.append(dialog);dialog.querySelector('button').onclick=()=>dialog.remove();dialog.showModal();
+        const dialog=document.createElement('dialog');dialog.className='pj-dialog';dialog.innerHTML=`<h2>${esc(record.title)}</h2><div><button data-record>Execution record</button> <button data-output>Saved output</button> <button data-close>Close</button></div><p role="status"></p><pre>${esc(record.text)}</pre>`;
+        host.append(dialog);dialog.querySelector('[data-close]').onclick=()=>dialog.remove();dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
+        dialog.querySelector('[data-record]').onclick=()=>{dialog.querySelector('pre').textContent=record.text;dialog.querySelector('[role="status"]').textContent='';};
+        dialog.querySelector('[data-output]').onclick=async()=>{
+          const button=dialog.querySelector('[data-output]');button.disabled=true;
+          try{const log=await invoke('project_wiki_source',{project:data.project.key,kind:'log',id});if(dialog.isConnected){dialog.querySelector('pre').textContent=log.text;dialog.querySelector('[role="status"]').textContent=log.truncated?'Showing the last 128 KiB of saved output.':'';}}
+          catch(error){if(dialog.isConnected)dialog.querySelector('[role="status"]').textContent=String(error);}
+          finally{button.disabled=false;}
+        };
       } catch(e){status(String(e));}
     }
     function paintGroups() {
       const groups=(data.groups || []).filter(g=>g.project===data.project.key && g.approved_at!=null && (!filter || g.members?.some(m=>m.ticket===filter)));
       const key=g=>data.project.key+':'+g.id;
-      const next=JSON.stringify([groups,data.groups_error,groups.map(g=>groupActions.get(key(g)))]);
+      const next=JSON.stringify([filter,groups,data.groups_error,groups.map(g=>groupActions.get(key(g)))]);
       if(next===groupsFingerprint)return;groupsFingerprint=next;
       $('[data-groups]').innerHTML=(data.groups_error?`<p class="pj-continuity-warning">${esc(data.groups_error)}</p>`:'')+(groups.length?`<h3>Approved groups</h3><p class="pj-muted">Stopping further dispatch prevents this group from starting more work. Active workers retain their current work.</p>${groups.map(g=>{
         const action=groupActions.get(key(g)) || {}, ended=g.stopped_at ?? action.stoppedAt;
@@ -124,15 +214,17 @@
       $('[data-title]').textContent = `${data.project.name} · Live Journal`;
       $('[data-purpose]').textContent = data.project.purpose || 'The working document, from first question to handoff.';
       const dates=$('[data-date]');const previous=dates.value;
-      dates.innerHTML='<option value="">Today</option>'+data.documents.map(d=>`<option value="${esc(d.path)}">${esc(d.path.split('/').pop().replace('.md',''))}</option>`).join('');dates.value=selected || previous;
+      const availableDates=[...new Set([...data.documents.map(d=>d.path),...(data.console?.project===data.project.key?(data.console.activity?.dates || []).map(d=>'Development/journal/'+d+'.md'):[])])].sort().reverse().map(path=>({path}));
+      dates.innerHTML='<option value="">Today</option>'+availableDates.map(d=>`<option value="${esc(d.path)}">${esc(d.path.split('/').pop().replace('.md',''))}</option>`).join('');dates.value=selected || previous;
       const snapshot=data.continuity?.project===data.project.key ? data.continuity : null;
-      const tickets=[...new Set([...data.entries.map(e=>e.ticket),...data.runs.map(r=>r.ticket),...(snapshot?.tickets || []).map(t=>t.id),...(snapshot?.assignments || []).map(a=>a.ticket),...(data.groups || []).filter(g=>g.project===data.project.key).flatMap(g=>(g.members || []).map(m=>m.ticket))].filter(Boolean))];
+      const tickets=[...new Set([...data.entries.map(e=>e.ticket),...data.runs.map(r=>r.ticket),...(data.console?.project===data.project.key?(data.console.activity?.entries || []).map(e=>e.ticket):[]),...(snapshot?.tickets || []).map(t=>t.id),...(snapshot?.assignments || []).map(a=>a.ticket),...(data.groups || []).filter(g=>g.project===data.project.key).flatMap(g=>(g.members || []).map(m=>m.ticket))].filter(Boolean))];
       $('[data-filter]').innerHTML='<option value="">All workstreams</option>'+tickets.map(t=>`<option>${esc(t)}</option>`).join('');$('[data-filter]').value=filter;
       $('[data-continuity-time]').textContent=snapshot ? 'Current project records · checked '+date(snapshot.observed_at)+(selected?' · independent of the selected Journal date':'') : 'Current project state is unavailable.';
       $('[data-history-date]').textContent='Journal date: '+data.path.split('/').pop().replace('.md','')+'. Earlier reports retain their original dates and are not fresh verification.';
       // Read timestamps change each poll; only changed records should replace the DOM.
       const next=JSON.stringify([data.path,data.opening,data.entries,data.runs,snapshot&&{...snapshot,observed_at:0},data.continuity_error,filter]);
       paintGroups();
+      paintConsole(snapshot);
       if(next===fingerprint)return;fingerprint=next;
       const expanded=new Set([...$('[data-continuity]').querySelectorAll('details[open]')].map(d=>d.dataset.continuityDetail));
       $('[data-continuity]').innerHTML=snapshot ? continuityMarkup(snapshot,filter) : `<p class="pj-continuity-warning">${esc(data.continuity_error || 'Could not reconcile current project records. Refresh to retry.')} Saved context remains available below.</p>`;
@@ -169,26 +261,27 @@
     }
     async function refresh() {
       if(stopped)return;if(busy){queued=true;return;}busy=true;
-      const requested=selected;
+      const requested=selected, requestedBefore=actionBefore;
       try {
-        const next=await invoke('project_journal_read',{project:root,path:requested});
-        if(stopped || requested!==selected)return;data=next;paint();$('[data-sync]').textContent='Journal saved in the Vault · checked '+date(data.observed_at);
+        const [next,live]=await Promise.all([invoke('project_journal_read',{project:root,path:requested,actionBefore:requestedBefore}),invoke('agent_sessions_list').then(value=>({value:value || []}),()=>({value:[],error:'Session status is unavailable; showing recorded worker state.'}))]);
+        sessions=live.value;sessionsError=live.error || '';
+        if(stopped || requested!==selected || requestedBefore!==actionBefore)return;data=next;paint();$('[data-sync]').textContent='Journal saved in the Vault · checked '+date(data.observed_at);
         status(data.warning ? 'Capture needs attention: '+data.warning : '');
       }catch(e){if(!stopped){status('Refresh failed: '+String(e));$('[data-continuity-time]').textContent='Current state could not be refreshed. Displayed records are from the last successful read.';if(!data)$('[data-purpose]').textContent='Select a registered project to read its Journal.';}}
       finally{busy=false;if(queued&&!stopped){queued=false;void refresh();}}
     }
-    $('[data-date]').onchange=e=>{selected=e.target.value||null;fingerprint='';void refresh();};
-    $('[data-filter]').onchange=e=>{filter=e.target.value;paint();};
+    $('[data-date]').onchange=e=>{selected=e.target.value||null;actionBefore=null;fingerprint='';void refresh();};
+    $('[data-filter]').onchange=e=>{filter=e.target.value;actionKind='';if(actionBefore!=null){actionBefore=null;void refresh();}paint();};
     $('[data-refresh]').onclick=refresh;
     $('[data-wiki]').onclick=()=>{if(data)openWiki?.(data.documents.some(d=>d.path===data.path)?data.path:null);};
     $('[data-form]').onsubmit=async e=>{
       e.preventDefault();if(!data)return;const button=$('[data-form] button');button.disabled=true;remember();
       const text=$('[data-note]').value;const ticket=$('[data-ticket]').value.trim();const kind=$('[data-kind]').value;
-      try{await invoke('project_journal_add',{request:{project:data.project.key,ticket,kind,title:kind==='question'?'Your question':kind==='decision'?'Your decision':'Your note',content:text}});if(stopped)return;$('[data-note]').value='';remember();selected=null;fingerprint='';await refresh();}
+      try{await invoke('project_journal_add',{request:{project:data.project.key,ticket,kind,title:kind==='question'?'Your question':kind==='decision'?'Your decision':'Your note',content:text}});if(stopped)return;$('[data-note]').value='';remember();selected=null;actionBefore=null;fingerprint='';await refresh();}
       catch(err){if(!stopped)status('Note not saved: '+String(err));}finally{if(button.isConnected)button.disabled=false;}
     };
     void refresh();timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);stopped=true;return;}if(!document.hidden&&host.getClientRects().length)void refresh();},5000);
-    const instance={dispose(){remember();stopped=true;clearInterval(timer);},refresh};instances.set(host,instance);return instance;
+    const instance={switchTab,dispose(){remember();stopped=true;clearInterval(timer);},refresh};instances.set(host,instance);return instance;
   }
   window.xnautJournal={mount};
 })();
