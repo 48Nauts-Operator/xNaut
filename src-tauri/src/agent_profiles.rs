@@ -2398,6 +2398,7 @@ async fn launch_on_exe_dev(
         &crate::run_control::ProjectSite::board(), crate::run_control::now_ms(),
     );
     run.cloud_model = cloud.as_ref().map(|c| c.pin.clone());
+    run.user_conversation = req.conversation_mode || req.resume;
     run.remote_env = Some(crate::sandbox::launch_env::LaunchEnv::ExeDev.key().into());
     let registry = crate::agents::registry_dir()?;
     crate::run_control::bind_pending_in(&registry, &mut run)?;

@@ -400,8 +400,9 @@ pub(crate) fn worker_count_in(dir: &Path) -> Result<usize,String> {
     Ok(count)
 }
 /// A terminal native run can leave its viewport attached. Only an exact,
-/// unique session/agent match retires that UI row from the legacy spend count;
-/// unknown, ambiguous, or failed workers remain conservative. Atomic native
+/// unique session/agent match excludes completed runs and explicit user
+/// conversations from the legacy spend count. Unknown, ambiguous, or failed
+/// workers remain conservative. Atomic native
 /// worker admission still counts detached workers and Requested reservations.
 pub(crate) fn live_viewport_count_in(
     dir: &Path,
@@ -439,7 +440,8 @@ fn live_viewport_count(
         let Some(run) = matching.next() else { return true; };
         matching.next().is_some()
             || run.agent_handle != *handle || run.remote_env != *environment
-            || !matches!(run.state, RunState::Done | RunState::Retired)
+            || (!matches!(run.state, RunState::Done | RunState::Retired)
+                && !(run.kind == RunKind::Agent && run.user_conversation))
     }).count()
 }
 
@@ -1894,6 +1896,31 @@ pub(crate) mod tests {
         author.agent_handle = "different-owner".into();
         assert_eq!(live_viewport_count(&[author], &sessions, &[]), 2);
         assert_eq!(live_viewport_count(&[], &sessions, &[]), 2);
+    }
+
+    #[test]
+    fn explicit_conversations_do_not_consume_legacy_worker_capacity() {
+        let mut conversation = run();
+        conversation.user_conversation = true;
+        conversation.state = RunState::Running;
+        conversation.pty_session = Some("conversation".into());
+        let sessions = vec![("conversation".into(), conversation.agent_handle.clone(), None)];
+        assert_eq!(live_viewport_count(std::slice::from_ref(&conversation), &sessions, &[]), 0);
+        // Reviewers, unclassified legacy runs and mismatched/ambiguous identity
+        // still count. A ticketless session is not proof of a conversation.
+        conversation.kind = RunKind::Review;
+        assert_eq!(live_viewport_count(std::slice::from_ref(&conversation), &sessions, &[]), 1);
+        conversation.kind = RunKind::Agent;
+        conversation.user_conversation = false;
+        assert_eq!(live_viewport_count(std::slice::from_ref(&conversation), &sessions, &[]), 1);
+        conversation.user_conversation = true;
+        let mut duplicate = conversation.clone(); duplicate.run_id = "other".into();
+        assert_eq!(live_viewport_count(&[conversation.clone(), duplicate], &sessions, &[]), 1);
+        conversation.remote_env = Some("exe-dev".into());
+        assert_eq!(live_viewport_count(std::slice::from_ref(&conversation), &sessions, &[]), 1);
+        conversation.remote_env = None;
+        conversation.agent_handle = "another-owner".into();
+        assert_eq!(live_viewport_count(&[conversation], &sessions, &[]), 1);
     }
 
     #[test]
