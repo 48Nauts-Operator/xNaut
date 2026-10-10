@@ -43,7 +43,7 @@ impl Target {
     pub fn file(&self, workdir: &str, relative: &str, body: &str) -> Result<(), String> {
         use base64::{engine::general_purpose::STANDARD, Engine};
         self.command(&format!(
-            "printf %s {} | base64 -d > {}",
+            "umask 077; printf %s {} | base64 -d > {}",
             exe::shell_single_quote(&STANDARD.encode(body)),
             exe::shell_single_quote(&format!("{workdir}/{relative}"))
         ))

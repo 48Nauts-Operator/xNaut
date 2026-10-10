@@ -2063,6 +2063,7 @@ pub async fn agent_profile_launch(
     let route = env
         .route(&sandboxes)
         .map_err(|why| format!("@{} {why}", profile.handle))?;
+    if !matches!(route, LaunchRoute::Local) { validate_remote_runtime(&profile)?; }
     // Resolved HERE so a refusal is immediate, acted on at the bottom so
     // everything between (the spend gate, the composed prompt, the identity)
     // happens once for every environment rather than once per branch.
@@ -2361,9 +2362,9 @@ on {}: {why}",
 /// - xNAUT's own MCP server, for the same reason, so no ticket, decision or
 ///   document tools.
 /// - The browser shim, the local plugin config, and the NautGate rebinding.
-/// - `StdinAfterStart` injection (pi), which needs a post-spawn write into the
-///   PTY that this path does not do; pi's prompt still travels as its
-///   configured env var.
+/// Pi's standard CLI receives the initial task as a positional message. Other
+/// runtimes requiring a later PTY paste need an explicit prompt carrier; they
+/// are refused before launch rather than opened without their task.
 /// - The VM's own agent ONBOARDING. Measured 2026-09-03: `claude` on the VM
 ///   has never been run, so it opens its first-run theme picker and waits,
 ///   ahead of any prompt. The local path already solves its half of this
@@ -2418,18 +2419,19 @@ async fn launch_on_exe_dev(
     let staged = {
         let mut snapshot = transfer.clone();
         let session = session.clone();
-        let check_codex = uses_standard_codex_login(&cfg);
+        let runtime = cfg.clone();
+        let model = profile.model.clone();
         let settings = state.settings.lock().await.clone();
         tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
             exe::ensure()?;
             let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
                 &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
-            if check_codex { exe::codex_auth_ready()?; }
+            remote_runtime_ready(&runtime, &model, &snapshot.worker)?;
             snapshot.worker_remote = Some(access.remote.clone());
             crate::repository_transfer::stage(&snapshot, &access)?;
             let relative = format!(".git/{session}.sh");
             exe::repository_file(&snapshot.workdir, &relative, &script)?;
-            exe::repository_command(&format!("chmod +x {}", exe::shell_single_quote(&format!("{}/{relative}", snapshot.workdir))))?;
+            exe::repository_command(&format!("chmod 700 {}", exe::shell_single_quote(&format!("{}/{relative}", snapshot.workdir))))?;
             Ok((format!("{}/{relative}", snapshot.workdir), access.remote))
         }).await.map_err(|error| format!("the exe.dev launch task did not finish: {error}"))?
     };
@@ -2605,7 +2607,8 @@ async fn launch_on_gitvm(
         let dir = std::path::PathBuf::from(&req.worktree_path);
         let session = session.clone();
         let beacon = beacon.clone();
-        let check_codex = uses_standard_codex_login(&cfg);
+        let runtime = cfg.clone();
+        let model = profile.model.clone();
         let settings = state.settings.lock().await.clone();
         let mut snapshot = transfer.clone();
         tokio::task::spawn_blocking(move || -> Result<(cli::Guest, String, bool, String), String> {
@@ -2621,17 +2624,14 @@ async fn launch_on_gitvm(
             cli::warm_up(&dir)?;
             let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
                 &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
-            if check_codex {
-                let auth = cli::ssh(&dir, "timeout 15s codex login status >/dev/null 2>&1")?;
-                if !auth.status.success() { return Err("Codex authentication is unavailable in GitVM; configure or sync authentication before dispatching. No agent was started.".into()); }
-            }
+            remote_runtime_ready(&runtime, &model, &snapshot.worker)?;
             snapshot.worker_remote = Some(access.remote.clone());
             crate::repository_transfer::stage(&snapshot, &access)?;
             let guest = cli::guest(&dir)?;
             let relative = format!(".git/{session}.sh");
             snapshot.worker.file(&snapshot.workdir, &relative, &script)?;
             let staged = format!("{}/{relative}", snapshot.workdir);
-            snapshot.worker.command(&format!("chmod +x {}", crate::sandbox::exe::shell_single_quote(&staged)))?;
+            snapshot.worker.command(&format!("chmod 700 {}", crate::sandbox::exe::shell_single_quote(&staged)))?;
             let beacon_started = match beacon.as_ref() {
                 // BEST EFFORT, and deliberately so. A sandbox whose beacon
                 // could not start is a sandbox the reaper will refuse to
@@ -2838,13 +2838,79 @@ fn remote_launch_command(
         .find(&profile.runtime_id)
         .ok_or_else(|| format!("unknown agent runtime: {}", profile.runtime_id))?
         .clone();
-    let model = (!profile.model.trim().is_empty()).then(|| profile.model.clone());
-    let (argv, mut env) = crate::agents::build_launch(&cfg, prompt.as_deref(), model.as_deref());
+    let command = remote_command_for(&cfg, prompt.as_deref(), Some(&profile.model), identity_env)?;
+    Ok((cfg, command))
+}
+
+fn remote_command_for(
+    cfg: &crate::agents::AgentConfig,
+    prompt: Option<&str>,
+    model: Option<&str>,
+    identity_env: std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    use crate::agents::PromptInjectionMode;
+    let standard_pi = cfg.id == "pi" && cfg.launch_cmd == "pi"
+        && cfg.prompt_injection_mode == PromptInjectionMode::StdinAfterStart
+        && cfg.draft_prompt_env_var.is_none();
+    let has_carrier = cfg.draft_prompt_env_var.as_ref().is_some_and(|v| !v.is_empty())
+        || matches!(cfg.prompt_injection_mode, PromptInjectionMode::Argv)
+        || (matches!(cfg.prompt_injection_mode, PromptInjectionMode::FlagPrompt | PromptInjectionMode::FlagPromptInteractive)
+            && cfg.draft_prompt_flag.as_ref().is_some_and(|v| !v.is_empty()));
+    if prompt.is_some() && !standard_pi && !has_carrier {
+        return Err(format!("Runtime {} requires interactive prompt input that remote workers cannot deliver. Configure an argument, prompt flag or environment carrier before dispatch. No agent was started.", cfg.id));
+    }
+    let (mut argv, derived_env) = crate::agents::build_launch(cfg, prompt, model);
+    if standard_pi {
+        if let Some(prompt) = prompt { argv.extend(["--".into(), prompt.into()]); }
+    }
+    // build_launch returns derived metadata, not the configured provider env.
+    let mut env = cfg.env.clone();
+    env.extend(derived_env);
     // The mesh identity wins over the runtime's own defaults, matching the
     // local path, where `extra_env.extend(identity_env)` runs last.
     env.extend(identity_env);
-    let command = remote_command(&argv, &env);
-    Ok((cfg, command))
+    if env.keys().any(|key| key.is_empty() || key.bytes().enumerate().any(|(i, c)|
+        !(c == b'_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())))) {
+        return Err("Runtime environment contains an invalid variable name; launch refused".into());
+    }
+    Ok(remote_command(&argv, &env))
+}
+
+pub(crate) fn validate_remote_runtime(profile: &AgentProfile) -> Result<(), String> {
+    let registry = crate::agents::load_or_seed_registry()?;
+    let cfg = registry.find(&profile.runtime_id).ok_or("Unknown remote agent runtime")?;
+    remote_command_for(cfg, Some("task delivery check"), Some(&profile.model), Default::default()).map(|_| ())
+}
+
+/// Probe the approved exe.dev destination before a new attempt is allocated.
+/// GitVM needs its worktree-bound sandbox, so it checks after warm-up instead.
+pub(crate) fn preflight_exe_runtime(profile: &AgentProfile) -> Result<(), String> {
+    let registry = crate::agents::load_or_seed_registry()?;
+    let cfg = registry.find(&profile.runtime_id).ok_or("Unknown remote agent runtime")?;
+    remote_command_for(cfg, Some("task delivery check"), Some(&profile.model), Default::default())?;
+    crate::sandbox::exe::ensure()?;
+    remote_runtime_ready(cfg, &profile.model, &crate::worker_bootstrap::Target::ExeDev)
+}
+
+fn remote_runtime_ready(cfg: &crate::agents::AgentConfig, model: &str,
+    target: &crate::worker_bootstrap::Target) -> Result<(), String> {
+    let input = serde_json::to_vec(&serde_json::json!({
+        "binary": cfg.launch_cmd, "env": cfg.env, "args": cfg.extra_args, "model": model,
+        "standard_codex": uses_standard_codex_login(cfg),
+        "standard_pi": cfg.id == "pi" && cfg.launch_cmd == "pi",
+    })).map_err(|e| e.to_string())?;
+    let output = target.exchange(&format!("python3 -c {}",
+        crate::sandbox::exe::shell_single_quote(include_str!("worker_runtime.py"))), &input, 25)?;
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_default();
+    let status = receipt["status"].as_str().unwrap_or("check_failed");
+    if output.status.success() && status == "ready" { return Ok(()); }
+    let reason = match status {
+        "binary_missing" => "its configured command is not installed on the worker",
+        "authentication_missing" => "its selected provider has no usable authentication on the worker",
+        "check_timeout" => "its authentication check timed out",
+        _ => "its readiness check could not be verified",
+    };
+    Err(format!("Runtime {} is not ready: {reason}. Configure this worker before retrying. No agent was started.", cfg.id))
 }
 
 /// One shell command line for the remote agent: the env `build_launch` asked
@@ -5024,6 +5090,83 @@ You are a systems architect.
 mod compute_choice_tests {
     use super::*;
     use crate::sandbox::launch_env::{resolve, LaunchEnv};
+
+    fn runtime(id: &str, mode: &str) -> crate::agents::AgentConfig {
+        serde_json::from_value(serde_json::json!({
+            "id":id, "label":id, "detect_cmd":id, "launch_cmd":id,
+            "extra_args":[], "expected_process":id, "prompt_injection_mode":mode, "env":{}
+        })).unwrap()
+    }
+
+    #[test]
+    fn remote_prompt_modes_refuse_undeliverable_tasks_and_preserve_explicit_carriers() {
+        for mode in ["stdin-after-start", "flag-interactive", "flag-prompt", "flag-prompt-interactive"] {
+            let mut cfg = runtime("custom", mode);
+            assert!(remote_command_for(&cfg, Some("task"), None, Default::default()).is_err());
+            cfg.draft_prompt_env_var = Some("TASK_INPUT".into());
+            assert!(remote_command_for(&cfg, Some("task"), None, Default::default()).unwrap().contains("TASK_INPUT='task'"));
+        }
+        let mut cfg = runtime("grok", "flag-prompt");
+        cfg.draft_prompt_flag = Some("--prompt".into());
+        assert!(remote_command_for(&cfg, Some("task"), None, Default::default()).unwrap().ends_with("'--prompt' 'task'"));
+        cfg.env.insert("BAD;name".into(), "hidden credential".into());
+        let error = remote_command_for(&cfg, Some("task"), None, Default::default()).unwrap_err();
+        assert!(!error.contains("hidden credential"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remote_pi_process_receives_the_exact_task_model_provider_env_and_identity() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("xnaut-remote-prompt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("pi");
+        std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,os,sys\nprint(json.dumps({'argv':sys.argv[1:], 'url':os.environ['OPENAI_BASE_URL'], 'identity':os.environ['XNAUT_AGENT_HANDLE']}))\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut cfg = runtime("pi", "stdin-after-start");
+        cfg.env.insert("PATH".into(), format!("{}:{}", dir.display(), std::env::var("PATH").unwrap()));
+        cfg.env.insert("OPENAI_BASE_URL".into(), "https://gateway.invalid/v1?name='quoted'".into());
+        cfg.env.insert("XNAUT_AGENT_HANDLE".into(), "runtime-default".into());
+        let prompt = "--task isn't `printf injected` $(printf injected)\nsecond line";
+        let identity = std::collections::HashMap::from([("XNAUT_AGENT_HANDLE".into(), "approved-owner".into())]);
+        let command = remote_command_for(&cfg, Some(prompt), Some("provider/model"), identity).unwrap();
+        let output = std::process::Command::new("sh").args(["-c", &format!("env {command}")]).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(receipt["argv"], serde_json::json!(["--model", "provider/model", "--", prompt]));
+        assert_eq!(receipt["url"], cfg.env["OPENAI_BASE_URL"]);
+        assert_eq!(receipt["identity"], "approved-owner");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remote_runtime_probe_checks_the_actual_command_and_pi_auth_without_leaking_output() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("xnaut-runtime-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("pi");
+        std::fs::write(&binary, "#!/usr/bin/env python3\nimport json,os,sys\nassert sys.argv[1:]==['auth','check','--json','--model','provider/model']\nprint(json.dumps({'status':os.environ['FIXTURE_AUTH'], 'credential':'never-disclose-this'}))\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for (binary, auth, expected) in [
+            (binary.to_string_lossy().to_string(), "ready", "ready"),
+            (binary.to_string_lossy().to_string(), "not_ready", "authentication_missing"),
+            (dir.join("missing").to_string_lossy().to_string(), "ready", "binary_missing"),
+        ] {
+            let mut child = std::process::Command::new("python3")
+                .args(["-c", include_str!("worker_runtime.py")])
+                .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+            let input = serde_json::json!({"binary":binary,"env":{"HOME":dir,"FIXTURE_AUTH":auth},
+                "args":[],"model":"provider/model","standard_pi":true});
+            child.stdin.take().unwrap().write_all(&serde_json::to_vec(&input).unwrap()).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(output.status.success(), expected == "ready");
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(), serde_json::json!({"status":expected}));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn standard_auth_probe_does_not_reject_custom_provider_launch_contracts() {
         let mut cfg: crate::agents::AgentConfig = serde_json::from_value(serde_json::json!({

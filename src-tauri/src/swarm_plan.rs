@@ -899,6 +899,7 @@ pub fn build_with_environment(
         run.runtime_id = Some(profile.runtime_id.clone());
         let destination = replan_environment(environment, &previous, &run.ticket);
         run.environment = Some(resolve_environment(destination, profile.execution, &settings.sandboxes)?.key().into());
+        if needs_repository(run) { crate::agent_profiles::validate_remote_runtime(&profile)?; }
         run.requested_environment = destination.map(str::to_owned);
         run.repository_remote = projects
             .iter()
@@ -1066,13 +1067,13 @@ pub(crate) fn managed_tickets(registry: &Path) -> Result<HashSet<String>, String
         .collect())
 }
 
-fn waits_for_repository(member: &Member) -> bool {
+fn waits_for_preflight(member: &Member) -> bool {
     member.state == MemberState::Blocked && member.refusal.as_ref()
-        .is_some_and(|r| r.kind == crate::dispatch::RefusalKind::RepositoryAccess)
+        .is_some_and(|r| matches!(r.kind, crate::dispatch::RefusalKind::RepositoryAccess | crate::dispatch::RefusalKind::RuntimeReadiness))
 }
 
 fn slot_available(member: &Member, live: usize, cap: usize) -> bool {
-    (member.state == MemberState::Queued || waits_for_repository(member)) && live < cap
+    (member.state == MemberState::Queued || waits_for_preflight(member)) && live < cap
 }
 
 fn recover_member(
@@ -1130,7 +1131,7 @@ fn recover_member(
                     }
                     // Rechecking an unchanged repository outage is not a new
                     // queue transition; keep its original refusal and event trail.
-                    if waits_for_repository(&group.members[i]) { return false; }
+                    if waits_for_preflight(&group.members[i]) { return false; }
                     transition(group, i, MemberState::Queued,
                         "native admission refusal proved no worker started; retry preserved workspace".into(),
                         Some(next.run_id), now);
@@ -1169,6 +1170,9 @@ fn recover_member(
         };
         let id = active
             .copied()
+            // A run ID is an identity, not a timestamp. Retained predecessors
+            // can sort after their completed successor (legacy IDs especially).
+            .or_else(|| assignments.iter().rev().find(|a| a.next_run_id.is_none()).copied())
             .unwrap_or(assignments[assignments.len() - 1])
             .run_id
             .clone();
@@ -1186,6 +1190,8 @@ fn recover_member(
 /// the same persisted refill loop without starting a Tauri app or real worker.
 trait RefillBackend: Sync {
     fn repository_preflight(&self, run: PlannedRun) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>>;
+    fn runtime_preflight(&self, run: PlannedRun) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>>;
     fn reconcile(&self, project: &str, ticket: &str) -> Result<(), String>;
     fn snapshot(&self, project: &str)
@@ -1212,6 +1218,19 @@ trait RefillBackend: Sync {
 
 struct NativeRefill<'a>(&'a tauri::AppHandle);
 impl RefillBackend for NativeRefill<'_> {
+    fn runtime_preflight(&self, run: PlannedRun) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let profile = crate::agent_profiles::agent_profile_get(run.owner)?;
+                if run.environment.as_deref() == Some("exe-dev") {
+                    crate::agent_profiles::preflight_exe_runtime(&profile)
+                } else {
+                    crate::agent_profiles::validate_remote_runtime(&profile)
+                }
+            }).await.map_err(|_| "Worker runtime check could not complete")?
+        })
+    }
     fn repository_preflight(&self, run: PlannedRun) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
         Box::pin(async move {
@@ -1341,6 +1360,7 @@ async fn refill_in(
         return Err("Group registry membership is inconsistent; refill refused".into());
     }
     let mut repository_checks: HashMap<_, Result<(), String>> = HashMap::new();
+    let mut runtime_checks: HashMap<_, Result<(), String>> = HashMap::new();
     for mut group in groups
         .iter()
         .filter(|g| g.approved_at.is_some() && g.stopped_at.is_none())
@@ -1421,7 +1441,7 @@ async fn refill_in(
                 save_in(registry, &group)?;
                 continue;
             }
-            if group.members[i].state != MemberState::Queued && !waits_for_repository(&group.members[i]) {
+            if group.members[i].state != MemberState::Queued && !waits_for_preflight(&group.members[i]) {
                 continue;
             }
             if let Err(refusal) = crate::dispatch::approved_dispatch_policy(role, read_only, run.environment.as_deref()) {
@@ -1474,6 +1494,25 @@ async fn refill_in(
                     let reason = crate::project_wiki::redact(&format!("Repository access must recover before dispatch: {error} No new run was created."));
                     group.members[i].refusal = Some(crate::dispatch::DispatchRefusal {
                         kind: crate::dispatch::RefusalKind::RepositoryAccess, reason: reason.clone(),
+                    });
+                    let id = group.members[i].run_id.clone();
+                    transition(&mut group, i, MemberState::Blocked, reason, id, now);
+                    save_in(registry, &group)?;
+                    continue;
+                }
+                let key = (run.owner.clone(), run.environment.clone());
+                let check = match runtime_checks.get(&key) {
+                    Some(result) => result.clone(),
+                    None => {
+                        let result = backend.runtime_preflight(run.clone()).await;
+                        runtime_checks.insert(key, result.clone());
+                        result
+                    }
+                };
+                if let Err(error) = check {
+                    let reason = crate::project_wiki::redact(&format!("Worker runtime must be ready before dispatch: {error} No new run was created."));
+                    group.members[i].refusal = Some(crate::dispatch::DispatchRefusal {
+                        kind: crate::dispatch::RefusalKind::RuntimeReadiness, reason: reason.clone(),
                     });
                     let id = group.members[i].run_id.clone();
                     transition(&mut group, i, MemberState::Blocked, reason, id, now);
@@ -1661,6 +1700,58 @@ mod tests {
             refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
             assert_eq!(fixture.launched.lock().unwrap().len(), 3, "no duplicate launches");
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_outage_preserves_five_continuations_until_worker_readiness_recovers() {
+        use crate::{instance::Role, run_control};
+        let mut fixture = RefillFixture::five_remote("exe-dev");
+        fixture.seed_refused_continuations();
+        let before = run_control::list_ids_in(&fixture.registry).unwrap();
+        confirm_in(&fixture.registry, "remote", false, Role::Workstation, false, |_, _| Ok(())).unwrap();
+        fixture.runtime_error = Some("Configured worker command is missing".into());
+        let mut events = None;
+        for _ in 0..3 {
+            refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+            let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+            assert!(group.members.iter().all(|m| m.state == MemberState::Blocked
+                && m.refusal.as_ref().unwrap().kind == crate::dispatch::RefusalKind::RuntimeReadiness));
+            assert_eq!(run_control::list_ids_in(&fixture.registry).unwrap(), before);
+            assert!(fixture.launched.lock().unwrap().is_empty());
+            if let Some(count) = events { assert_eq!(group.events.len(), count); }
+            events = Some(group.events.len());
+        }
+        fixture.runtime_error = None;
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        assert_eq!(fixture.launched.lock().unwrap().len(), 3);
+        let group = groups_in(&fixture.registry, None).unwrap().remove(0);
+        assert_eq!(report(&group).queued.len(), 2);
+        for member in group.members.iter().take(3) {
+            let run = run_control::load_manifest_in(&fixture.registry, member.run_id.as_ref().unwrap()).unwrap();
+            assert!(run.previous_run_id.is_some());
+            assert_eq!(run.remote_env.as_deref(), Some("exe-dev"));
+        }
+        refill_in(&fixture.registry, &fixture.tickets, &fixture, Role::Workstation, false).await.unwrap();
+        assert_eq!(fixture.launched.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn completed_continuation_tracks_its_successor_instead_of_lexically_later_failed_history() {
+        use crate::run_control::{RunManifest, RunState};
+        let fixture = RefillFixture::five_remote("exe-dev");
+        let mut group = groups_in(&fixture.registry, None).unwrap().remove(0);
+        let planned = group.plan.runs[0].clone();
+        let mut old = RunManifest::requested(&planned.owner, "fixture", "/preserved", Some(planned.ticket.clone()), None, &[], 1);
+        old.run_id = "zz-legacy-refused".into(); old.state = RunState::Failed;
+        old.next_run_id = Some("01-new-completed".into());
+        let mut new = old.clone(); new.run_id = "01-new-completed".into(); new.state = RunState::Done;
+        new.started_at = 2; new.previous_run_id = Some(old.run_id.clone()); new.next_run_id = None;
+        group.members[0].started = Some(Started { ticket: planned.ticket, handle: planned.owner,
+            branch: planned.branch, worktree_path: "/preserved".into(), session_id: "new-session".into() });
+        group.members[0].run_id = Some(new.run_id.clone());
+        let snapshot = crate::project_continuity::reconcile("FORCASTER", &fixture.tickets, &[old,new], &[], 3);
+        assert!(recover_member(&fixture.registry, &mut group, 0, &snapshot, 3));
+        assert_eq!(group.members[0].run_id.as_deref(), Some("01-new-completed"));
     }
 
     #[test]
@@ -2364,6 +2455,7 @@ mod tests {
         launched: std::sync::Mutex<Vec<String>>,
         append_dispatch_note: bool,
         repository_error: Option<String>,
+        runtime_error: Option<String>,
         repository_checks: std::sync::atomic::AtomicUsize,
     }
     impl RefillFixture {
@@ -2383,7 +2475,7 @@ mod tests {
                 serde_json::to_vec(&serde_json::json!({"model": models()["codex"]})).unwrap()).unwrap();
             Self { registry, tickets, fail_reconcile: None, fail_snapshot: None,
                 launched: std::sync::Mutex::new(vec![]), append_dispatch_note: false,
-                repository_error: None, repository_checks: std::sync::atomic::AtomicUsize::new(0) }
+                repository_error: None, runtime_error: None, repository_checks: std::sync::atomic::AtomicUsize::new(0) }
         }
 
         // Reproduce the persisted 1.30.2 -> 1.30.4 FORCASTER failure: an
@@ -2477,6 +2569,7 @@ mod tests {
                 launched: std::sync::Mutex::new(vec![]),
                 append_dispatch_note: false,
                 repository_error: None,
+                runtime_error: None,
                 repository_checks: std::sync::atomic::AtomicUsize::new(0),
             }
         }
@@ -2487,6 +2580,10 @@ mod tests {
         }
     }
     impl RefillBackend for RefillFixture {
+        fn runtime_preflight(&self, _run: PlannedRun) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+            Box::pin(async move { self.runtime_error.clone().map_or(Ok(()), Err) })
+        }
         fn repository_preflight(&self, _run: PlannedRun) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
             Box::pin(async move {

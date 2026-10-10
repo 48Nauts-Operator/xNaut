@@ -36,6 +36,7 @@ pub enum RefusalKind {
     Policy,
     Capacity,
     RepositoryAccess,
+    RuntimeReadiness,
     ExistingAssignment,
     Uncertain,
 }

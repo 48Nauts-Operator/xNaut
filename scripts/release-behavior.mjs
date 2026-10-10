@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'agent_profiles::compute_choice_tests::remote_',
   'repository_transfer::tests::repository_admission_',
   'swarm_plan::tests::', 'dispatch::tests::', 'instance::tests::',
   'sandbox::launch_env::tests::', 'agent_tools::tests::swarm_tools_',
@@ -17,6 +18,13 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'agent_profiles::compute_choice_tests::remote_prompt_modes_refuse_undeliverable_tasks_and_preserve_explicit_carriers',
+  ...(process.platform === 'win32' ? [] : [
+    'agent_profiles::compute_choice_tests::remote_pi_process_receives_the_exact_task_model_provider_env_and_identity',
+    'agent_profiles::compute_choice_tests::remote_runtime_probe_checks_the_actual_command_and_pi_auth_without_leaking_output',
+  ]),
+  'swarm_plan::tests::runtime_outage_preserves_five_continuations_until_worker_readiness_recovers',
+  'swarm_plan::tests::completed_continuation_tracks_its_successor_instead_of_lexically_later_failed_history',
   'repository_transfer::tests::repository_admission_classifies_git_failures_without_leaking_credentials',
   'repository_transfer::tests::repository_admission_real_git_reports_desktop_stage_and_missing_repository',
   'swarm_plan::tests::replanning_keeps_approved_remote_destination_despite_local_preview_or_profile',

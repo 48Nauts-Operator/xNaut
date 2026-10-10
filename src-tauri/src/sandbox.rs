@@ -2993,7 +2993,7 @@ print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase}))
 
     pub fn repository_file(workdir: &str, relative: &str, body: &str) -> Result<(), String> {
         use base64::{engine::general_purpose::STANDARD, Engine};
-        repository_command(&format!("printf %s {} | base64 -d > {}", shell_single_quote(&STANDARD.encode(body)), shell_single_quote(&format!("{workdir}/{relative}"))))
+        repository_command(&format!("umask 077; printf %s {} | base64 -d > {}", shell_single_quote(&STANDARD.encode(body)), shell_single_quote(&format!("{workdir}/{relative}"))))
     }
 
     /// Run one verify step in the project dir. A login shell so per-user
