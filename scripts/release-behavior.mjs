@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
   'cloud_model::tests::',
+  'handback::tests::',
   'agent_profiles::compute_choice_tests::remote_',
   'repository_transfer::tests::repository_admission_',
   'swarm_plan::tests::', 'dispatch::tests::', 'instance::tests::',
@@ -19,6 +20,8 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'handback::tests::command_result_verification_evidence_preserves_the_pi_handback_contract',
+  'run_control::tests::explicit_conversations_do_not_consume_legacy_worker_capacity',
   'cloud_model::tests::shared_cloud_choice_is_identical_across_destinations_and_preserves_local_profiles',
   'cloud_model::tests::cloud_launch_overrides_worker_defaults_without_putting_credentials_in_argv',
   ...(process.platform === 'win32' ? [] : ['cloud_model::tests::worker_model_protocol_suite']),
