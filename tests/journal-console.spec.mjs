@@ -87,6 +87,7 @@ test('narrow pane keeps tabs and cards inside its bounds and polling preserves r
 test('older action pages use the native cursor and a date change returns to latest',async({page})=>{
  await start(page);
  await page.evaluate(()=>{
+  window.data.entries=[{id:'activity:queued',kind:'execution',title:'Queued native worker',ticket:'DEMO-3',actor:'Coordinator',at:'2026-10-10T12:00:00Z',content:'Waiting for capacity.'}];
   window.data.console.activity.next_before=100;
   window.data.console.activity.total=600;
   window.data.console.activity.limit=500;
@@ -100,6 +101,11 @@ test('older action pages use the native cursor and a date change returns to late
  });
  await page.getByRole('button',{name:'Older actions',exact:true}).click();
  await expect(page.locator('[data-actions]')).toContainText('Earlier action');
+ await expect(page.locator('[data-worker-history]')).toHaveCount(0);
+ await expect(page.locator('[data-actions]')).toContainText('Choose Latest actions to include saved worker history.');
+ await page.getByRole('button',{name:'Latest actions',exact:true}).click();
+ await expect(page.locator('[data-worker-history]')).toHaveCount(1);
+ await page.getByRole('button',{name:'Older actions',exact:true}).click();
  await expect(page.getByRole('button',{name:'Latest actions',exact:true})).toBeVisible();
  await page.getByLabel('Journal date').selectOption('Development/journal/2026-10-09.md');
  await expect(page.locator('[data-actions]')).toContainText('Repository access failed');
@@ -124,4 +130,34 @@ test('historical actions remain filterable after a ticket leaves the current boa
  await page.getByLabel('Journal workstream').selectOption('DEMO-99');
  await expect(page.locator('[data-actions]')).toContainText('Repository access failed');
  await expect(page.locator('[data-agent-run]')).toHaveCount(5);
+});
+
+
+test('native worker history is visible with an empty or failed system ledger and stays out of Notes',async({page})=>{
+ await start(page);
+ await page.evaluate(()=>{
+  window.data.console.activity.entries=[];
+  window.data.entries=[
+   {id:'activity:start',kind:'execution',title:'Worker started',ticket:'DEMO-1',run_id:'run-0',actor:'xNAUT coordinator',at:'2026-10-10T12:00:00Z',content:'Dispatched to exe.dev.'},
+   {id:'receipt-0',kind:'summary',title:'Worker returned for review',ticket:'DEMO-1',run_id:'run-0',actor:'@codex · run receipt',at:'2026-10-10T12:05:00Z',content:'[Source evidence](../../Development/evidence/run.md)'},
+   {id:'human-note',kind:'note',title:'My note',ticket:'DEMO-2',actor:'André',at:'2026-10-10T12:06:00Z',content:'Keep the existing implementation.'},
+  ];
+  return window.instance.refresh();
+ });
+ await expect(page.locator('.pj-action')).toHaveCount(2);
+ await expect(page.locator('.pj-action').first()).toContainText('Worker returned for review');
+ await expect(page.locator('[data-actions]')).not.toContainText('Keep the existing implementation');
+ await page.locator('[data-worker-history="receipt-0"] summary').click();
+ await page.getByRole('button',{name:'Source evidence',exact:true}).click();
+ expect(await page.evaluate(()=>window.openedWiki)).toBe('Development/evidence/run.md');
+ await page.evaluate(()=>{window.data.console.error='System ledger unavailable';return window.instance.refresh();});
+ await expect(page.locator('[data-actions]')).toContainText('System ledger unavailable');
+ await expect(page.locator('.pj-action')).toHaveCount(2);
+ await expect(page.locator('[data-worker-history="receipt-0"]')).toHaveAttribute('open');
+ await page.getByRole('tab',{name:'Notes',exact:true}).click();
+ await expect(page.locator('[data-entries]')).toContainText('Keep the existing implementation');
+ await expect(page.locator('[data-entries] .pj-entry')).toHaveCount(1);
+ await page.getByRole('tab',{name:'Actions',exact:true}).click();
+ await page.getByLabel('Journal workstream').selectOption('DEMO-2');
+ await expect(page.locator('.pj-action')).toHaveCount(0);
 });

@@ -74,6 +74,9 @@
       ${other.length?`<details data-continuity-detail="other"><summary>Other recorded work · ${other.length} · outcomes and unstarted work</summary><div class="pj-evidence">${other.map(card).join('')}</div></details>`:''}
       ${orphaned.length?`<details data-continuity-detail="unlinked"><summary>Other run records · ${orphaned.length}</summary><div class="pj-evidence">${orphaned.map(assignmentMarkup).join('')}</div></details>`:''}`;
   }
+  // Native coordination history is already durably captured in the Journal.
+  // The older system ledger does not record native swarm/PR transitions.
+  const isWorkerActivity = e => e.id?.startsWith('activity:') || (e.run_id && ['execution','summary'].includes(e.kind));
   function mount(host, root, openWiki) {
     instances.get(host)?.dispose();
     let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, groupsFingerprint='', timer, sessions=[], sessionsError='', tab='actions', actionKind='', actionBefore=null;
@@ -127,23 +130,35 @@
       agentHost.querySelectorAll('[data-inspect]').forEach(b=>{b.onclick=()=>showSource(b.dataset.inspect);});
       agentHost.querySelectorAll('[data-agent-settings]').forEach(b=>{b.onclick=()=>window.xnautOpenAgentSettings?.(b.dataset.agentSettings);});
       $('[data-actions-date]').textContent='Recorded actions · '+data.path.split('/').pop().replace('.md','')+' (UTC)'+(filter?' · '+filter:'');
-      const actions=(c?.activity?.entries || []).filter(e=>!filter||e.ticket===filter);
+      const workerActions=actionBefore==null ? data.entries.filter(isWorkerActivity).map(e=>({
+        at:e.at,kind:e.kind,agent:e.agent,actor:e.actor,ticket:e.ticket,run_id:e.run_id,
+        detail:e.title,entry:e,
+      })) : [];
+      const actions=[...workerActions,...(c?.activity?.entries || [])]
+        .filter(e=>!filter||e.ticket===filter)
+        .sort((a,b)=>(Date.parse(b.at)||0)-(Date.parse(a.at)||0));
       const actionHost=$('[data-actions]');
       const groups=[];
       for(const e of actions.filter(e=>!actionKind||e.kind===actionKind)){
-        const key=JSON.stringify([e.run_id,e.ticket,e.agent,e.kind,e.detail,e.session]);
+        const key=JSON.stringify([e.run_id,e.ticket,e.agent,e.kind,e.detail,e.session,e.entry?.id]);
         const previous=groups.at(-1);
         if(previous?.key===key)previous.rows.push(e);else groups.push({key,rows:[e]});
       }
       const actionsKey=JSON.stringify([groups,actionKind,c?.error,c?.activity?.total,c?.activity?.next_before,actionBefore,sessions.map(s=>s.session_id)]);
       if(actionHost.dataset.fingerprint!==actionsKey){
-        const open=new Set([...actionHost.querySelectorAll('details[open]')].map(d=>d.dataset.actionRepeat));
-        actionHost.innerHTML=c?.error?`<p class="pj-continuity-warning">${esc(c.error)}</p>`:!c?'<p class="pj-muted">Project actions are unavailable.</p>':`${actionKind?`<p class="pj-action-filter">${esc(actionKind)} <button data-act-clear-kind>Clear action filter</button></p>`:''}${c.activity.total>c.activity.limit?`<p class="pj-muted">${actionBefore==null?'Latest':'Earlier'} actions · ${c.activity.total} recorded for this date.</p>`:''}<div class="pj-toolbar">${c.activity.next_before!=null?'<button data-older-actions>Older actions</button>':''}${actionBefore!=null?'<button data-latest-actions>Latest actions</button>':''}</div>${groups.length?groups.map(({key,rows})=>{
+        const open=new Set([...actionHost.querySelectorAll('details[open]')].map(d=>d.dataset.workerHistory?'worker:'+d.dataset.workerHistory:d.dataset.actionRepeat));
+        actionHost.innerHTML=`${c?.error?`<p class="pj-continuity-warning">${esc(c.error)} Saved worker history remains available.</p>`:!c?'<p class="pj-muted">System actions are unavailable. Saved worker history remains available.</p>':''}${actionKind?`<p class="pj-action-filter">${esc(actionKind)} <button data-act-clear-kind>Clear action filter</button></p>`:''}${c?.activity?.total>c?.activity?.limit?`<p class="pj-muted">${actionBefore==null?'Latest':'Earlier'} system actions · ${c.activity.total} recorded for this date.${actionBefore!=null?' Choose Latest actions to include saved worker history.':''}</p>`:''}<div class="pj-toolbar">${c?.activity?.next_before!=null?'<button data-older-actions>Older actions</button>':''}${actionBefore!=null?'<button data-latest-actions>Latest actions</button>':''}</div>${groups.length?groups.map(({key,rows})=>{
           const e=rows[0];
-          return `<article class="pj-action"><div><time>${esc(date(e.at))}</time><button data-act-kind="${esc(e.kind)}">${esc(e.kind.replace(/_/g,' '))}</button></div><small>@${esc(e.agent)}</small> ${e.ticket?`<button data-act-ticket="${esc(e.ticket)}">${esc(e.ticket)}</button>`:''}<p>${esc(e.detail)}</p>${e.run_id?`<button data-action-run="${esc(e.run_id)}">Execution record ↗</button>`:''}${e.session&&sessions.some(s=>s.session_id===e.session)?`<button data-act-session="${esc(e.session)}">Open session ↗</button>`:''}${rows.length>1?`<details data-action-repeat="${esc(key)}"><summary>${rows.length} occurrences</summary>${rows.map(row=>`<p>${esc(date(row.at))} · ${esc(row.detail)}</p>`).join('')}</details>`:''}</article>`;
+          return `<article class="pj-action"><div><time>${esc(date(e.at))}</time><button data-act-kind="${esc(e.kind)}">${esc(e.kind.replace(/_/g,' '))}</button></div><small>${esc(e.actor || '@'+e.agent)}</small> ${e.ticket?`<button data-act-ticket="${esc(e.ticket)}">${esc(e.ticket)}</button>`:''}<p>${esc(e.detail)}</p>${e.entry?`<details data-worker-history="${esc(e.entry.id)}"><summary>Recorded details and evidence</summary><div data-worker-body></div></details>`:''}${e.run_id?`<button data-action-run="${esc(e.run_id)}">Execution record ↗</button>`:''}${e.session&&sessions.some(s=>s.session_id===e.session)?`<button data-act-session="${esc(e.session)}">Open session ↗</button>`:''}${rows.length>1?`<details data-action-repeat="${esc(key)}"><summary>${rows.length} occurrences</summary>${rows.map(row=>`<p>${esc(date(row.at))} · ${esc(row.detail)}</p>`).join('')}</details>`:''}</article>`;
         }).join(''):'<p class="pj-muted">No actions recorded for this selection.</p>'}`;
         actionHost.dataset.fingerprint=actionsKey;
         actionHost.querySelectorAll('[data-action-repeat]').forEach(d=>{d.open=open.has(d.dataset.actionRepeat);});
+        actionHost.querySelectorAll('[data-worker-history]').forEach(d=>{
+          const entry=workerActions.find(a=>a.entry.id===d.dataset.workerHistory)?.entry;
+          let rendered=false;
+          d.addEventListener('toggle',()=>{if(d.open&&!rendered&&entry){markdown(d.querySelector('[data-worker-body]'),entry.content || entry.preview,openWiki);rendered=true;}});
+          d.open=open.has('worker:'+d.dataset.workerHistory);
+        });
         actionHost.querySelectorAll('[data-action-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.actionRun);});
         actionHost.querySelectorAll('[data-act-ticket]').forEach(b=>{b.onclick=()=>window.xnautOpenDelivery?.({project:data.project.key,ticket:b.dataset.actTicket,tab:'tests'});});
         actionHost.querySelectorAll('[data-act-session]').forEach(b=>{b.onclick=()=>window.xnautOpenAgentSession?.(b.dataset.actSession,'Agent session');});
@@ -232,8 +247,8 @@
       $('[data-continuity]').querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});
       if(openingFingerprint!==data.opening){markdown($('[data-opening]'),data.opening,openWiki);openingFingerprint=data.opening;}
       $('[data-current]').innerHTML = !snapshot && data.runs.length ? `<h2>Saved run records</h2>${data.runs.filter(r=>!filter||r.ticket===filter).map(r=>`<div class="pj-run"><strong>${esc(r.ticket || r.run_id)} · @${esc(r.agent_handle)}</strong><span>${esc(r.state)} · observed ${esc(date(r.last_seen_at))}</span><p>${esc(r.last_signal)}</p></div>`).join('')}` : '';
-      const shown=data.entries.filter(e=>!filter||e.ticket===filter);
-      $('[data-empty]').textContent=shown.length ? '' : 'No entries recorded for this selection yet. Project-bound chat turns, worker receipts and agent-authored findings appear here as they are saved.';
+      const shown=data.entries.filter(e=>!isWorkerActivity(e)&&(!filter||e.ticket===filter));
+      $('[data-empty]').textContent=shown.length ? '' : 'No notes recorded for this selection yet. Project-bound chat turns and agent-authored notes appear here as they are saved. Worker transitions are in Actions.';
       const container=$('[data-entries]');const existing=new Map([...container.children].map(n=>[n.dataset.id,n]));
       // Reuse unchanged blocks: incoming work must not collapse code or move the reader.
       for(const entry of shown){

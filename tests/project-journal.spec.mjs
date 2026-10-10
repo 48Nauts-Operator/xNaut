@@ -29,15 +29,16 @@ test('closed execution evidence is rendered on demand and survives refresh', asy
     };
     return window.journalInstance.refresh();
   });
-  await expect(page.locator('.pj-entry')).toHaveCount(200);
+  await page.getByRole('tab',{name:'Actions',exact:true}).click();
+  await expect(page.locator('[data-worker-history]')).toHaveCount(200);
   expect(await page.evaluate(() => window.__renderedEvidence)).toBe(0);
-  const first = page.locator('.pj-entry').first();
-  await first.getByText('Execution details and evidence', { exact: true }).click();
-  await expect(first.locator('.pj-evidence')).toContainText('Detailed evidence 0');
+  const first = page.locator('[data-worker-history]').first();
+  await first.getByText('Recorded details and evidence', { exact: true }).click();
+  await expect(first.locator('[data-worker-body]')).toContainText('Detailed evidence 0');
   expect(await page.evaluate(() => window.__renderedEvidence)).toBe(1);
   await page.evaluate(() => window.journalInstance.refresh());
   expect(await page.evaluate(() => window.__renderedEvidence)).toBe(1);
-  await expect(first.locator('details')).toHaveAttribute('open');
+  await expect(first).toHaveAttribute('open');
 });
 
 async function start(page){
@@ -214,22 +215,24 @@ test('review and repair history keeps source attribution and evidence across ref
   ];
  });
  await page.getByRole('button',{name:'Refresh',exact:true}).click();
- const finding=page.locator('[data-id="activity:review"]');
+ await page.getByRole('tab',{name:'Actions',exact:true}).click();
+ const finding=page.locator('.pj-action').filter({has:page.locator('[data-worker-history="activity:review"]')});
  await expect(finding).toContainText('xNAUT coordinator');
+ await finding.getByText('Recorded details and evidence',{exact:true}).click();
  await expect(finding).toContainText('Parser loses the last item');
- await expect(page.locator('[data-id="activity:repair"]')).toContainText('xNAUT coordinator');
  await finding.getByRole('button',{name:'Execution record ↗'}).click();
  expect(await page.evaluate(()=>window.journalCalls.filter(c=>c.name==='project_wiki_source').at(-1).args)).toEqual({project:'DEMO',kind:'run',id:'review-run'});
  await page.getByRole('button',{name:'Close',exact:true}).click();
- await finding.getByText('Execution details and evidence',{exact:true}).click();
  await finding.getByRole('button',{name:'Source evidence'}).click();
  expect(await page.evaluate(()=>window.openedWiki)).toBe('Development/evidence/journal/review.md');
  await page.getByRole('button',{name:'Refresh',exact:true}).click();
  await expect(finding.locator('details')).toHaveAttribute('open');
- await expect(page.locator('[data-entries] .pj-entry')).toHaveCount(2);
+ await expect(page.locator('[data-worker-history]')).toHaveCount(2);
+ await expect(page.locator('[data-entries] .pj-entry')).toHaveCount(0);
  await page.evaluate(()=>window.xnautJournal.mount(document.querySelector('#journal'),'DEMO',p=>{window.openedWiki=p;}));
- await expect(page.locator('[data-entries] .pj-entry')).toHaveCount(2);
- await expect(page.locator('[data-id="activity:repair"]')).toContainText('Preserved the last item');
+ await expect(page.locator('[data-worker-history]')).toHaveCount(2);
+ await page.locator('[data-worker-history="activity:repair"] summary').click();
+ await expect(page.locator('[data-worker-history="activity:repair"]')).toContainText('Preserved the last item');
 });
 
 async function approvedGroups(page) {
