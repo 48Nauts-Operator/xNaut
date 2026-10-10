@@ -58,6 +58,8 @@ export const requiredNative = [
   'swarm_plan::tests::five_queued_members_are_reported_as_five_and_remain_approved',
   'swarm_plan::tests::persisted_approval_pins_repository_runtime_and_resolved_environment',
   'swarm_plan::tests::refill_keeps_shared_native_registry_corruption_fail_closed',
+  'swarm_plan::tests::preview_persists_during_sweep_without_granting_dispatch',
+  'swarm_plan::tests::concurrent_previews_cannot_replace_an_approval',
   'agent_tools::tests::swarm_tools_expose_destination_and_durable_queue_contract',
 ];
 export const browserFiles = [

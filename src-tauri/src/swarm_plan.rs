@@ -320,16 +320,38 @@ fn path_in(registry: &Path, id: &str) -> Result<PathBuf, String> {
 }
 
 fn save_in(registry: &Path, group: &Group) -> Result<(), String> {
+    persist_group_in(registry, group, false)
+}
+
+fn persist_group_in(registry: &Path, group: &Group, create_only: bool) -> Result<(), String> {
     use std::io::Write;
     let path = path_in(registry, &group.plan.id)?;
     std::fs::create_dir_all(path.parent().ok_or("missing group directory")?)
         .map_err(|e| e.to_string())?;
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-    file.write_all(&serde_json::to_vec_pretty(group).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-    std::fs::rename(tmp, path).map_err(|e| e.to_string())
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&tmp).map_err(|e| e.to_string())?;
+        file.write_all(&serde_json::to_vec_pretty(group).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        if create_only {
+            // Publish complete JSON atomically, without replacing an existing
+            // approval. A preview cannot dispatch; it need not take the lease
+            // held across the coordinator's network calls. create_new on the
+            // final file would expose partial JSON to concurrent readers.
+            std::fs::hard_link(&tmp, &path).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    "plan id already exists; approval cannot be replaced".into()
+                } else { e.to_string() }
+            })
+        } else {
+            std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+        }
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result
 }
 
 pub(crate) fn groups_in(registry: &Path, project: Option<&str>) -> Result<Vec<Group>, String> {
@@ -367,11 +389,6 @@ fn latest_approved_group<'a>(groups: &'a [Group], ticket: &str) -> Option<&'a Gr
 }
 
 fn remember_in(registry: &Path, plan: SwarmPlan) -> Result<(), String> {
-    let _lease = GroupLease::acquire(registry)?;
-    let path = path_in(registry, &plan.id)?;
-    if path.exists() {
-        return Err("plan id already exists; approval cannot be replaced".into());
-    }
     let members = plan
         .runs
         .iter()
@@ -385,7 +402,7 @@ fn remember_in(registry: &Path, plan: SwarmPlan) -> Result<(), String> {
             dispatched_scope: None,
         })
         .collect();
-    save_in(
+    persist_group_in(
         registry,
         &Group {
             plan,
@@ -395,6 +412,7 @@ fn remember_in(registry: &Path, plan: SwarmPlan) -> Result<(), String> {
             members,
             events: Vec::new(),
         },
+        true,
     )
 }
 
@@ -3147,6 +3165,56 @@ mod tests {
         drop(first);
         assert!(GroupLease::acquire(&dir).is_ok());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn preview_persists_during_sweep_without_granting_dispatch() {
+        let fixture = RefillFixture::five_remote("exe-dev");
+        let original = groups_in(&fixture.registry, None).unwrap().remove(0);
+        let lease = GroupLease::acquire(&fixture.registry).unwrap();
+        let mut preview = original.plan.clone();
+        preview.id = "preview-during-sweep".into();
+        remember_in(&fixture.registry, preview).unwrap();
+        assert!(GroupLease::acquire(&fixture.registry).is_err(), "planning must not release execution's lease");
+        let groups = groups_in(&fixture.registry, None).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|g| g.approved_at.is_none()
+            && g.members.iter().all(|m| m.state == MemberState::Queued && m.run_id.is_none())));
+        refill_in(&fixture.registry, &fixture.tickets, &fixture,
+            crate::instance::Role::Workstation, false).await.unwrap();
+        assert!(fixture.launched.lock().unwrap().is_empty());
+        drop(lease);
+        std::fs::remove_dir_all(&fixture.registry).unwrap();
+    }
+
+    #[test]
+    fn concurrent_previews_cannot_replace_an_approval() {
+        let fixture = RefillFixture::five_remote("exe-dev");
+        let original = groups_in(&fixture.registry, None).unwrap().remove(0);
+        let barrier = std::sync::Barrier::new(8);
+        let winners = std::thread::scope(|scope| {
+            let attempts: Vec<_> = (0..8).map(|_| scope.spawn(|| {
+                let mut plan = original.plan.clone();
+                plan.id = "same-preview".into();
+                barrier.wait();
+                remember_in(&fixture.registry, plan)
+            })).collect();
+            attempts.into_iter().map(|attempt| attempt.join().unwrap())
+                .filter(Result::is_ok).count()
+        });
+        assert_eq!(winners, 1, "exactly one complete preview must be published");
+        let path = path_in(&fixture.registry, "same-preview").unwrap();
+        let mut group: Group = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        approve(&mut group, 42);
+        save_in(&fixture.registry, &group).unwrap();
+        let approved_bytes = std::fs::read(&path).unwrap();
+        let mut replacement = group.plan.clone();
+        replacement.runs.clear();
+        assert!(remember_in(&fixture.registry, replacement).unwrap_err().contains("approval cannot be replaced"));
+        assert_eq!(std::fs::read(&path).unwrap(), approved_bytes);
+        assert!(std::fs::read_dir(fixture.registry.join("swarm-plans")).unwrap()
+            .all(|entry| entry.unwrap().path().extension().is_none_or(|ext| ext != "tmp")));
+        std::fs::remove_dir_all(&fixture.registry).unwrap();
     }
     #[test]
     fn two_active_workers_leave_third_queued_then_refill_one_slot() {
