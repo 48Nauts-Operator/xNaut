@@ -643,6 +643,18 @@ impl WorkerGroupScope {
         }
         Ok(count)
     }
+    fn count_for_member(&self, registry: &Path, member: &Member) -> Result<usize, String> {
+        let mut count = self.count(registry)?;
+        if let Some(id) = &member.run_id {
+            let run = crate::run_control::load_manifest_in(registry,id)?;
+            if run.state == crate::run_control::RunState::Requested && run.previous_run_id.is_some()
+                && run.ticket.as_deref() == Some(member.ticket.as_str()) && self.contains(&run) {
+                // Its reserved slot is being consumed, not a second slot requested.
+                count = count.saturating_sub(1);
+            }
+        }
+        Ok(count)
+    }
 }
 
 /// Called while native StoreLock is held, before a Requested worker becomes
@@ -1127,6 +1139,24 @@ fn recover_member(
                 }
             };
             if let Some(next) = continuation {
+                if next.state == crate::run_control::RunState::Requested
+                    && next.previous_run_id.as_ref().is_some_and(|id| next.last_signal ==
+                        format!("stopped failed worker recovered without source changes after {id}")) {
+                    let valid_parent = next.previous_run_id.as_ref()
+                        .and_then(|id| crate::run_control::load_manifest_in(registry,id).ok())
+                        .is_some_and(|p| p.state == crate::run_control::RunState::Retired && p.ticket_returned
+                            && p.next_run_id.as_deref() == Some(next.run_id.as_str())
+                            && p.retirement.as_ref().is_some_and(|r| r.stopped_at.is_some()));
+                    let guard = crate::agent_work::recovery_guard(&serde_json::json!(snapshot),ticket,Some(&next));
+                    if !valid_parent || guard.is_err() {
+                        transition(group,i,MemberState::Blocked,
+                            format!("Stopped-worker continuation is not proven: {}",guard.err().unwrap_or_else(||"predecessor stop proof missing".into())),Some(next.run_id),now);
+                        return true;
+                    }
+                    transition(group,i,MemberState::Queued,
+                        "verified stopped-worker continuation is ready for admission".into(),Some(next.run_id),now);
+                    return false;
+                }
                 if next.admission_refused && !crate::run_control::admission_refused_before_execution(&next) {
                     transition(group, i, MemberState::Blocked,
                         "admission refusal conflicts with execution evidence; inspect preserved run before retry".into(),
@@ -1289,7 +1319,7 @@ impl RefillBackend for NativeRefill<'_> {
         .unwrap_or(DEFAULT_MAX_PARALLEL);
         Ok(slot_available(
             &group.members[index],
-            WorkerGroupScope::new(group, &crate::repository_transfer::list()?).count(registry)?,
+            WorkerGroupScope::new(group, &crate::repository_transfer::list()?).count_for_member(registry, &group.members[index])?,
             group.plan.max_parallel.min(profile_cap.clamp(1, HARD_CAP)),
         ))
     }
@@ -2683,7 +2713,7 @@ mod tests {
         fn capacity(&self, registry: &Path, group: &Group, index: usize) -> Result<bool, String> {
             Ok(slot_available(
                 &group.members[index],
-                WorkerGroupScope::new(group, &[]).count(registry)?,
+                WorkerGroupScope::new(group, &[]).count_for_member(registry, &group.members[index])?,
                 group.plan.max_parallel,
             ))
         }
@@ -2706,11 +2736,12 @@ mod tests {
             >,
         > {
             Box::pin(async move {
-                let worktree = self
+                let pending = crate::run_control::continuation_in(&self.registry,&run.ticket)?;
+                let worktree = pending.as_ref().map(|r|r.worktree_path.clone()).unwrap_or_else(|| self
                     .registry
                     .join(format!("work-{}", run.ticket))
                     .to_string_lossy()
-                    .into_owned();
+                    .into_owned());
                 let mut manifest = crate::run_control::RunManifest::requested(
                     &run.owner,
                     "fixture",
@@ -2723,6 +2754,7 @@ mod tests {
                 manifest.branch = run.branch.clone();
                 manifest.project = project;
                 manifest.remote_env = run.environment.clone();
+                crate::run_control::bind_pending_in(&self.registry,&mut manifest)?;
                 let own = manifest.run_id.clone();
                 let registered = crate::run_control::request_in(&self.registry, manifest, || {
                     crate::run_control::worker_capacity_in(&self.registry, 8, &own, None)
@@ -2747,6 +2779,35 @@ mod tests {
                 })
             })
         }
+    }
+
+    #[tokio::test]
+    async fn recovered_failed_worker_uses_its_reserved_slot_and_starts_once() {
+        use crate::{instance::Role,run_control::{self,RunManifest,RunState,Proofs}};
+        let fixture=RefillFixture::five_remote("exe-dev");
+        let mut group=groups_in(&fixture.registry,None).unwrap().remove(0);
+        group.plan.runs.truncate(1);group.members.truncate(1);group.plan.max_parallel=1;
+        save_in(&fixture.registry,&group).unwrap();
+        let planned=&group.plan.runs[0];
+        let mut previous=RunManifest::requested("old-agent","fixture",
+            &fixture.registry.join("original-worktree").to_string_lossy(),Some(planned.ticket.clone()),Some(planned.model.clone()),&[],10);
+        previous.branch="original-preserved-branch".into();previous.project=group.plan.project.clone();previous.remote_env=Some("exe-dev".into());
+        let id=previous.run_id.clone();
+        run_control::request_in(&fixture.registry,previous,||Ok(())).unwrap();
+        run_control::update_in(&fixture.registry,&id,|r|r.state=RunState::Failed).unwrap();
+        let failed=run_control::load_manifest_in(&fixture.registry,&id).unwrap();
+        let proof=Proofs{pid_absent:true,session_known:true,capture_known:true,capture_quiet:true,
+            worktree_exists:true,branch_matches:true,commit:"a".repeat(40),..Default::default()};
+        let child=run_control::reserve_failed_continuation_in(&fixture.registry,&failed,&proof,&planned.model,20,|_|Ok(())).unwrap();
+        refill_in(&fixture.registry,&fixture.tickets,&fixture,Role::Workstation,false).await.unwrap();
+        assert!(fixture.launched.lock().unwrap().is_empty(),"reservation cannot approve a group");
+        confirm_in(&fixture.registry,"remote",false,Role::Workstation,false,|_,_|Ok(())).unwrap();
+        for _ in 0..2 { refill_in(&fixture.registry,&fixture.tickets,&fixture,Role::Workstation,false).await.unwrap(); }
+        assert_eq!(*fixture.launched.lock().unwrap(),vec![planned.ticket.clone()]);
+        let started=run_control::load_manifest_in(&fixture.registry,&child.run_id).unwrap();
+        assert_eq!(started.state,RunState::Starting);
+        assert_eq!(started.worktree_path,failed.worktree_path);assert_eq!(started.branch,failed.branch);
+        assert_eq!(run_control::list_ids_in(&fixture.registry).unwrap().len(),2);
     }
 
     #[tokio::test]

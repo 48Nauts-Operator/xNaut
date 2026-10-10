@@ -36,6 +36,7 @@ export const requiredNative = [
   'cloud_model::tests::repository_preflight_refuses_denied_shell_and_wrong_model_before_approval',
   'dispatch_diagnostics::tests::diagnosis_explains_gateway_default_and_policy_without_disclosing_credentials',
   'agent_tools::tests::dispatch_diagnosis_is_native_and_refuses_worker_callers',
+  'swarm_plan::tests::recovered_failed_worker_uses_its_reserved_slot_and_starts_once',
   'cloud_model::tests::cloud_launch_overrides_worker_defaults_without_putting_credentials_in_argv',
   ...(process.platform === 'win32' ? [] : ['cloud_model::tests::worker_model_protocol_suite']),
   'agent_profiles::compute_choice_tests::remote_prompt_modes_refuse_undeliverable_tasks_and_preserve_explicit_carriers',
