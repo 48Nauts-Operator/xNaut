@@ -82,7 +82,7 @@ pub struct Handback {
     #[serde(default)]
     pub commits: Vec<String>,
     /// What was RUN and what it said. Not an adjective.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "verification_text")]
     pub how_verified: String,
     /// The sandbox verify record, when one exists.
     #[serde(default)]
@@ -100,6 +100,30 @@ pub struct Handback {
     pub from: String,
     #[serde(default)]
     pub submitted_at: String,
+}
+
+/// Agents may report several checks as strings or typed command/result pairs.
+/// Preserve that evidence verbatim in the existing canonical text field. This
+/// does not award a pass: the ordinary reviewability and execution gates apply.
+fn verification_text<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CommandResult { command: String, result: String }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry { Text(String), Command(CommandResult) }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Evidence { Text(String), Checks(Vec<Entry>) }
+    match Evidence::deserialize(deserializer)? {
+        Evidence::Text(text) => Ok(text),
+        Evidence::Checks(checks) => checks.into_iter().map(|check| match check {
+            Entry::Text(text) => Ok(text),
+            Entry::Command(check) if !check.command.trim().is_empty() && !check.result.trim().is_empty() =>
+                Ok(format!("{}: {}", check.command, check.result)),
+            Entry::Command(_) => Err(serde::de::Error::custom("verification command and result must both be nonempty")),
+        }).collect::<Result<Vec<_>, _>>().map(|checks| checks.join("\n")),
+    }
 }
 
 /// One thing wrong with a handback, and what to write instead.
@@ -460,6 +484,23 @@ pub fn review(handback: &Handback) -> Verdict {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_result_verification_evidence_preserves_the_pi_handback_contract() {
+        let mut value = serde_json::json!({"summary":"Implemented component", "files_changed":["component.py"],
+            "commits":["e94b7e3"], "how_verified":[{"command":"python3 -m unittest -v","result":"exit 0; Ran 2 tests; OK"}],
+            "not_finished":"nothing","confidence":"high"});
+        let parsed: super::Handback = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(parsed.how_verified, "python3 -m unittest -v: exit 0; Ran 2 tests; OK");
+        assert_eq!(serde_json::to_value(&parsed).unwrap()["how_verified"], parsed.how_verified);
+        value["how_verified"] = serde_json::json!(["cargo test: exit 1", "npm test: exit 0"]);
+        assert_eq!(serde_json::from_value::<super::Handback>(value.clone()).unwrap().how_verified, "cargo test: exit 1\nnpm test: exit 0");
+        for bad in [serde_json::json!([{"command":"", "result":"passed"}]),
+            serde_json::json!([{"command":"cargo test"}]), serde_json::json!([true]),
+            serde_json::json!([{"command":"cargo test","result":"failed","ignored_failure":true}])] {
+            value["how_verified"] = bad;
+            assert!(serde_json::from_value::<super::Handback>(value.clone()).is_err());
+        }
+    }
     use super::*;
 
     /// A handback that passes. Every test below starts here and breaks ONE

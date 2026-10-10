@@ -715,7 +715,7 @@ pub fn stage(transfer: &Transfer, access: &crate::worker_bootstrap::Access) -> R
 pub fn instructions(t: &Transfer) -> String {
     format!("\n\nRepository delivery for this run (overrides local callback instructions):\n\
         Work only on branch {branch}. Commit authorized source changes there. Store ALL task reports, notes, screenshots, pictures, and videos under {artifacts}/; media there is tracked using Git LFS. Never publish credentials or caches.\n\
-        Write {artifacts}/handback.json with summary, files_changed (paths), commits (SHAs), how_verified (commands and results), not_finished (say 'nothing' only when true), confidence ('low', 'medium', or 'high').\n\
+        Write {artifacts}/handback.json with summary (string), files_changed (array of path strings), commits (array of SHA strings), how_verified (string containing commands and results, or an array of command/result string pairs), not_finished (string; say 'nothing' only when true), confidence ('low', 'medium', or 'high').\n\
         When finished run: python3 .git/xnaut-publish.py --finish 0\n\
         This durably pushes the task branch to the project's configured repository. If it fails, report upload pending; files stay on this worker. Do not claim delivery until it succeeds. Do not call desktop localhost handback/Mesh endpoints. xNAUT will import the handback and open the PR on reconnect. Do not merge or push the default branch.\n",
         branch=t.branch, artifacts=t.artifacts)
