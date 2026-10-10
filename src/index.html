@@ -11,6 +11,7 @@
   <script src="js/full-wiki-preview.js"></script>
   <link rel="stylesheet" href="vendor/xterm.css" />
   <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/app-updates.css" />
   <link rel="stylesheet" href="css/voice-overlay.css" />
   <!-- tokens.css loads LAST so its legacy aliases override styles.css :root -->
   <link rel="stylesheet" href="css/tokens.css" />
@@ -78,6 +79,7 @@
         <button id="btn-open-repo" class="btn-icon" title="Open repo in browser" aria-label="Open project repository in browser">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="6" r="1.5"/><path d="M4.5 5v6M4.5 9.5h3a2 2 0 0 0 2-2v-.5"/></svg>
         </button>
+        <button id="btn-updates" class="update-chip" hidden aria-haspopup="dialog" aria-controls="update-panel">Update available</button>
         <div class="menu-anchor">
           <button id="btn-more-menu" class="btn-icon" title="More" aria-haspopup="menu" aria-expanded="false" aria-label="More actions">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="3.5" cy="8" r="0.8" fill="currentColor"/><circle cx="8" cy="8" r="0.8" fill="currentColor"/><circle cx="12.5" cy="8" r="0.8" fill="currentColor"/></svg>
@@ -102,6 +104,7 @@
                  as ambiguous as a duplicate. This one shares no substring with
                  either, and still contains the visible text (WCAG 2.5.3). -->
             <div class="menu-item" role="menuitem" data-action="settings" aria-label="xNAUT settings">Settings</div>
+            <div class="menu-item" role="menuitem" data-action="updates" tabindex="0">Updates…</div>
             <!-- XNAUT-75: the startup self-check and the way to debug.log. Here
                  rather than only on the failure banner, because a log nobody
                  can find until something breaks is not discoverable. -->
@@ -724,6 +727,7 @@ Regular text between code blocks is supported too!"></textarea>
   <script src="js/conversation-storage.js"></script>
   <script src="js/durable-agent-turns.js"></script>
   <script src="js/snippet-sections.js"></script>
+  <script src="js/app-updates.js"></script>
   <script src="js/app.js"></script>
   <script src="js/model-catalog.js"></script>
   <script src="js/chat-model-picker.js"></script>

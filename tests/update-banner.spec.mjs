@@ -1,264 +1,319 @@
-// Delta test for the update banner, from tron's run 20260813-124712.
-//
-// Two defects, independent of each other, both reachable from here:
-//   1. CURRENT_VERSION is a hand-maintained constant that stopped being updated
-//      at 1.5.0, so the GitHub fallback concludes an update exists for every
-//      release after that one, including the one that is already running.
-//   2. The banner is position:fixed at top:0 with no layout offset, so it lands
-//      on top of the top bar instead of pushing it down. That one hits every
-//      user the moment a genuine update exists, whatever CURRENT_VERSION says.
-//
-// The stub has no window.__TAURI__.updater, so checkForUpdates() takes the
-// GitHub-API path. We answer that fetch ourselves rather than reaching the real
-// release, so the test asserts on the comparison and not on what happens to be
-// tagged today.
+// Update UI contract with Tauri 2's staged API. No production payload is
+// installed by these tests; native discovery/signing has separate smoke gates.
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-
-const APP_VERSION = JSON.parse(
-  await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
-).version;
-
-const RELEASES = 'https://api.github.com/repos/48Nauts-Operator/xNaut/releases/latest';
-
-// checkForUpdates() is fired on a 3s timer; the fetch and the banner follow it.
-const AFTER_UPDATE_CHECK = 6000;
-
-async function openWithLatestRelease(page, tag) {
-  await page.route(RELEASES, (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ tag_name: tag, html_url: 'https://example.invalid/release' }),
-  }));
-  await page.goto('/?stub=1');
-  await page.waitForTimeout(AFTER_UPDATE_CHECK);
-}
-
-// Counting calls to getVersion would not prove much, because the usage footer
-// asks for it too. This is the assertion that pins it: if the update check went
-// back to comparing against a constant, a rejected getVersion would not stop it
-// and the banner would appear anyway.
-test('no update is offered when the running version cannot be determined', async ({ page }) => {
-  await page.addInitScript(() => {
-    const install = setInterval(() => {
-      const app = window.__TAURI__?.app;
-      if (!app?.getVersion) return;
-      clearInterval(install);
-      app.getVersion = () => Promise.reject(new Error('no version'));
-    }, 10);
-  });
-
-  await openWithLatestRelease(page, 'v99.0.0');
-
-  await expect(page.locator('#update-banner'),
-    'offered an update without knowing what it was updating from').toHaveCount(0);
-});
-
-test('no update is offered when the latest release is the running one', async ({ page }) => {
-  await openWithLatestRelease(page, `v${APP_VERSION}`);
-
-  const banner = page.locator('#update-banner');
-  await expect(banner, `offered an update from ${APP_VERSION} to ${APP_VERSION}`).toHaveCount(0);
-});
-
-test('a real update does not cover the top bar', async ({ page }) => {
-  // Far enough ahead that this stays a genuine update whatever we ship next.
-  await openWithLatestRelease(page, 'v99.0.0');
-
-  const banner = page.locator('#update-banner');
-  await expect(banner, 'expected a banner for a genuinely newer release').toHaveCount(1);
-
-  // Every top-bar control must still be the thing under its own coordinates.
-  const covered = await page.evaluate(() => {
-    const bar = document.querySelector('.top-bar');
-    const out = [];
-    for (const el of bar.querySelectorAll('button, [role="button"]')) {
-      const r = el.getBoundingClientRect();
-      if (!r.width || !r.height) continue;
-      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      if (hit && !el.contains(hit) && !hit.contains(el)) {
-        out.push({ name: el.getAttribute('aria-label') || el.title || el.textContent.trim(), by: hit.id || hit.className });
-      }
-    }
-    return out;
-  });
-
-  expect(covered, `top-bar controls covered by the banner: ${JSON.stringify(covered)}`).toEqual([]);
-});
-
-// ---------------------------------------------------------------------------
-// XNAUT-70: the download half.
-//
-// The payload had never been retrieved by any client on any machine, and the
-// reason nobody could say WHY is that showUpdateBanner() raced
-// downloadAndInstall() against a 60s timer. When the timer won, the real
-// rejection lost the race and became a promise with no handler — so the button
-// said "Failed - download manually" whether the request had 404ed, stalled on
-// a socket, or simply not finished a 26.5MB download yet.
-//
-// These tests drive a fake update object, because the thing under test is the
-// frontend's contract with tauri-plugin-updater: does it hand Rust a timeout,
-// does it subscribe to progress, and does it report what actually happened.
-//
-// The plugin's event shape is fixed by updater/src/commands.rs (DownloadEvent,
-// #[serde(tag="event", content="data")] with camelCase fields), so the fakes
-// below emit exactly {event:'Started',data:{contentLength}} etc.
-
+const APP_VERSION = JSON.parse(await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8')).version;
+const FEED = 'https://github.com/48Nauts-Operator/xNaut/releases/latest/download/latest.json';
 const MB = 1048576;
 
-/** Installs a controllable window.__TAURI__.updater before any page script.
- *
- * The stub in tests/static-server.mjs deliberately has no updater, so without
- * this checkForUpdates() takes the GitHub-API path and never produces an
- * updateObj — which is the path the three tests above cover. */
-async function withFakeUpdater(page, { withProcess = true } = {}) {
-  await page.addInitScript(({ withProcess }) => {
-    const probe = { calls: 0, options: null, emit: null, settled: null, relaunched: 0 };
-    window.__updateProbe = () => ({ calls: probe.calls, options: probe.options, relaunched: probe.relaunched, subscribed: typeof probe.emit === 'function' });
-    window.__updateEmit = (event) => { if (probe.emit) probe.emit(event); };
-    window.__updateResolve = () => { if (probe.settled) probe.settled.resolve(); };
-    window.__updateReject = (why) => { if (probe.settled) probe.settled.reject(new Error(why)); };
-
-    const install = setInterval(() => {
-      if (!window.__TAURI__) return;
-      clearInterval(install);
-      window.__TAURI__.updater = {
-        check: () => Promise.resolve({
-          available: true,
-          version: '99.0.0',
-          downloadAndInstall: (onEvent, options) => {
-            probe.calls += 1;
-            probe.emit = onEvent;
-            probe.options = options || null;
-            return new Promise((resolve, reject) => { probe.settled = { resolve, reject }; });
+async function fixture(page, options = {}) {
+  await page.route('**/__stub.js', async route => {
+    const response = await route.fetch();
+    const script = ({ current, plugin = true, process = true, path = '/Applications/xNAUT.app/Contents/Resources' }) => {
+      const state = { checks: 0, downloads: 0, installs: 0, restarts: 0, closed: [], options: {}, release: '99.0.0' };
+      window.__updates = state;
+      window.xnautUpdateStallMs = 400;
+      window.__TAURI__.app.getVersion = async () => { if (current === 'error') throw new Error('Version unavailable'); return current; };
+      window.__TAURI__.path = { ...window.__TAURI__.path, resourceDir: async () => path };
+      if (process) window.__TAURI__.process = { relaunch: async () => { state.restarts++; if (state.restartError) throw new Error(state.restartError); } };
+      if (!plugin) return;
+      window.__TAURI__.updater = { check: async options => {
+        state.checks++; state.options.check = options;
+        if (state.checkError) throw new Error(state.checkError);
+        if (state.holdCheck) await new Promise(resolve => { state.resolveCheck = resolve; });
+        const id = state.checks;
+        return state.release ? {
+          version: state.release, body: 'Changes for this release. <img src=x onerror="window.unsafeNotes=true">',
+          close: async () => { state.closed.push(id); },
+          download: (emit, options) => {
+            state.downloads++; state.options.download = options; state.emit = emit;
+            return new Promise((resolve, reject) => { state.resolveDownload = resolve; state.rejectDownload = why => reject(new Error(why)); });
           },
-        }),
-      };
-      if (withProcess) {
-        window.__TAURI__.process = { relaunch: () => { probe.relaunched += 1; return Promise.resolve(); } };
-      }
-    }, 5);
-  }, { withProcess });
-}
-
-/** Opens the app, waits for the banner, and sets the stall threshold so a test
- * does not have to wait the production 90 seconds for the watchdog.
- *
- * The button is located by position, not by text: its label is the thing under
- * test and changes as the download runs, so a hasText locator would stop
- * matching the moment the assertions get interesting. */
-async function openWithBanner(page, stallMs = 20000) {
+          install: async () => {
+            state.installs++;
+            if (state.installError) throw new Error(state.installError);
+            if (state.holdInstall) await new Promise(resolve => { state.resolveInstall = resolve; });
+          },
+        } : null;
+      } };
+    };
+    await route.fulfill({ response, body: `${await response.text()}\n(${script.toString()})(${JSON.stringify({ current: APP_VERSION, ...options })});` });
+  });
+  await page.route(FEED, route => route.fulfill({ json: { version: '99.0.0', notes: 'Fallback release notes' } }));
   await page.goto('/?stub=1');
-  const banner = page.locator('#update-banner');
-  await expect(banner).toHaveCount(1, { timeout: 15000 });
-  await page.evaluate((ms) => { window.xnautUpdateStallMs = ms; }, stallMs);
-  return banner.locator('button').first();
+  await page.waitForFunction(() => !!document.getElementById('btn-more-menu')?.onclick);
+}
+async function open(page) {
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Updates…', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Updates', exact: true })).toBeVisible();
+  return page.locator('#update-panel');
+}
+const status = page => page.locator('#update-panel [data-status]');
+const action = page => page.locator('#update-panel [data-primary]');
+async function ready(page) {
+  await action(page).click();
+  await page.evaluate(() => { window.__updates.emit({ event: 'Finished' }); window.__updates.resolveDownload(); });
+  await expect(action(page)).toHaveText('Install and restart now');
 }
 
-/** Click, then wait until the download has actually been handed to the fake —
- * dispatching the click is not the same as the handler having run. */
-async function startDownload(page, btn) {
-  await btn.click();
-  await expect.poll(() => page.evaluate(() => window.__updateProbe().subscribed),
-    { message: 'the click never reached downloadAndInstall()' }).toBe(true);
+test('automatic discovery is quiet, leaves controls clickable, and never downloads', async ({ page }) => {
+  await fixture(page);
+  await expect(page.locator('#btn-updates')).toBeVisible({ timeout: 6000 });
+  await expect(page.locator('#update-panel')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__updates.downloads)).toBe(0);
+  const covered = await page.evaluate(() => [...document.querySelectorAll('.top-bar button')].filter(el => {
+    const r = el.getBoundingClientRect();
+    const hit = r.width && r.height && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return hit && !el.contains(hit) && !hit.contains(el);
+  }).map(el => el.id));
+  expect(covered).toEqual([]);
+  await page.locator('#btn-updates').click();
+  await expect(status(page)).toContainText('99.0.0 is available');
+});
+
+test('manual checks remain reachable when current, offline or version lookup fails', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(version => { window.__updates.release = version; }, APP_VERSION);
+  await open(page);
+  await expect(status(page)).toHaveText('You’re up to date.');
+  await expect(page.locator('#btn-updates')).toBeHidden();
+  await page.evaluate(() => { window.__updates.checkError = 'Network unavailable'; });
+  await page.getByRole('button', { name: 'Check now', exact: true }).click();
+  await expect(status(page)).toContainText('Network unavailable');
+  await page.evaluate(() => { window.__updates.checkError = ''; window.__updates.release = '99.0.0'; });
+  await page.getByRole('button', { name: 'Check now', exact: true }).click();
+  await expect(status(page)).toContainText('99.0.0 is available');
+  expect(await page.evaluate(() => window.__updates.options.check.timeout)).toBe(20000);
+});
+
+test('unknown installed version never offers an update', async ({ page }) => {
+  await fixture(page, { current: 'error' }); await open(page);
+  await expect(status(page)).toContainText('Version unavailable');
+  await expect(action(page)).toBeHidden();
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(0);
+});
+
+for (const path of ['/tmp/.worktrees/test/xNAUT.app', '/tmp/target/debug', '/tmp/target/release']) {
+  test(`development bundle is never updated: ${path}`, async ({ page }) => {
+    await fixture(page, { path }); await open(page);
+    await expect(status(page)).toContainText('disabled for development');
+    expect(await page.evaluate(() => window.__updates.checks)).toBe(0);
+    await expect(action(page)).toBeHidden();
+  });
 }
 
-test('the download is given a request timeout, so a wedged socket cannot hang forever', async ({ page }) => {
-  await withFakeUpdater(page);
-  const btn = await openWithBanner(page);
-  await startDownload(page, btn);
-
-  const probe = await page.evaluate(() => window.__updateProbe());
-  expect(probe.calls, 'Update Now did not start a download').toBe(1);
-  // tauri-plugin-updater applies a reqwest timeout only when one is passed
-  // (updater.rs: `if let Some(timeout) = self.timeout`). Passing none is what
-  // let a stalled connect hang with no error for the JS timer to explain away.
-  expect(typeof probe.options?.timeout,
-    'downloadAndInstall() was called with no timeout, so Rust builds a client that never gives up').toBe('number');
-  expect(probe.options.timeout).toBeGreaterThan(60000);
-  expect(probe.subscribed, 'no onEvent handler, so progress is unobservable').toBe(true);
+test('fallback uses release feed, safe text notes and an honest external download action', async ({ page }) => {
+  await fixture(page, { plugin: false }); await open(page);
+  await expect(action(page)).toHaveText('Download from website');
+  await page.getByText('What’s new', { exact: true }).click();
+  await expect(page.locator('[data-notes]')).toHaveText('Fallback release notes');
+  await page.evaluate(() => { window.__TAURI__.shell = { open: async url => { window.__openedRelease = url; } }; });
+  await action(page).click();
+  expect(await page.evaluate(() => window.__openedRelease)).toBe('https://github.com/48Nauts-Operator/xNaut/releases/latest');
 });
 
-test('the button reports real bytes instead of a fixed "Downloading..."', async ({ page }) => {
-  await withFakeUpdater(page);
-  const btn = await openWithBanner(page);
-  await startDownload(page, btn);
-
-  await page.evaluate((total) => window.__updateEmit({ event: 'Started', data: { contentLength: total } }), 26 * MB);
-  await page.evaluate((chunk) => window.__updateEmit({ event: 'Progress', data: { chunkLength: chunk } }), 3 * MB);
-
-  await expect(btn).toHaveText(/3\.0 MB \/ 26\.0 MB/);
+test('progress survives closing and reopening; Finished is verification, not installation', async ({ page }) => {
+  await fixture(page); await open(page); await action(page).click();
+  expect(await page.evaluate(() => window.__updates.options.download.timeout)).toBe(15 * 60 * 1000);
+  await page.evaluate(MB => {
+    window.__updates.emit({ event: 'Started', data: { contentLength: 26 * MB } });
+    window.__updates.emit({ event: 'Progress', data: { chunkLength: 7 * MB } });
+  }, MB);
+  await expect(status(page)).toContainText('7.0 MB / 26.0 MB');
+  await page.getByRole('button', { name: 'Close updates', exact: true }).click();
+  await page.locator('#btn-updates').click();
+  await expect(status(page)).toContainText('7.0 MB / 26.0 MB');
+  await page.evaluate(() => window.__updates.emit({ event: 'Finished' }));
+  await expect(status(page)).toHaveText('Verifying the downloaded update…');
+  expect(await page.evaluate(() => window.__updates.installs)).toBe(0);
+  await page.evaluate(() => window.__updates.resolveDownload());
+  await expect(status(page)).toContainText('downloaded and verified');
+  expect(await page.evaluate(() => [window.__updates.installs, window.__updates.restarts])).toEqual([0, 0]);
 });
 
-test('a download slower than the old 60s timer is not called a failure', async ({ page }) => {
-  await withFakeUpdater(page);
-  const btn = await openWithBanner(page, 400);
-  await startDownload(page, btn);
-  await page.evaluate((total) => window.__updateEmit({ event: 'Started', data: { contentLength: total } }), 26 * MB);
-
-  // Bytes keep arriving, slowly, for longer than several watchdog ticks. The
-  // old code declared failure on the wall clock alone; this one must not.
-  for (let i = 0; i < 16; i++) {
-    await page.waitForTimeout(150);
-    await page.evaluate((chunk) => window.__updateEmit({ event: 'Progress', data: { chunkLength: chunk } }), MB / 4);
-  }
-
-  await expect(btn, 'a healthy but slow download was reported as failed').not.toHaveText(/fail|manually|Stalled|No response/i);
-  await expect(btn).toHaveText(/4\.0 MB \/ 26\.0 MB/);
+test('stall does not manufacture failure or allow overlapping requests; actual failure can retry', async ({ page }) => {
+  await fixture(page); await open(page); await action(page).click();
+  await expect(status(page)).toContainText('No response yet');
+  await expect(action(page)).toBeDisabled();
+  await page.evaluate(() => window.__updates.emit({ event: 'Progress', data: { chunkLength: 1048576 } }));
+  await expect(status(page)).toContainText('Downloading 1.0 MB');
+  await page.evaluate(() => window.__updates.rejectDownload('TLS connection failed'));
+  await expect(status(page)).toContainText('TLS connection failed');
+  await expect(action(page)).toHaveText('Retry download');
+  await action(page).click();
+  expect(await page.evaluate(() => window.__updates.downloads)).toBe(2);
 });
 
-test('a request that never answers is reported as no response, not as a generic failure', async ({ page }) => {
-  await withFakeUpdater(page);
-  const btn = await openWithBanner(page, 400);
-  await startDownload(page, btn);
-
-  // Nothing emitted at all: this is the "0 downloads of the payload" case.
-  await expect(btn).toHaveText(/No response/, { timeout: 5000 });
-
-  // And when the real rejection finally lands it is still reported, with the
-  // phase it died in. Under the old race this error had no handler at all.
-  await page.evaluate(() => window.__updateReject('error sending request for url'));
-  await expect(page.locator('#update-banner')).toContainText(/request failed: error sending request for url/);
+test('signature rejection after Finished is never presented as a verified or installed update', async ({ page }) => {
+  await fixture(page); await open(page); await action(page).click();
+  await page.evaluate(() => { window.__updates.emit({ event: 'Finished' }); window.__updates.rejectDownload('Signature mismatch'); });
+  await expect(status(page)).toContainText('Download or verification failed: Signature mismatch');
+  expect(await page.evaluate(() => [window.__updates.installs, window.__updates.restarts])).toEqual([0, 0]);
 });
 
-test('an install failure is not reported as a download failure', async ({ page }) => {
-  await withFakeUpdater(page);
-  const btn = await openWithBanner(page);
-  await startDownload(page, btn);
-
-  await page.evaluate((total) => window.__updateEmit({ event: 'Started', data: { contentLength: total } }), 26 * MB);
-  await page.evaluate((chunk) => window.__updateEmit({ event: 'Progress', data: { chunkLength: chunk } }), 26 * MB);
-  await page.evaluate(() => window.__updateEmit({ event: 'Finished' }));
-  await expect(btn).toHaveText(/Installing/);
-
-  await page.evaluate(() => window.__updateReject('Failed to move the new app into place'));
-  await expect(page.locator('#update-banner')).toContainText(/install failed: Failed to move the new app into place/);
+test('explicit install waits for saved conversations and only then installs and restarts', async ({ page }) => {
+  await fixture(page); await open(page); await ready(page);
+  await page.evaluate(() => {
+    const invoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = async (cmd, args) => {
+      if (cmd === 'conversation_store_put') await new Promise(resolve => { window.__finishSave = resolve; });
+      return invoke(cmd, args);
+    };
+    window.xnautConversationStorage.setItem('xnaut-chat-history:pending', '[{"role":"user","content":"Keep this"}]');
+  });
+  await action(page).click();
+  await expect(status(page)).toContainText('Checking saved conversations');
+  expect(await page.evaluate(() => [window.__updates.installs, window.__updates.restarts])).toEqual([0, 0]);
+  await page.evaluate(() => window.__finishSave());
+  await expect.poll(() => page.evaluate(() => window.__updates.restarts)).toBe(1);
+  expect(await page.evaluate(() => window.__updates.installs)).toBe(1);
+  expect(await page.evaluate(() => localStorage.getItem('xnaut-conversation-pending:xnaut-chat-history:pending'))).toBeNull();
 });
 
-test('an installed update offers a restart instead of sitting on "Downloading..."', async ({ page }) => {
-  await withFakeUpdater(page);
-  const btn = await openWithBanner(page);
-  await startDownload(page, btn);
-  await page.evaluate(() => window.__updateEmit({ event: 'Finished' }));
-
-  // downloadAndInstall() resolving means the new app is on disk and we are
-  // still the old process. tauri-plugin-updater never relaunches on macOS, so
-  // the old code's "Tauri will restart automatically" left the button disabled
-  // on "Downloading..." forever — on a SUCCESSFUL update.
-  await page.evaluate(() => window.__updateResolve());
-  await expect(btn).toHaveText(/Restart now/);
-  await expect(page.locator('#update-banner')).toContainText(/is installed/);
-
-  await btn.click();
-  const probe = await page.evaluate(() => window.__updateProbe());
-  expect(probe.relaunched, 'Restart now did not relaunch the app').toBe(1);
+test('failed native saves block installation and preserve the outbox', async ({ page }) => {
+  await fixture(page); await open(page); await ready(page);
+  await page.evaluate(async () => {
+    window.__xnautStub.conversation_store_put = { __reject: 'Disk full' };
+    window.xnautConversationStorage.setItem('xnaut-chat-history:failure', 'Keep this');
+    await window.xnautConversationStorage.flush();
+  });
+  await action(page).click();
+  await expect(status(page)).toContainText('Restart paused: Conversation changes are not saved');
+  expect(await page.evaluate(() => [window.__updates.installs, window.__updates.restarts])).toEqual([0, 0]);
+  expect(await page.evaluate(() => localStorage.getItem('xnaut-conversation-pending:xnaut-chat-history:failure'))).toContain('Keep this');
 });
 
-test('without the process plugin the banner says how to finish, and does not pretend to restart', async ({ page }) => {
-  await withFakeUpdater(page, { withProcess: false });
-  const btn = await openWithBanner(page);
-  await startDownload(page, btn);
-  await page.evaluate(() => window.__updateResolve());
+test('install failure retries the staged payload; restart failure never reinstalls', async ({ page }) => {
+  await fixture(page); await open(page); await ready(page);
+  await page.evaluate(() => { window.__updates.installError = 'Cannot replace app'; });
+  await action(page).click();
+  await expect(status(page)).toContainText('Installation failed: Cannot replace app');
+  expect(await page.evaluate(() => window.__updates.restarts)).toBe(0);
+  await page.evaluate(() => { window.__updates.installError = ''; window.__updates.restartError = 'Process unavailable'; });
+  await action(page).click();
+  await expect(status(page)).toContainText('restart failed: Process unavailable');
+  await expect(action(page)).toHaveText('Retry restart');
+  await page.evaluate(() => { window.__updates.restartError = ''; });
+  await action(page).click();
+  expect(await page.evaluate(() => [window.__updates.downloads, window.__updates.installs, window.__updates.restarts])).toEqual([1, 2, 2]);
+});
 
-  await expect(btn).toHaveText(/Quit and reopen/);
+test('missing relaunch plugin gives accurate manual completion instructions', async ({ page }) => {
+  await fixture(page, { process: false }); await open(page); await ready(page); await action(page).click();
+  await expect(status(page)).toContainText('Quit and reopen xNAUT to finish');
+  await expect(action(page)).toBeHidden();
+});
+
+test('checks serialize; download and staged update cannot be replaced by wake or reconnect', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { window.__updates.holdCheck = true; });
+  await open(page);
+  await page.evaluate(() => { window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('focus')); });
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(1);
+  await page.evaluate(() => { window.__updates.holdCheck = false; window.__updates.resolveCheck(); });
+  await expect(action(page)).toHaveText('Download update');
+  await action(page).click();
+  await page.evaluate(() => { window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('focus')); });
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(1);
+  await page.evaluate(() => window.__updates.resolveDownload());
+  await expect(action(page)).toHaveText('Install and restart now');
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(1);
+  await expect(page.getByRole('button', { name: 'Check now', exact: true })).toBeDisabled();
+});
+
+test('rechecks close replaced native resources and render release notes as text', async ({ page }) => {
+  await fixture(page); await open(page);
+  await expect(action(page)).toHaveText('Download update');
+  await page.getByText('What’s new', { exact: true }).click();
+  await expect(page.locator('[data-notes]')).toContainText('<img');
+  expect(await page.evaluate(() => window.unsafeNotes)).toBeUndefined();
+  await page.getByRole('button', { name: 'Check now', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__updates.closed)).toEqual([1]);
+  await page.evaluate(() => { window.__updates.release = null; });
+  await page.getByRole('button', { name: 'Check now', exact: true }).click();
+  await expect(status(page)).toHaveText('You’re up to date.');
+  expect(await page.evaluate(() => window.__updates.closed)).toEqual([1, 2]);
+});
+
+test('snooze survives reload without hiding Updates from the menu; a newer version appears', async ({ page }) => {
+  await fixture(page); await open(page);
+  await page.getByRole('button', { name: 'Remind me tomorrow', exact: true }).click();
+  await expect(page.locator('#btn-updates')).toBeHidden();
+  await page.reload();
+  await page.waitForFunction(() => !!document.getElementById('btn-more-menu')?.onclick);
+  await open(page); await expect(status(page)).toContainText('99.0.0 is available');
+  await expect(page.locator('#btn-updates')).toBeHidden();
+  await page.evaluate(() => { window.__updates.release = '99.0.1'; });
+  await page.getByRole('button', { name: 'Check now', exact: true }).click();
+  await expect(status(page)).toContainText('99.0.1 is available');
+  await expect(page.locator('#btn-updates')).toBeVisible();
+});
+
+test('automatic checks are opt-out and manual checks still work after reload', async ({ page }) => {
+  await fixture(page); await open(page);
+  await page.getByLabel('Automatically check for updates', { exact: true }).uncheck();
+  await page.reload(); await page.waitForTimeout(3600);
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(0);
+  await open(page); await expect(status(page)).toContainText('99.0.0 is available');
+  await expect(page.getByLabel('Automatically check for updates', { exact: true })).not.toBeChecked();
+});
+
+test('reconnect retries a failed check and normal focus is throttled', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { window.__updates.checkError = 'Offline'; });
+  await open(page); await expect(status(page)).toContainText('Offline');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(1);
+  await page.evaluate(() => { window.__updates.checkError = ''; window.dispatchEvent(new Event('online')); });
+  await expect(status(page)).toContainText('99.0.0 is available');
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(2);
+});
+
+test('checks again after six hours, without checking on every focus event', async ({ page }) => {
+  await fixture(page); await open(page);
+  await expect(status(page)).toContainText('99.0.0 is available');
+  await page.clock.setFixedTime(Date.now() + 6 * 60 * 60 * 1000 + 1000);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => page.evaluate(() => window.__updates.checks)).toBe(2);
+  await expect(status(page)).toContainText('99.0.0 is available');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await page.evaluate(() => window.__updates.checks)).toBe(2);
+});
+
+test('invalid release metadata is reported, not mistaken for up to date', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { window.__updates.release = 'not-a-version'; });
+  await open(page);
+  await expect(status(page)).toContainText('invalid stable version');
+  await expect(action(page)).toBeHidden();
+  expect(await page.evaluate(() => window.__updates.closed)).toEqual([1]);
+});
+
+test('installation is serialized even if the action is triggered twice', async ({ page }) => {
+  await fixture(page); await open(page); await ready(page);
+  await page.evaluate(() => { window.__updates.holdInstall = true; });
+  await action(page).click();
+  await expect(status(page)).toContainText('Installing xNAUT');
+  await page.evaluate(() => document.querySelector('[data-primary]').dispatchEvent(new MouseEvent('click')));
+  expect(await page.evaluate(() => window.__updates.installs)).toBe(1);
+  await page.evaluate(() => window.__updates.resolveInstall());
+  await expect.poll(() => page.evaluate(() => window.__updates.restarts)).toBe(1);
+  await expect(action(page)).toBeHidden();
+});
+
+test('conversation writes queued while installation finishes are saved before relaunch', async ({ page }) => {
+  await fixture(page); await open(page); await ready(page);
+  await page.evaluate(() => { window.__updates.holdInstall = true; });
+  await action(page).click();
+  await expect(status(page)).toContainText('Installing xNAUT');
+  await page.evaluate(async () => {
+    window.__xnautStub.conversation_store_put = { __reject: 'Disk full' };
+    window.xnautConversationStorage.setItem('xnaut-chat-history:late', 'Retain late write');
+    await window.xnautConversationStorage.flush();
+    window.__updates.resolveInstall();
+  });
+  await expect(status(page)).toContainText('Update installed; restart failed: Conversation changes are not saved');
+  expect(await page.evaluate(() => window.__updates.restarts)).toBe(0);
 });

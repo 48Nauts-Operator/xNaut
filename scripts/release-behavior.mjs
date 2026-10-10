@@ -54,6 +54,7 @@ export const requiredNative = [
   'agent_tools::tests::swarm_tools_expose_destination_and_durable_queue_contract',
 ];
 export const browserFiles = [
+  'update-banner.spec.mjs',
   'durable-agent-turns.spec.mjs',
   'nautbot-swarm.spec.mjs', 'dispatch-from-ticket.spec.mjs', 'approval-inbox.spec.mjs',
   'console-clean.spec.mjs', 'settings-hidden-lifecycle.spec.mjs',

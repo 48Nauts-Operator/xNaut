@@ -1,0 +1,25 @@
+.update-chip { border: 1px solid var(--accent, #f5c842); border-radius: 12px; padding: 4px 10px; background: transparent; color: var(--accent, #f5c842); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.update-chip[hidden], #update-panel [hidden] { display: none !important; }
+#update-panel { width: min(500px, calc(100vw - 48px)); max-height: calc(100vh - 64px); box-sizing: border-box; padding: 24px; border: 1px solid var(--border, #383c40); border-radius: 14px; background: var(--bg-primary, #151819); color: var(--text-primary, #ececeb); box-shadow: 0 24px 80px #0008; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+#update-panel::backdrop { background: #0007; }
+#update-panel .update-heading { display: flex; align-items: center; justify-content: space-between; }
+#update-panel h2 { margin: 0; font-size: 25px; font-weight: 600; }
+#update-panel .update-eyebrow { margin: 0 0 3px; color: var(--accent, #f5c842); font-size: 10px; font-weight: 700; letter-spacing: 1.5px; }
+#update-panel button { border: 1px solid var(--border, #383c40); border-radius: 7px; background: transparent; color: inherit; font: inherit; padding: 7px 12px; cursor: pointer; }
+#update-panel button:hover:not(:disabled) { background: #ffffff0a; }
+#update-panel button:focus-visible, .update-chip:focus-visible { outline: 2px solid var(--accent, #f5c842); outline-offset: 3px; }
+#update-panel button:disabled { opacity: .5; cursor: default; }
+#update-panel [data-close] { font-size: 22px; line-height: 1; padding: 5px 9px; border-color: transparent; }
+#update-panel .update-muted { color: var(--text-secondary, #a7abad); font-size: 12px; }
+#update-panel [data-status] { font-weight: 500; margin: 22px 0 14px; overflow-wrap: anywhere; }
+#update-panel progress { width: 100%; height: 6px; accent-color: var(--accent, #f5c842); }
+#update-panel .update-notice { padding: 12px; border: 1px solid var(--border, #383c40); border-radius: 8px; }
+#update-panel details { margin: 16px 0; }
+#update-panel summary { cursor: pointer; }
+#update-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font: inherit; color: var(--text-secondary, #a7abad); }
+#update-panel .update-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+#update-panel .update-primary { color: #171a1b; background: var(--accent, #f5c842); border-color: transparent; font-weight: 600; }
+#update-panel .update-primary:hover:not(:disabled) { background: var(--accent, #f5c842); filter: brightness(1.06); }
+#update-panel .update-preferences { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border, #383c40); }
+#update-panel label { display: flex; align-items: center; gap: 8px; }
+#update-panel input { accent-color: var(--accent, #f5c842); }

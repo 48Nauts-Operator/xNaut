@@ -71,6 +71,19 @@
   }
   window.xnautConversationStorage = {
     ready, flush: () => queue,
+    // Updating may exit the process on Windows. A settled queue alone does
+    // not prove persistence: save() deliberately retains failed writes.
+    async confirmAllSaved() {
+      await ready();
+      let pending;
+      do { pending = queue; await pending; } while (pending !== queue);
+      if (failed.size || !native) throw new Error('Conversation changes are not saved to native storage. Resolve the storage error before restarting.');
+      for (let i = 0; i < localStorage.length; i++) {
+        if (localStorage.key(i).startsWith('xnaut-conversation-pending:')) {
+          throw new Error('Conversation changes are still pending. Resolve the storage error before restarting.');
+        }
+      }
+    },
     async confirmSaved(key) {
       await queue;
       if (failed.has(key) || !native) throw new Error('Native save unavailable. Your local copy is retained.');
