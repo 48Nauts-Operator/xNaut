@@ -2,6 +2,21 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.10] - 2026-10-10
+
+### Added
+- Open **More → Updates** at any time to check for a new release, read its notes, download it and see progress. A compact toolbar indicator keeps available and staged updates accessible after the panel closes.
+- Check for stable releases at startup, every six hours while xNAUT is open, and after reconnection. Automatic checks can be disabled, and a release can be snoozed until tomorrow.
+
+### Changed
+- Download and verify the signed update before offering **Install and restart now**. Downloads do not install or restart the application automatically.
+- Wait for acknowledged conversation writes before installation and restart. Failed saves keep the update staged and explain why restarting is paused.
+- Report connection stalls and actual download, verification, installation and restart errors. Retry the failed stage without overlapping requests or repeating a completed installation.
+
+### Release checks
+- Require the updater browser suite before release, covering progress, signature failure, retry, saved conversations, duplicate actions, release checks, snooze, keyboard focus and readable controls.
+- Verify real signed downloads and installation in an isolated macOS app copy. Normal user applications and sessions remain untouched by the test.
+
 ## [1.30.9] - 2026-10-10
 
 ### Fixed
