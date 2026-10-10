@@ -399,6 +399,37 @@ mod tests {
 #[cfg(test)]
 mod live_checks {
     use super::*;
+    #[test]
+    #[ignore = "explicit operator request; persists a preview only, with no approval or execution"]
+    fn live_nautbot_cloud_plan() {
+        assert_eq!(
+            std::env::var("XNAUT_LIVE_PLAN_ACTION").as_deref(),
+            Ok("preview-only")
+        );
+        let project = std::env::var("XNAUT_LIVE_DIAG_PROJECT").expect("Explicit project required");
+        let tickets: Vec<String> = std::env::var("XNAUT_LIVE_PLAN_TICKETS")
+            .expect("Explicit tickets required")
+            .split(',')
+            .map(str::to_owned)
+            .collect();
+        let expected_model =
+            std::env::var("XNAUT_LIVE_PLAN_MODEL").expect("Exact owner-selected model required");
+        let plan =
+            crate::swarm_plan::build_with_environment(&project, &tickets, Some("exe-dev")).unwrap();
+        assert!(plan.dispatch_hold.is_none());
+        assert_eq!(plan.runs.len(), tickets.len());
+        for run in &plan.runs {
+            assert!(tickets.contains(&run.ticket));
+            assert_eq!(run.model, expected_model);
+            assert_eq!(run.environment.as_deref(), Some("exe-dev"));
+            assert_eq!(run.cloud_model.as_ref().unwrap().provider, "nautgate");
+        }
+        crate::swarm_plan::remember(plan.clone()).unwrap();
+        println!(
+            "XNAUT_PLAN_RESULT {}",
+            serde_json::to_string(&plan).unwrap()
+        );
+    }
     #[tokio::test]
     #[ignore = "explicit live NautBot inference and read-only worker diagnosis"]
     async fn live_nautbot_reasons_from_dispatch_evidence() {
