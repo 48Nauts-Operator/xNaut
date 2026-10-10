@@ -1,4 +1,4 @@
-//! Phase 1: one explicit model/connection for remote agent launches.
+//! Shared cloud default, with the configured NautGate route taking precedence.
 //! Execution providers only transport this configuration; they never choose a model.
 use crate::{agent_profiles::AgentProfile, settings::Settings};
 use serde::{Deserialize, Serialize};
@@ -41,7 +41,6 @@ pub fn resolve(settings: &Settings) -> Result<Option<Resolved>, String> {
             "Choose both a provider connection and a cloud agent model in Settings.".into(),
         );
     }
-    // Deliberately do not call route_llm: automatic NautGate model routing is Phase 2.
     let provider = selected.provider.trim().to_ascii_lowercase();
     let connection = crate::chat::provider_llm(settings, &provider)
         .ok_or("The cloud model's provider connection is disabled or missing in Settings.")?;
@@ -51,6 +50,17 @@ pub fn resolve(settings: &Settings) -> Result<Option<Resolved>, String> {
         selected.worker_endpoint.trim()
     }
     .trim_end_matches('/');
+    resolve_connection(&provider, selected.model.trim(), endpoint, connection.api_key)
+        .map(Some)
+}
+
+fn resolve_connection(
+    provider: &str,
+    model: &str,
+    endpoint: &str,
+    api_key: Option<String>,
+) -> Result<Resolved, String> {
+    let endpoint = endpoint.trim().trim_end_matches('/');
     let url = reqwest::Url::parse(endpoint)
         .map_err(|_| "The cloud model endpoint must be an HTTP(S) URL.")?;
     if !matches!(url.scheme(), "http" | "https")
@@ -73,18 +83,17 @@ pub fn resolve(settings: &Settings) -> Result<Option<Resolved>, String> {
     {
         return Err("The cloud model endpoint points to localhost. Set its worker-reachable address in Settings.".into());
     }
-    Ok(Some(Resolved {
+    Ok(Resolved {
         pin: Pin {
-            provider,
-            model: selected.model.trim().into(),
+            provider: provider.into(),
+            model: model.into(),
             endpoint: endpoint.into(),
         },
         // Keyless OpenAI-compatible servers still need an auth placeholder in Pi.
-        api_key: connection
-            .api_key
+        api_key: api_key
             .filter(|key| !key.trim().is_empty())
             .unwrap_or_else(|| "xnaut-keyless".into()),
-    }))
+    })
 }
 
 pub fn apply(
@@ -96,12 +105,39 @@ pub fn apply(
     if environment == "local" {
         return Ok((effective, None));
     }
-    let selected = resolve(settings)?;
+    let selected = if crate::chat::gateway_enabled(settings) {
+        // Use the same gateway policy as chat. An explicit profile model is
+        // preserved; `auto` delegates selection to NautGate's existing router.
+        // Never send a gateway credential to the fallback provider's endpoint.
+        let requested = crate::settings::LlmSettings {
+            provider: profile.provider.clone(),
+            model: if profile.model.trim().is_empty() { "auto".into() } else { profile.model.trim().into() },
+            ..Default::default()
+        };
+        let route = crate::chat::route_llm(settings, &requested)?;
+        Some(resolve_connection(&route.provider, &route.model, &route.endpoint, route.api_key)?)
+    } else {
+        resolve(settings)?
+    };
     if let Some(selection) = &selected {
         validate_connection_for_harness(&profile.runtime_id, &selection.pin)?;
         effective.model = selection.pin.model.clone();
+        effective.provider = selection.pin.provider.clone();
     }
     Ok((effective, selected))
+}
+
+/// Repository delivery needs commands for inspection, checks and publication.
+/// Refuse an incompatible profile before presenting a runnable plan; never
+/// silently relax the owner's capability policy or substitute a required model.
+pub fn validate_repository_profile(profile: &AgentProfile, required_model: &str) -> Result<(), String> {
+    if !profile.policy.shell {
+        return Err(format!("@{} prohibits shell commands. Repository implementation requires shell access to inspect, test and publish; choose an authorized profile before dispatch.", profile.handle));
+    }
+    if !crate::run_control::model_meets(&profile.model, required_model) {
+        return Err(format!("@{} resolves to model {}, but the ticket requires {}. Select the exact required model before approving this plan.", profile.handle, profile.model, required_model));
+    }
+    Ok(())
 }
 
 fn validate_connection_for_harness(runtime: &str, connection: &Pin) -> Result<(), String> {
@@ -272,6 +308,59 @@ mod tests {
             "tagline":"", "purpose":"test", "runtime_id":runtime, "provider":"profile-provider",
             "model":"profile-model", "role":"builder", "default_project":null}))
         .unwrap()
+    }
+    #[test]
+    fn nautgate_preserves_claude_across_cloud_destinations_and_keeps_the_default() {
+        let mut settings = settings();
+        settings.llm_providers.push(crate::settings::LlmProviderSettings {
+            name: "nautgate".into(), endpoint: "https://gate.example/v1".into(),
+            api_key: Some("gateway-fixture-key".into()), enabled: true,
+        });
+        let fallback = settings.cloud_agent_model.clone();
+        let mut original = profile("claude");
+        original.provider = "nautgate".into();
+        original.model = "claude-explicit".into();
+        for destination in ["exe-dev", "gitvm", "future-cloud-driver"] {
+            let (effective, route) = apply(&settings, &original, destination).unwrap();
+            let route = route.unwrap();
+            assert_eq!(effective.model, "claude-explicit");
+            assert_eq!(effective.provider, "nautgate");
+            assert_eq!(effective.runtime_id, "claude");
+            assert_eq!(route.pin.model, effective.model);
+            assert_eq!(route.pin.endpoint, "https://gate.example/v1");
+            assert_eq!(route.api_key, "gateway-fixture-key");
+        }
+        assert_eq!(settings.cloud_agent_model, fallback);
+        assert_eq!(apply(&settings, &original, "local").unwrap().0, original);
+        settings.llm_providers.last_mut().unwrap().enabled = false;
+        let (_, route) = apply(&settings, &original, "exe-dev").unwrap();
+        assert_eq!(route.unwrap().pin.model, fallback.model);
+    }
+    #[test]
+    fn nautgate_auto_and_unreachable_addresses_do_not_become_the_direct_fallback() {
+        let mut settings = settings();
+        settings.llm_providers.push(crate::settings::LlmProviderSettings {
+            name: "nautgate".into(), endpoint: "https://gate.example/v1".into(),
+            api_key: Some("gateway-fixture-key".into()), enabled: true,
+        });
+        let mut original = profile("pi");
+        original.model = "auto".into();
+        assert_eq!(apply(&settings, &original, "exe-dev").unwrap().1.unwrap().pin.model, "auto");
+        original.model.clear();
+        assert_eq!(apply(&settings, &original, "gitvm").unwrap().0.model, "auto");
+        settings.llm_providers.last_mut().unwrap().endpoint = "http://localhost:8090/v1".into();
+        assert!(apply(&settings, &original, "exe-dev").err().unwrap().contains("localhost"));
+    }
+    #[test]
+    fn repository_preflight_refuses_denied_shell_and_wrong_model_before_approval() {
+        let mut profile = profile("claude");
+        profile.policy.shell = false;
+        assert!(validate_repository_profile(&profile, "").unwrap_err().contains("shell"));
+        profile.policy.shell = true;
+        profile.model = "qwen-default".into();
+        assert!(validate_repository_profile(&profile, "claude-explicit").unwrap_err().contains("requires"));
+        profile.model = "claude-explicit".into();
+        assert!(validate_repository_profile(&profile, "claude-explicit").is_ok());
     }
     #[test]
     fn shared_cloud_choice_is_identical_across_destinations_and_preserves_local_profiles() {

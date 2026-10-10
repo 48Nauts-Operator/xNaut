@@ -260,6 +260,7 @@ pub fn replay_safe(name: &str) -> bool {
             | "read_conversation_history"
             | "read_conversation_tasks"
             | "read_project_work"
+            | "diagnose_dispatch"
             | "xnaut_search_tools"
             | "xnaut_load_tools"
     )

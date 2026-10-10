@@ -2065,6 +2065,9 @@ pub async fn agent_profile_launch(
         .route(&sandboxes)
         .map_err(|why| format!("@{} {why}", profile.handle))?;
     let (profile, cloud) = crate::cloud_model::apply(&settings, &profile, env.key())?;
+    if !matches!(route, LaunchRoute::Local) && req.ticket.is_some() && !req.conversation_mode {
+        crate::cloud_model::validate_repository_profile(&profile, "")?;
+    }
     if !matches!(route, LaunchRoute::Local) { validate_remote_runtime_with(&profile, cloud.as_ref())?; }
     // Resolved HERE so a refusal is immediate, acted on at the bottom so
     // everything between (the spend gate, the composed prompt, the identity)
@@ -2908,6 +2911,13 @@ pub(crate) fn preflight_exe_runtime(profile: &AgentProfile, cloud: Option<&crate
     crate::sandbox::exe::ensure()?;
     remote_runtime_ready(&cfg, &profile.model, &crate::worker_bootstrap::Target::ExeDev, cloud,
         &format!("probe-{}", uuid::Uuid::new_v4()), true)
+}
+
+/// Read existing worker readiness without waking/provisioning a VM or staging credentials.
+pub(crate) fn diagnose_remote_runtime(profile: &AgentProfile, cloud: Option<&crate::cloud_model::Resolved>, target: &crate::worker_bootstrap::Target) -> Result<(), String> {
+    let (cfg, _) = remote_launch_command(profile, cloud, Some("task delivery check".into()), Default::default())?;
+    remote_runtime_ready(&cfg, &profile.model, target, cloud,
+        &format!("diagnose-{}", uuid::Uuid::new_v4()), true)
 }
 
 fn remote_runtime_ready(cfg: &crate::agents::AgentConfig, model: &str,

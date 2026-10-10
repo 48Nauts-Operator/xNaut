@@ -34,6 +34,8 @@ const MAX_ROUNDS: usize = 14;
 
 pub fn tool_specs() -> Vec<Value> {
     let mut specs = vec![
+        json!({"type":"function","function":{"name":"recover_stopped_dispatch","description":"NautBot: recover the exact admitted failed run after worker AND publisher have stopped. Independently proves a clean unchanged source tree and published run artifacts, retains the original workspace/history, and reserves one continuation. Refuses live writers, source changes, changed ticket revisions, incompatible model/shell policy and capacity limits. Does not stop a process, launch a worker or grant approval. Use diagnose_dispatch first; pass its ticket revision. Continue through the existing dispatch/approval path.","parameters":{"type":"object","properties":{"project":{"type":"string"},"ticket":{"type":"string"},"run_id":{"type":"string"},"expected_revision":{"type":"integer"}},"required":["project","ticket","run_id","expected_revision"],"additionalProperties":false}}}),
+        json!({"type":"function","function":{"name":"diagnose_dispatch","description":"NautBot: diagnose a blocked cloud ticket before retrying. Read the saved fallback, effective NautGate route, shell/model policy, retained run chain, actual remote process and worker authentication/model readiness. Reports recorded state separately from live observations. No settings edits, new workers, inference, termination or approval. A ready connection is not a started task. Use returned evidence to explain and repair the specific blocker; preserve the requested destination and existing work.","parameters":{"type":"object","properties":{"project":{"type":"string"},"ticket":{"type":"string"},"environment":{"type":"string","enum":["exe-dev","gitvm"]}},"required":["project","ticket","environment"],"additionalProperties":false}}}),
         json!({"type":"function","function":{"name":"project_wiki_journal_read","description":"Read the live project working document and prior handoffs before continuing. Capture important progress as it happens with project_wiki_journal_append, not only at the end.","parameters":{"type":"object","properties":{"project":{"type":"string"},"path":{"type":"string"}},"required":["project"]}}}),
         json!({"type":"function","function":{"name":"project_wiki_journal_append","description":"Maintain the live working document while working: record findings, proposals, decisions with who agreed, fixes with exact code/revision links, actual checks and remaining work. Use Markdown, fenced code/diffs and external references. Record important user questions/comments faithfully. Agent-authored verification is a report, not independent proof. Entries are durable and appended without replacing human content. Before stopping write a summary of changes, verified checks, open questions and next steps. Reuse source_id on retry.","parameters":{"type":"object","properties":{"project":{"type":"string"},"ticket":{"type":"string"},"kind":{"type":"string","enum":["note","question","proposal","decision","finding","fix","verification","summary"]},"title":{"type":"string"},"content":{"type":"string"},"run_id":{"type":"string"},"source_id":{"type":"string"}},"required":["project","ticket","kind","title","content"]}}}),
         json!({"type":"function","function":{"name":"project_wiki_list","description":"Read this registered project's Wiki index, durable handoffs and current activity before continuing work. The project is a PM key (e.g. XNAUT) or its registered repository root.","parameters":{"type":"object","properties":{"project":{"type":"string"}},"required":["project"]}}}),
@@ -1134,6 +1136,35 @@ pub async fn execute(name: &str, args: &Value, canvas_key: &str) -> Value {
                     "note": format!("@{} is working {id} on {}. It moves the ticket to done itself once the suites are green and the bundle is written.", result.handle, result.branch)
                 }),
                 Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        "recover_stopped_dispatch" => {
+            if !canvas_key.trim().eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE) {
+                return json!({"ok":false,"error":"only NautBot recovers worker dispatch"});
+            }
+            let project = args["project"].as_str().unwrap_or_default().trim().to_owned();
+            let ticket = args["ticket"].as_str().unwrap_or_default().trim().to_owned();
+            let id = args["run_id"].as_str().unwrap_or_default().to_owned();
+            let Some(revision) = args["expected_revision"].as_u64().filter(|_| !project.is_empty() && !ticket.is_empty() && !id.is_empty()) else {
+                return json!({"ok":false,"error":"Supply the exact project, ticket, run and expected_revision from diagnosis"});
+            };
+            match tokio::task::spawn_blocking(move || crate::dispatch_diagnostics::recover_stopped(&project,&ticket,&id,revision)).await {
+                Ok(Ok(report)) => json!({"ok":true,"recovery":report}),
+                Ok(Err(error)) => json!({"ok":false,"error":error}),
+                Err(_) => json!({"ok":false,"error":"Recovery could not complete; inspect the retained run before retrying"}),
+            }
+        }
+        "diagnose_dispatch" => {
+            if !canvas_key.trim().eq_ignore_ascii_case(crate::agent_profiles::RESERVED_NAUTBOT_HANDLE) {
+                return json!({"ok":false,"error":"only NautBot diagnoses worker dispatch"});
+            }
+            let project = args["project"].as_str().unwrap_or_default().trim().to_owned();
+            let ticket = args["ticket"].as_str().unwrap_or_default().trim().to_owned();
+            let environment = args["environment"].as_str().unwrap_or_default().to_owned();
+            match tokio::task::spawn_blocking(move || crate::dispatch_diagnostics::diagnose(&project,&ticket,&environment)).await {
+                Ok(Ok(report)) => json!({"ok":true,"diagnosis":report}),
+                Ok(Err(error)) => json!({"ok":false,"error":error}),
+                Err(_) => json!({"ok":false,"error":"Dispatch diagnosis could not complete; do not infer worker state"}),
             }
         }
         "swarm_plan" => {
@@ -3281,6 +3312,23 @@ mod tests {
         let parameters = &dispatch["function"]["parameters"];
         assert_eq!(parameters["properties"]["environment"]["enum"], json!(["local", "exe-dev", "gitvm"]));
         assert_eq!(parameters["required"], json!(["id", "project"]));
+    }
+
+    #[tokio::test]
+    async fn dispatch_diagnosis_is_native_and_refuses_worker_callers() {
+        let specs = tool_specs();
+        let spec = specs.iter().find(|s| s["function"]["name"] == "diagnose_dispatch").unwrap();
+        assert_eq!(spec["function"]["parameters"]["additionalProperties"], false);
+        assert!(crate::durable_turn::replay_safe("diagnose_dispatch"));
+        let refused = execute("diagnose_dispatch", &json!({}), "worker").await;
+        assert!(refused["error"].as_str().unwrap().contains("only NautBot"));
+        let missing = execute("diagnose_dispatch", &json!({}), "nautbot").await;
+        assert!(missing["error"].as_str().unwrap().contains("Supply a project"));
+        let refused = execute("recover_stopped_dispatch", &json!({}), "worker").await;
+        assert!(refused["error"].as_str().unwrap().contains("only NautBot"));
+        let missing = execute("recover_stopped_dispatch", &json!({}), "nautbot").await;
+        assert!(missing["error"].as_str().unwrap().contains("expected_revision"));
+        assert!(!crate::durable_turn::replay_safe("recover_stopped_dispatch"));
     }
 
     #[tokio::test]

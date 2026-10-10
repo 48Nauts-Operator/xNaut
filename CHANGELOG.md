@@ -2,6 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.30.14] - 2026-10-11
+
+### Fixed
+- Honor an enabled NautGate connection for cloud workers on every execution provider. Preserve the agent's selected model, or use Auto for gateway selection, without replacing the saved shared default. Preview, approval and launch use the same route.
+- Reject repository workers that prohibit shell commands or conflict with an exact ticket model before offering an executable plan.
+
+### Added
+- Give NautBot native dispatch diagnostics for the selected route, worker readiness, capacity and retained process evidence. Saved run state and live observations are reported separately.
+- Recover a stopped failed worker that published only run artifacts by reserving one continuation on its original worktree. Live writers, unpublished changes and implementation changes require inspection or review; recovery does not launch or approve another worker.
+
 ## [1.30.13] - 2026-10-10
 
 ### Added

@@ -443,11 +443,11 @@ window.xnautAttachTasksTab = (opts) =>
 
       <h3>Cloud agent model</h3>
       <div class="settings-group">
-        <p style="color:var(--text-secondary); font-size:12px; margin:0 0 8px;">Choose once for all cloud workers, including exe.dev and GitVM. Local agents keep their profile models. A model must be compatible with the assigned agent's harness.</p>
+        <p style="color:var(--text-secondary); font-size:12px; margin:0 0 8px;">Default for all cloud workers, including exe.dev and GitVM. When NautGate is enabled, workers use its connection with the agent's selected model; Auto lets NautGate choose. Local agents keep their profile models.</p>
         <div class="settings-row"><label for="tm-cloud-provider">Provider connection</label><select id="tm-cloud-provider"><option value="">Use each agent's profile</option></select></div>
         <div class="settings-row"><label for="tm-cloud-model">Model</label><input id="tm-cloud-model" type="text" list="tm-cloud-models" placeholder="Choose or enter a model ID"><datalist id="tm-cloud-models"></datalist></div>
         <div class="settings-row"><label for="tm-cloud-endpoint">Worker endpoint (optional)</label><input id="tm-cloud-endpoint" type="url" placeholder="Use the selected provider's address"></div>
-        <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Uses the selected connection's API key. If that connection uses localhost, enter an address reachable from your workers. New plans show this model; changing the model or connection requires renewed approval.</p>
+        <p style="color:var(--text-secondary); font-size:12px; margin:4px 0 0;">Keep this default for use without NautGate. An enabled NautGate connection must have an address reachable from your workers. Plans show the resolved model and connection; a changed route requires renewed approval.</p>
       </div>
 
       <h3>Worker access</h3>

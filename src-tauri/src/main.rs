@@ -106,6 +106,7 @@ mod repo_check;
 mod research;
 mod sandbox;
 mod dispatch;
+mod dispatch_diagnostics;
 mod sandbox_verify;
 mod scaffold;
 mod scheduler;

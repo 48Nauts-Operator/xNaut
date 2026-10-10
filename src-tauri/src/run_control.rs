@@ -3223,6 +3223,29 @@ pub(crate) fn reserve_repair_in(dir: &Path, id: &str, proof: &Proofs, at: i64) -
     reserve_repair_admitted_in(dir, id, proof, at, |_| Ok(()))
 }
 pub(crate) fn reserve_repair_admitted_in(dir: &Path, id: &str, proof: &Proofs, at: i64, admit: impl FnOnce(&RunManifest) -> Result<(),String>) -> Result<RunManifest,String> {
+    reserve_stopped_continuation_in(dir, id, proof, at,
+        &format!("independent review requested author repair after {id}"), "", |next| admit(next))
+}
+
+/// Recovery of an admitted failure uses the same locked reservation as review
+/// repair, with a truthful reason and the current ticket's model requirement.
+pub(crate) fn reserve_failed_continuation_in(dir: &Path, expected: &RunManifest, proof: &Proofs,
+    requirement: &str, at: i64, admit: impl FnOnce(&mut RunManifest) -> Result<(),String>) -> Result<RunManifest,String> {
+    if expected.state != RunState::Failed || expected.admission_refused {
+        return Err("Recovery requires an admitted failed worker".into());
+    }
+    reserve_stopped_continuation_in(dir, &expected.run_id, proof, at,
+        &format!("stopped failed worker recovered without source changes after {}", expected.run_id), requirement,
+        |next| {
+            if load_manifest_in(dir,&expected.run_id)? != *expected {
+                return Err("Failed run changed during recovery; inspect again".into());
+            }
+            admit(next)
+        })
+}
+
+fn reserve_stopped_continuation_in(dir: &Path, id: &str, proof: &Proofs, at: i64,
+    signal: &str, requirement: &str, admit: impl FnOnce(&mut RunManifest) -> Result<(),String>) -> Result<RunManifest,String> {
     let _lock = StoreLock::acquire(dir)?;
     let mut previous = load_manifest_in(dir,id)?;
     if previous.kind != RunKind::Agent || previous.ticket.is_none() { return Err("Repair requires a ticketed author run".into()); }
@@ -3232,9 +3255,9 @@ pub(crate) fn reserve_repair_admitted_in(dir: &Path, id: &str, proof: &Proofs, a
         if matching.len() > 1 { return Err("Multiple continuation identities; owner recovery required".into()); }
         if let Some(child) = matching.first() {
             // Only replay our reserved repair, not arbitrary successor data.
-            if child.branch != previous.branch || child.state != RunState::Requested || !child.last_signal.starts_with("independent review requested author repair after ") { return Err("Existing successor requires recovery".into()); }
+            if child.branch != previous.branch || child.state != RunState::Requested || child.last_signal != signal { return Err("Existing successor requires recovery".into()); }
             previous.state = RunState::Retired;
-            previous.retirement = Some(Retirement { started_at:at,quiet_since:at,capture_bytes:proof.capture_bytes,requirement:String::new(),stopped_at:Some(at),dead_since:Some(at) });
+            previous.retirement = Some(Retirement { started_at:at,quiet_since:at,capture_bytes:proof.capture_bytes,requirement:requirement.into(),stopped_at:Some(at),dead_since:Some(at) });
             previous.ticket_returned = true; previous.next_run_id = Some(child.run_id.clone());
             persist_locked(dir,&mut previous)?;
         }
@@ -3261,10 +3284,10 @@ pub(crate) fn reserve_repair_admitted_in(dir: &Path, id: &str, proof: &Proofs, a
     next.cloud_model = previous.cloud_model.clone();
     next.remote_env = previous.remote_env.clone();
     next.project = previous.project.clone(); next.branch = previous.branch.clone(); next.previous_run_id = Some(previous.run_id.clone()); next.last_commit = proof.commit.clone();
-    next.last_signal = format!("independent review requested author repair after {}",previous.run_id);
-    admit(&next)?;
+    next.last_signal = signal.into();
+    admit(&mut next)?;
     previous.state = RunState::Retired;
-    previous.retirement = Some(Retirement { started_at:at,quiet_since:at,capture_bytes:proof.capture_bytes,requirement:String::new(),stopped_at:Some(at),dead_since:Some(at) });
+    previous.retirement = Some(Retirement { started_at:at,quiet_since:at,capture_bytes:proof.capture_bytes,requirement:requirement.into(),stopped_at:Some(at),dead_since:Some(at) });
     previous.ticket_returned = true; previous.next_run_id = Some(next.run_id.clone());
     // Persist child first. A restart recovers the same child by predecessor;
     // callers must not replace it with a new ID after an interrupted write.

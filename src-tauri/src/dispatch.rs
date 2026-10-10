@@ -439,6 +439,9 @@ async fn dispatch_with_findings_gate(
     );
     destination.route(&sandboxes)?;
     let (profile, cloud) = crate::cloud_model::apply(&settings, &profile, destination.key())?;
+    if destination.key() != "local" {
+        crate::cloud_model::validate_repository_profile(&profile, &ticket.model_requirement)?;
+    }
     if approved.is_some_and(|run| !crate::swarm_plan::authorized(run, &ticket)
         || run.model != profile.model || run.cloud_model != cloud.as_ref().map(|c| c.pin.clone())) {
         return Err("Approved group scope, owner, model or connection changed before native dispatch; renew approval.".into());

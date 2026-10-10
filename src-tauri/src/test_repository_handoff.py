@@ -49,6 +49,7 @@ class HandoffTests(unittest.TestCase):
             run_id="author", source_sha="a" * 40, exit_code=0, uncommitted_source=False
         )
         self.dirty = ""
+        self.changed = ""
         self.signals = []
         self.patches = [
             patch.object(h, "processes", lambda: self.rows),
@@ -83,10 +84,52 @@ class HandoffTests(unittest.TestCase):
             return self.expected["head"]
         if args[0] == "status":
             return self.dirty
+        if args[0] == "symbolic-ref":
+            return self.expected["branch"]
+        if args[0] == "diff":
+            return self.changed
+        if args[0] == "merge-base":
+            return ""
         return json.dumps(self.result)
 
     def call(self):
         return h.handoff(self.expected, self.home)
+
+    def test_failed_worker_requires_stopped_publisher_and_preserves_source(self):
+        with self.assertRaisesRegex(ValueError, "not finished"):
+            h.stopped_failure(self.expected, self.home)
+        (self.root / ".git/xnaut-phase").write_text("finished")
+        with self.assertRaisesRegex(ValueError, "not finished"):
+            h.stopped_failure(self.expected, self.home)
+        self.rows = [dict(self.child, parent=1, session=11)]
+        with self.assertRaisesRegex(ValueError, "still owns"):
+            h.stopped_failure(self.expected, self.home)
+        self.rows = []
+        self.changed = self.expected["artifacts"] + "/handback.json\0"
+        proof = h.stopped_failure(self.expected, self.home)
+        self.assertEqual(proof["state"], "stopped_without_source_changes")
+        self.assertEqual(proof["head"], self.expected["head"])
+        self.assertEqual(self.signals, [])
+        self.changed += "src/implementation.py\0"
+        with self.assertRaisesRegex(ValueError, "implementation exists"):
+            h.stopped_failure(self.expected, self.home)
+
+    def test_failed_worker_recovery_rejects_dirty_mismatched_or_unpublished_work(self):
+        self.rows = []
+        (self.root / ".git/xnaut-phase").write_text("finished")
+        self.dirty = " M implementation.py"
+        with self.assertRaisesRegex(ValueError, "unpublished changes"):
+            h.stopped_failure(self.expected, self.home)
+        self.dirty = ""
+        with self.assertRaisesRegex(ValueError, "identity changed"):
+            h.stopped_failure(dict(self.expected, ticket="OTHER-1"), self.home)
+        self.result["uncommitted_source"] = True
+        with self.assertRaisesRegex(ValueError, "source preservation"):
+            h.stopped_failure(self.expected, self.home)
+        self.result["uncommitted_source"] = False
+        self.write("xnaut-upload.json", dict(state="pending", head=self.expected["head"]))
+        with self.assertRaisesRegex(ValueError, "not confirmed"):
+            h.stopped_failure(self.expected, self.home)
 
     def test_legacy_supervisor_handoff_waits_for_every_writer_and_real_finish(self):
         result_before = dict(self.result)

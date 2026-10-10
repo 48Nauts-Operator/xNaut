@@ -919,7 +919,12 @@ pub fn build_with_environment(
         let (profile, cloud) = crate::cloud_model::apply(&settings, &profile, run.environment.as_deref().unwrap_or("local"))?;
         run.model = profile.model.clone();
         run.cloud_model = cloud.as_ref().map(|c| c.pin.clone());
-        if needs_repository(run) { crate::agent_profiles::validate_remote_runtime_with(&profile, cloud.as_ref())?; }
+        if needs_repository(run) {
+            let ticket = tickets.iter().find(|ticket| ticket.id == run.ticket)
+                .ok_or("Planned ticket disappeared")?;
+            crate::cloud_model::validate_repository_profile(&profile, &ticket.model_requirement)?;
+            crate::agent_profiles::validate_remote_runtime_with(&profile, cloud.as_ref())?;
+        }
         run.requested_environment = destination.map(str::to_owned);
         run.repository_remote = projects
             .iter()

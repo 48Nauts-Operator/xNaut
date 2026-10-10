@@ -284,9 +284,50 @@ def handoff(expected, home=None):
         return previous
 
 
+def stopped_failure(expected, home=None):
+    """Read-only recovery proof. Never equate a Failed registry row with death."""
+    root = worker_root(expected, Path.home() if home is None else Path(home))
+    if root.resolve() != root.absolute() or not (root / ".git").is_dir() or (root / ".git").is_symlink():
+        raise ValueError("Worker directory is missing or redirected")
+    for name in ["xnaut-transfer.json", "xnaut-phase", "xnaut-supervisor.pid", "xnaut-upload.json"]:
+        if (root / ".git" / name).is_symlink():
+            raise ValueError("Worker control file is redirected")
+    meta = json.loads((root / ".git/xnaut-transfer.json").read_text())
+    for key in ["run_id", "project", "ticket", "handle", "workdir", "artifacts", "branch", "source_sha", "remote"]:
+        if meta.get(key) != expected.get(key):
+            raise ValueError("Worker transfer identity changed: " + key)
+    if meta.get("worker", {"kind": "exe-dev"}).get("kind") != expected["environment"]:
+        raise ValueError("Worker environment changed")
+    supervisor = int((root / ".git/xnaut-supervisor.pid").read_text())
+    if (root / ".git/xnaut-phase").read_text().strip() != "finished" or process(supervisor):
+        raise ValueError("Previous worker/publisher has not finished; no continuation reserved")
+    if any(r["session"] == supervisor or r["cwd"] == str(root)
+           or (r["cwd"] or "").startswith(str(root) + "/") for r in processes()):
+        raise ValueError("A process still owns this workspace; no continuation reserved")
+    if git(root, "status", "--porcelain") or git(root, "symbolic-ref", "--short", "HEAD") != expected["branch"]:
+        raise ValueError("Worker has unpublished changes or a changed branch; preserve and inspect")
+    head = git(root, "rev-parse", "HEAD")
+    git(root, "merge-base", "--is-ancestor", expected["source_sha"], head)
+    changed = git(root, "diff", "--name-only", "-z", expected["source_sha"], head).split("\0")
+    prefix = expected["artifacts"] + "/"
+    if any(path and not path.startswith(prefix) for path in changed):
+        raise ValueError("Published implementation exists; use independent review/repair")
+    result = json.loads(git(root, "show", head + ":" + prefix + "result.json"))
+    if result.get("run_id") != expected["run_id"] or result.get("source_sha") != expected["source_sha"] or result.get("uncommitted_source") is not False:
+        raise ValueError("Final publication does not prove source preservation")
+    upload = json.loads((root / ".git/xnaut-upload.json").read_text())
+    if upload.get("state") != "pushed" or upload.get("head") != head:
+        raise ValueError("Final publication is not confirmed")
+    return dict(state="stopped_without_source_changes", run_id=expected["run_id"],
+                head=head, source_sha=expected["source_sha"], branch=expected["branch"],
+                checked_at=time.time(), supervisor_pid=supervisor)
+
+
 if __name__ == "__main__":
     try:
-        print(json.dumps(handoff(json.load(sys.stdin))))
+        request = json.load(sys.stdin)
+        action = stopped_failure if request.get("operation") == "prove_stopped_failure" else handoff
+        print(json.dumps(action(request)))
     except Exception as error:
         print(json.dumps({"state": "refused", "reason": str(error)}))
         sys.exit(1)
