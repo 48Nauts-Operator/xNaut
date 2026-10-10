@@ -98,35 +98,31 @@ pub fn apply(
     }
     let selected = resolve(settings)?;
     if let Some(selection) = &selected {
-        compatible(&profile.runtime_id, &selection.pin.model)?;
+        validate_connection_for_harness(&profile.runtime_id, &selection.pin)?;
         effective.model = selection.pin.model.clone();
     }
     Ok((effective, selected))
 }
 
-fn compatible(runtime: &str, model: &str) -> Result<(), String> {
-    let short = model
-        .rsplit('/')
-        .next()
-        .unwrap_or(model)
-        .to_ascii_lowercase();
-    let supported = match runtime {
-        "pi" => true,
-        "claude" => short.starts_with("claude-"),
-        "codex" => {
-            short.starts_with("gpt-")
-                || short.starts_with("codex-")
-                || ["o1", "o3", "o4"]
-                    .iter()
-                    .any(|prefix| short.starts_with(prefix))
-        }
-        _ => false,
-    };
-    if supported {
-        Ok(())
-    } else {
-        Err(format!("Cloud model {model} is not supported by the {runtime} harness. Select a compatible model or change the agent's harness; xNaut will not switch it silently."))
+fn validate_connection_for_harness(runtime: &str, connection: &Pin) -> Result<(), String> {
+    if !matches!(runtime, "pi" | "codex" | "claude") {
+        return Err(format!("The shared cloud model has no adapter for the {runtime} harness. Configure a supported harness; xNaut will not switch it silently."));
     }
+    // A model's name does not determine its protocol. Claude Code can use a
+    // non-Anthropic model behind a Messages-compatible gateway, and Codex can
+    // use a custom model behind a Responses-compatible endpoint. Refuse known
+    // incompatible direct APIs, not arbitrary model IDs or provider labels.
+    let url =
+        reqwest::Url::parse(&connection.endpoint).map_err(|_| "Invalid cloud model endpoint")?;
+    let required = match (runtime, url.host_str().unwrap_or_default()) {
+        ("claude", "api.openai.com") => Some("Anthropic Messages"),
+        ("codex", "api.anthropic.com") => Some("OpenAI Responses"),
+        _ => None,
+    };
+    if let Some(api) = required {
+        return Err(format!("The {runtime} harness requires the {api} API. Select a compatible connection or change the harness; xNaut will not switch it silently."));
+    }
+    Ok(())
 }
 
 pub fn runtime(
@@ -137,7 +133,7 @@ pub fn runtime(
     let Some(selected) = selected else {
         return Ok(cfg);
     };
-    compatible(&cfg.id, &selected.pin.model)?;
+    validate_connection_for_harness(&cfg.id, &selected.pin)?;
     if cfg.launch_cmd != cfg.id {
         return Err("The shared cloud model requires a standard pi, codex or claude command; custom runtime wrappers must declare their own model configuration.".into());
     }
@@ -337,13 +333,25 @@ mod tests {
     }
     #[test]
     fn shared_cloud_choice_does_not_silently_replace_an_incompatible_harness() {
-        assert!(apply(&settings(), &profile("claude"), "exe-dev").is_err());
-        assert!(apply(&settings(), &profile("unsupported-wrapper"), "gitvm").is_err());
-        assert!(apply(&settings(), &profile("codex"), "exe-dev").is_ok());
         let mut settings = settings();
+        settings.cloud_agent_model.worker_endpoint = "https://api.openai.com/v1".into();
+        assert!(apply(&settings, &profile("claude"), "exe-dev").is_err());
+        assert!(apply(&settings, &profile("unsupported-wrapper"), "gitvm").is_err());
+        assert!(apply(&settings, &profile("codex"), "exe-dev").is_ok());
+        settings.cloud_agent_model.worker_endpoint = "https://api.anthropic.com/v1".into();
         settings.cloud_agent_model.model = "claude-test".into();
         assert!(apply(&settings, &profile("codex"), "gitvm").is_err());
         assert!(apply(&settings, &profile("claude"), "gitvm").is_ok());
+        settings.cloud_agent_model.worker_endpoint = "https://custom-gateway.example/v1".into();
+        settings.cloud_agent_model.model = "vendor/custom-model".into();
+        for harness in ["claude", "codex", "pi"] {
+            let (resolved, _) = apply(&settings, &profile(harness), "exe-dev").unwrap();
+            assert_eq!(resolved.model, "vendor/custom-model");
+            assert_eq!(
+                resolved.runtime_id, harness,
+                "a gateway model must not switch the assigned harness"
+            );
+        }
     }
     #[test]
     fn cloud_launch_overrides_worker_defaults_without_putting_credentials_in_argv() {

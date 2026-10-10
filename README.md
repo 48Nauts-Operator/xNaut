@@ -69,7 +69,7 @@ get a branch and a PR back. macOS & Windows.
   enter the same service's worker-reachable address. Local profiles keep their
   models; clearing this setting restores remote profile models too. Changing the
   selected model or connection requires fresh approval of existing swarm plans.
-  Harness assignments stay fixed, and incompatible selections are refused.
+  Harness assignments stay fixed; known incompatible API connections are refused.
 
 Cloud model selection currently supports the standard Pi, Codex and Claude
 commands. A provider catalog entry does not prove that a model supports every
