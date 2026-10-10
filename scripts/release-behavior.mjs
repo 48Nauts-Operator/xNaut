@@ -12,6 +12,7 @@ export const nativeSuites = [
   'handback::tests::',
   'agent_profiles::compute_choice_tests::remote_',
   'repository_transfer::tests::repository_admission_',
+  'repository_transfer::tests::repository_publisher_protocol_suite',
   'swarm_plan::tests::', 'dispatch::tests::', 'instance::tests::',
   'sandbox::launch_env::tests::', 'agent_tools::tests::swarm_tools_',
   'project_management::mutation_recovery::tests::', 'project_management::write_guard_tests::',
@@ -21,6 +22,7 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  ...(process.platform === 'win32' ? [] : ['repository_transfer::tests::repository_publisher_protocol_suite']),
   'project_wiki::journal::console::tests::journal_actions_scope_before_limit_and_keep_old_dates',
   'handback::tests::command_result_verification_evidence_preserves_the_pi_handback_contract',
   'run_control::tests::explicit_conversations_do_not_consume_legacy_worker_capacity',

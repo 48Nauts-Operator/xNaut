@@ -1077,6 +1077,58 @@ pub async fn tick(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn repository_publisher_protocol_suite() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let tests = Command::new("python3").args(["-m", "unittest", "-v", "test_repository_publish"])
+            .current_dir(&source).output().expect("Python publisher regression suite");
+        assert!(tests.status.success(), "{}\n{}", String::from_utf8_lossy(&tests.stdout), String::from_utf8_lossy(&tests.stderr));
+        // Keep the worker's transport gate aligned with the native parser.
+        // Reviewability and task identity are still enforced only by native code.
+        let records = [
+            "{}", "[]", "{broken", r#"{"summary":2}"#, r#"{"summary":null}"#,
+            r#"{"summary":"one","summary":"two"}"#, r#"{"confidence":"high"}"#,
+            r#"{"confidence":0.9}"#, r#"{"commits":[1]}"#, r#"{"commits":["abc"]}"#,
+            r#"{"run_id":null,"not_finished":"nothing"}"#, r#"{"run_id":5}"#,
+            r#"{"how_verified":"python3 -m unittest: passed"}"#,
+            r#"{"how_verified":["one",{"command":"test","result":"passed"}]}"#,
+            r#"{"how_verified":[{"command":"test","result":""}]}"#,
+            r#"{"how_verified":[{"command":"test","result":0}]}"#,
+            r#"{"how_verified":[{"command":"test","result":"ok","extra":true}]}"#,
+        ];
+        let script = r#"import json,pathlib,tempfile,sys
+import repository_publish as p
+accepted=[]
+with tempfile.TemporaryDirectory() as folder:
+    path=pathlib.Path(folder)/'handback.json'
+    for text in json.load(sys.stdin):
+        path.write_text(text)
+        try:
+            p.validate_handback(path, True)
+            accepted.append(True)
+        except RuntimeError:
+            accepted.append(False)
+print(json.dumps(accepted))
+"#;
+        let mut child = Command::new("python3").args(["-c", script]).current_dir(source)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+            .spawn().expect("worker transport contract");
+        child.stdin.take().unwrap().write_all(&serde_json::to_vec(&records).unwrap()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let accepted: Vec<bool> = serde_json::from_slice(&output.stdout).unwrap();
+        let native: Vec<bool> = records.iter().map(|text| {
+            // The documented wire format is an object; serde additionally
+            // permits positional struct arrays, which are not worker handbacks.
+            serde_json::from_str::<serde_json::Value>(text).is_ok_and(|v| v.is_object())
+                && serde_json::from_str::<crate::handback::Handback>(text).is_ok()
+        }).collect();
+        assert_eq!(accepted, native, "worker/native handback transport contract drifted");
+    }
+
     #[test]
     fn repository_admission_classifies_git_failures_without_leaking_credentials() {
         for (stderr, expected) in [

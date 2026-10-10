@@ -11,6 +11,7 @@ All notable changes to xNAUT are documented in this file.
 
 ### Fixed
 - Persist new swarm previews while a coordinator sweep is advancing. Planning no longer fails because the execution lease is occupied; dispatch remains serialized and existing approvals cannot be overwritten.
+- Reject malformed worker handbacks before claiming successful publication. Keep delivery pending so the existing durable outbox can publish a corrected handback without another worker or approval.
 
 ### Changed
 - Move approvals to their dedicated section and replace the right-pane Agent overview with the Journal. Computers and verification remain available in an on-demand drawer.

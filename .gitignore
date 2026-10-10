@@ -69,3 +69,6 @@ scripts/.axui
 
 # local secrets — never commit
 .env
+
+# Python protocol-test bytecode
+__pycache__/

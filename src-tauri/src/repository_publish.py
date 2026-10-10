@@ -12,10 +12,10 @@ import os
 import shlex
 import shutil
 import signal
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 
 def git(*args, check=True):
@@ -53,6 +53,82 @@ def atomic(path, value):
     temporary.replace(path)
 
 
+def validate_handback(path, required):
+    """Transport types accepted by handback.rs; reviewability stays native.
+
+    Refusing before staging is essential: the durable outbox then retries a
+    corrected file even if the interactive agent never exits or republishes.
+    """
+    if not path.exists() and not required:
+        return
+    help_text = (
+        "handback.json is missing or invalid; repair its JSON and field types. "
+        "Delivery is pending; the outbox will retry the corrected file."
+    )
+    try:
+
+        def invalid_constant(_):
+            raise ValueError("JSON number must be finite")
+
+        def unique_fields(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate handback field")
+                value[key] = item
+            return value
+
+        # Match the desktop's fetch_result_in bound, including concurrent growth.
+        with path.open("rb") as source:
+            content = source.read(256 * 1024 + 1)
+        if len(content) > 256 * 1024:
+            raise ValueError("handback exceeds 256 KiB")
+        value = json.loads(
+            content.decode("utf-8"),
+            parse_constant=invalid_constant,
+            object_pairs_hook=unique_fields,
+        )
+        if not isinstance(value, dict):
+            raise TypeError("handback must be an object")
+        for key in ["ticket", "summary", "from", "submitted_at"]:
+            if key in value and not isinstance(value[key], str):
+                raise ValueError("invalid text field")
+        for key in ["run_id", "verify_record_id", "not_finished"]:
+            if value.get(key) is not None and not isinstance(value[key], str):
+                raise ValueError("invalid optional text field")
+        for key in ["files_changed", "commits"]:
+            if key in value and (
+                not isinstance(value[key], list)
+                or any(not isinstance(item, str) for item in value[key])
+            ):
+                raise ValueError("invalid path or revision list")
+        if value.get("confidence", "unstated") not in [
+            "unstated",
+            "low",
+            "medium",
+            "high",
+        ]:
+            raise ValueError("invalid confidence")
+        checks = value.get("how_verified", "")
+        if not isinstance(checks, str):
+            if not isinstance(checks, list):
+                raise TypeError("invalid verification evidence")
+            for check in checks:
+                if isinstance(check, str):
+                    continue
+                if (
+                    not isinstance(check, dict)
+                    or set(check) != {"command", "result"}
+                    or any(
+                        not isinstance(v, str) or not v.strip() for v in check.values()
+                    )
+                ):
+                    raise ValueError("invalid verification command/result")
+    except (OSError, ValueError, TypeError) as error:
+        # Never echo artifact contents, which may contain private data.
+        raise RuntimeError(help_text) from error
+
+
 def publish(exit_code=None):
     metadata = json.loads(Path(".git/xnaut-transfer.json").read_text())
     branch = metadata["branch"]
@@ -72,6 +148,7 @@ def publish(exit_code=None):
     for path in artifacts.rglob("*"):
         if path.is_symlink():
             raise RuntimeError("artifact symlinks cannot be published")
+    validate_handback(artifacts / "handback.json", required=exit_code == 0)
     # Track unusually large artifacts too, even when their extension is new.
     # Git LFS --filename escapes literal names instead of treating them as globs.
     for path in artifacts.rglob("*"):
