@@ -38,6 +38,18 @@ class PublishTests(unittest.TestCase):
         self.cmd("git", "checkout", "-b", self.branch)
         self.artifacts = self.repo / ".xnaut/runs/test-run"
         self.artifacts.mkdir(parents=True)
+        # Successful completion now requires a parseable worker handback.
+        (self.artifacts / "handback.json").write_text(
+            json.dumps(
+                {
+                    "summary": "Fixture complete",
+                    "commits": [self.sha],
+                    "how_verified": "Fixture assertions verify transferred artifacts",
+                    "not_finished": "nothing",
+                    "confidence": "high",
+                }
+            )
+        )
         (self.artifacts / ".gitattributes").write_text(
             "*.png filter=lfs diff=lfs merge=lfs -text\n*.mp4 filter=lfs diff=lfs merge=lfs -text\n"
         )

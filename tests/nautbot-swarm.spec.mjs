@@ -71,7 +71,7 @@ test('a swarm plan arrives as a card and dispatches nothing until it is confirme
   expect(sent.args).toMatchObject({ planId: 'swarm-abc12345' });
   // The outcome lands on the card, which stays in the thread, not in a toast
   // that is gone before anyone reads it.
-  await expect(card).toContainText('Started 2; queued 0; blocked 0');
+  await expect(card).toContainText('Recorded launches 2; queued 0; blocked 0');
   await expect(card.getByRole('button', { name: /Dispatch/ })).toHaveCount(0);
   expect(await page.evaluate(() => window.__xnautErrors)).toEqual([]);
 });
@@ -101,11 +101,11 @@ for (const startedCount of [0, 3]) {
     }, { plan, startedCount });
     const card = page.locator('.as-swarm');
     await card.getByRole('button', { name: 'Dispatch 5 agents' }).click();
-    await expect(card).toContainText(`Started ${startedCount}; queued ${5 - startedCount}; blocked 0`);
+    await expect(card).toContainText(`Recorded launches ${startedCount}; queued ${5 - startedCount}; blocked 0`);
     await expect(card.locator('.as-swarm-run')).toHaveCount(5);
     expect(await page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'swarm_plan_dispatch').length)).toBe(1);
     await openNautbot(page);
-    await expect(page.locator('[data-swarm]').last()).toContainText(`Started ${startedCount}; queued ${5 - startedCount}; blocked 0`);
+    await expect(page.locator('[data-swarm]').last()).toContainText(`Recorded launches ${startedCount}; queued ${5 - startedCount}; blocked 0`);
     expect(await page.evaluate(() => window.__xnautInvokes.some(i => i.cmd === 'swarm_plan_dispatch'))).toBe(false);
   });
 }

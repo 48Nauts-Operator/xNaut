@@ -969,7 +969,7 @@ impl SwarmDispatched {
             "total": self.total,
             "members": self.members,
             "note": format!(
-                "Started {}; queued {}; blocked {}; {} total planned for {}. Queued members retain their approval and await refill; this plan is durable, not consumed. Inspect member states and reasons before recovery. Do not create a replacement merely because zero workers started, and do not claim queued work is running or completed.",
+                "Recorded launches {}; queued {}; blocked {}; {} total planned for {}. Recorded launches are cumulative for this plan, not new workers from this call or the number still running. Queued members retain their approval and await refill; this plan is durable, not consumed. Inspect member states and reasons before recovery. Do not create a replacement merely because zero workers started, and do not claim queued work is running or completed.",
                 self.started.len(), self.queued.len(), self.failed.len(), self.total, self.project
             )
         })
@@ -1828,7 +1828,7 @@ mod tests {
         assert_eq!(result["queued"].as_array().unwrap().len(), 5);
         assert!(result["started"].as_array().unwrap().is_empty());
         assert_eq!(result["members"][0]["reason"], "approved; waiting for capacity");
-        assert!(result["note"].as_str().unwrap().contains("Started 0; queued 5; blocked 0; 5 total"));
+        assert!(result["note"].as_str().unwrap().contains("Recorded launches 0; queued 5; blocked 0; 5 total"));
         assert_eq!(restarted.approved_at, Some(1));
         assert_eq!(restarted.events.len(), 5);
         restarted.members[0].state = MemberState::Tracking;

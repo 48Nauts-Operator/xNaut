@@ -333,8 +333,17 @@ fn save_in(
     if summary.trim().is_empty() {
         return Err("Describe the change before saving".into());
     }
+    let guard = lock(root)?;
+    save_locked_in(root, rel, content, expected, actor, summary, &guard)
+}
+// Journal capture holds this same lock across its read/append/write cycle.
+// Wiki edits retain their optimistic revision check under the lock.
+fn save_locked_in(
+    root: &Path, rel: &str, content: &str, expected: Option<&str>,
+    actor: &str, summary: &str, _guard: &Lock,
+) -> Result<(), String> {
+    if content.len() as u64 > MAX_DOC { return Err("Page exceeds 2 MB".into()); }
     let path = markdown_path(root, rel)?;
-    let _guard = lock(root)?;
     let old = if path.exists() {
         Some(read(&path)?)
     } else {

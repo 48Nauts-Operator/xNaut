@@ -23,6 +23,7 @@ export const nativeSuites = [
 ];
 export const requiredNative = [
   ...(process.platform === 'win32' ? [] : ['repository_transfer::tests::repository_publisher_protocol_suite']),
+  'project_wiki::journal::tests::journal_capture_waits_for_an_active_wiki_writer_without_losing_an_entry',
   'project_wiki::journal::console::tests::journal_actions_scope_before_limit_and_keep_old_dates',
   'handback::tests::command_result_verification_evidence_preserves_the_pi_handback_contract',
   'run_control::tests::explicit_conversations_do_not_consume_legacy_worker_capacity',

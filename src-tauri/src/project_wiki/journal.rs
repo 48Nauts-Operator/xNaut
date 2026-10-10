@@ -58,56 +58,55 @@ fn entries(text: &str) -> Vec<Entry> {
 }
 fn append_in(root: &Path, name: &str, e: &Entry, context: &str) -> Result<(), String> {
     let rel = path(&e.at);
-    for _ in 0..8 {
-        let target = markdown_path(root, &rel)?;
-        let old = if target.exists() {
-            Some(read(&target)?)
-        } else {
-            None
-        };
-        if old
-            .as_ref()
-            .is_some_and(|s| entries(s).iter().any(|x| x.id == e.id))
-        {
-            return Ok(());
-        }
-        let mut text=old.clone().unwrap_or_else(||format!("# {name} · Live Journal · {}\n\n## Where we stand\n\n{context}\n\n## Working notes\n\n",day(&e.at)));
-        let mut meta = e.clone();
-        meta.content.clear();
-        let content = redact(&e.content).replace(MARK, "&lt;!-- xnaut-journal-entry ");
-        text.push_str(&format!(
-            "\n{MARK}{} -->\n### {}\n\n*{} · {} · {}*\n\n{}\n\n",
-            serde_json::to_string(&meta)
-                .map_err(|e| e.to_string())?
-                .replace('<', "\\u003c"),
-            e.title.replace(['\n', '\r'], " "),
-            e.at,
-            e.actor,
-            e.kind,
-            content
-        ));
-        match save_in(
-            root,
-            &rel,
-            &text,
-            old.as_ref().map(|s| hash(s.as_bytes())).as_deref(),
-            &e.actor,
-            "Capture Live Journal entry",
-        ) {
-            Ok(()) => return Ok(()),
-            Err(err)
-                if err.contains("changed since")
-                    || err.contains("busy")
-                    || err.contains("locked")
-                    || err.contains("save is in progress") =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(30))
-            }
+    // Acquire before reading: competing captures must not repeatedly build
+    // stale revisions and exhaust the retry budget. This runs off the UI thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let guard = loop {
+        match lock(root) {
+            Ok(guard) => break guard,
+            Err(err) if err.contains("save is in progress") && std::time::Instant::now() < deadline =>
+                std::thread::sleep(std::time::Duration::from_millis(20)),
             Err(err) => return Err(err),
         }
+    };
+    let target = markdown_path(root, &rel)?;
+    let old = if target.exists() {
+        Some(read(&target)?)
+    } else {
+        None
+    };
+    if old
+        .as_ref()
+        .is_some_and(|s| entries(s).iter().any(|x| x.id == e.id))
+    {
+        return Ok(());
     }
-    Err("Journal is busy; the source remains saved and capture will retry.".into())
+    let mut text=old.clone().unwrap_or_else(||format!("# {name} · Live Journal · {}\n\n## Where we stand\n\n{context}\n\n## Working notes\n\n",day(&e.at)));
+    let mut meta = e.clone();
+    meta.content.clear();
+    let content = redact(&e.content).replace(MARK, "&lt;!-- xnaut-journal-entry ");
+    text.push_str(&format!(
+        "\n{MARK}{} -->\n### {}\n\n*{} · {} · {}*\n\n{}\n\n",
+        serde_json::to_string(&meta)
+            .map_err(|e| e.to_string())?
+            .replace('<', "\\u003c"),
+        e.title.replace(['\n', '\r'], " "),
+        e.at,
+        e.actor,
+        e.kind,
+        content
+    ));
+    save_locked_in(
+        root,
+        &rel,
+        &text,
+        old.as_ref().map(|s| hash(s.as_bytes())).as_deref(),
+        &e.actor,
+        "Capture Live Journal entry",
+        &guard,
+    )
 }
+
 fn historical(p: &Project) -> Vec<Value> {
     let root = Path::new(&p.vault_path);
     let mut docs = Vec::new();
@@ -679,6 +678,26 @@ mod tests {
         assert_eq!(entries(&d.content).len(), 1);
         assert_eq!(d.created_by, "André");
         assert!(entries(&d.content)[0].content.contains("const keep"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn journal_capture_waits_for_an_active_wiki_writer_without_losing_an_entry() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(uuid::Uuid::new_v4().to_string());
+        let guard = lock(&root).unwrap();
+        let worker_root = root.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            tx.send(()).unwrap();
+            append_in(&worker_root, "Demo", &sample("waited"), "Start")
+        });
+        rx.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        drop(guard);
+        worker.join().unwrap().unwrap();
+        append_in(&root, "Demo", &sample("waited"), "Start").unwrap();
+        let saved = entries(&read(&root.join(path(&sample("").at))).unwrap());
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, "waited");
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

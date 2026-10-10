@@ -10,6 +10,8 @@ All notable changes to xNAUT are documented in this file.
 - Browse project actions by date and event type, group repeated events, and load earlier actions without mixing other projects into the feed.
 
 ### Fixed
+- Serialize Journal capture before reading the current page and tolerate a busy Wiki writer without dropping concurrent entries.
+- Label swarm launch counts as cumulative so replaying a completed plan is not reported as newly starting workers.
 - Persist new swarm previews while a coordinator sweep is advancing. Planning no longer fails because the execution lease is occupied; dispatch remains serialized and existing approvals cannot be overwritten.
 - Reject malformed worker handbacks before claiming successful publication. Keep delivery pending so the existing durable outbox can publish a corrected handback without another worker or approval.
 
