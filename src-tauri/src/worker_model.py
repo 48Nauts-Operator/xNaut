@@ -3,6 +3,7 @@
 Uses Pi's documented models.json + PI_CODING_AGENT_DIR configuration contract.
 No worker-global Pi settings or credentials are modified.
 """
+
 import json
 import os
 from pathlib import Path
@@ -33,16 +34,29 @@ def cloud_probe(cloud):
 
     request = urllib.request.Request(
         cloud["endpoint"].rstrip("/") + "/models",
-        headers={"Authorization": "Bearer " + cloud["api_key"],
-                 "x-api-key": cloud["api_key"], "anthropic-version": "2023-06-01"},
+        headers={
+            "Authorization": "Bearer " + cloud["api_key"],
+            "x-api-key": cloud["api_key"],
+            "anthropic-version": "2023-06-01",
+        },
     )
     try:
-        with urllib.request.build_opener(NoRedirect).open(request, timeout=8) as response:
+        with urllib.request.build_opener(NoRedirect).open(
+            request, timeout=8
+        ) as response:
             catalog = json.load(response)
         models = catalog.get("data", catalog.get("models", []))
-        return "ready" if any(m.get("id", m.get("name")) == cloud["model"] for m in models) else "model_unavailable"
+        return (
+            "ready"
+            if any(m.get("id", m.get("name")) == cloud["model"] for m in models)
+            else "model_unavailable"
+        )
     except urllib.error.HTTPError as error:
-        status = "authentication_missing" if error.code in (401, 403) else "endpoint_unreachable"
+        status = (
+            "authentication_missing"
+            if error.code in (401, 403)
+            else "endpoint_unreachable"
+        )
         error.close()
         return status
     except Exception:
@@ -58,19 +72,40 @@ def cloud_environment(cloud, run_id, runtime):
         pi = directory / "pi"
         pi.mkdir(mode=0o700)
         env["PI_CODING_AGENT_DIR"] = str(pi)
-        api = "anthropic-messages" if cloud["provider"] in ("anthropic", "claude") else "openai-completions"
-        private_json(pi / "models.json", {"providers": {"xnaut-cloud": {
-            "baseUrl": cloud["endpoint"], "api": api,
-            # Pi 0.74 requires this field even when auth.json supplies the key.
-            # Both files are private and scoped to this run, never its repo.
-            "apiKey": cloud["api_key"],
-            "models": [{"id": cloud["model"]}],
-        }}})
-        private_json(pi / "settings.json", {"defaultProvider": "xnaut-cloud", "defaultModel": cloud["model"]})
-        private_json(pi / "auth.json", {"xnaut-cloud": {"type": "api_key", "key": cloud["api_key"]}})
+        api = (
+            "anthropic-messages"
+            if cloud["provider"] in ("anthropic", "claude")
+            else "openai-completions"
+        )
+        private_json(
+            pi / "models.json",
+            {
+                "providers": {
+                    "xnaut-cloud": {
+                        "baseUrl": cloud["endpoint"],
+                        "api": api,
+                        # Pi 0.74 requires this field even when auth.json supplies the key.
+                        # Both files are private and scoped to this run, never its repo.
+                        "apiKey": cloud["api_key"],
+                        "models": [{"id": cloud["model"]}],
+                    }
+                }
+            },
+        )
+        private_json(
+            pi / "settings.json",
+            {"defaultProvider": "xnaut-cloud", "defaultModel": cloud["model"]},
+        )
+        private_json(
+            pi / "auth.json",
+            {"xnaut-cloud": {"type": "api_key", "key": cloud["api_key"]}},
+        )
     elif runtime == "claude":
-        env.update(ANTHROPIC_BASE_URL=cloud["endpoint"].removesuffix("/v1"),
-                   ANTHROPIC_AUTH_TOKEN=cloud["api_key"], ANTHROPIC_API_KEY=cloud["api_key"])
+        env.update(
+            ANTHROPIC_BASE_URL=cloud["endpoint"].removesuffix("/v1"),
+            ANTHROPIC_AUTH_TOKEN=cloud["api_key"],
+            ANTHROPIC_API_KEY=cloud["api_key"],
+        )
     private_json(directory / "environment.json", env)
     return env
 

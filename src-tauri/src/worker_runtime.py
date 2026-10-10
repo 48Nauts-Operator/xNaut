@@ -1,4 +1,4 @@
-"""Read-only runtime admission. Never emits credentials or starts an agent task."""
+"""Runtime admission and private cloud setup. Never starts an agent task."""
 
 import json
 import os
@@ -11,17 +11,24 @@ def check(request):
     cloud = request.get("cloud")
     if not cloud:
         return check_runtime(request)
-    status = cloud_probe(cloud)
+    # Native admission embeds worker_model.py before this script. Legacy
+    # read-only probes can still run this file by itself without that helper.
+    support = globals()
+    status = support["cloud_probe"](cloud)
     if status != "ready":
         return status
-    directory = cloud_directory(request["cloud_id"])
+    directory = support["cloud_directory"](request["cloud_id"])
     if directory.exists():
         return "check_failed"
     status = "check_failed"
     try:
         request = dict(request)
-        request["env"] = dict(request["env"], **cloud_environment(
-            cloud, request["cloud_id"], request["binary"]))
+        request["env"] = dict(
+            request["env"],
+            **support["cloud_environment"](
+                cloud, request["cloud_id"], request["binary"]
+            ),
+        )
         status = check_runtime(request)
         return status
     finally:
@@ -51,16 +58,38 @@ def check_runtime(request):
             # would be interpreted as a task. Discovery is read-only on both
             # versions and verifies that Pi loaded the isolated model/auth.
             result = subprocess.run(
-                [binary, "--no-extensions", "--no-skills", "--no-prompt-templates", "--list-models", request["model"]],
-                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=15, text=True,
+                [
+                    binary,
+                    "--no-extensions",
+                    "--no-skills",
+                    "--no-prompt-templates",
+                    "--list-models",
+                    request["model"],
+                ],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=15,
+                text=True,
             )
-            found = any(line.split()[:2] == ["xnaut-cloud", request["model"]]
-                        for line in (result.stdout + "\n" + result.stderr).splitlines())
-            return "ready" if result.returncode == 0 and found else "authentication_missing"
+            found = any(
+                line.split()[:2] == ["xnaut-cloud", request["model"]]
+                for line in (result.stdout + "\n" + result.stderr).splitlines()
+            )
+            return (
+                "ready"
+                if result.returncode == 0 and found
+                else "authentication_missing"
+            )
 
-        help_result = subprocess.run([binary, "auth", "--help"], env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8, text=True)
+        help_result = subprocess.run(
+            [binary, "auth", "--help"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            text=True,
+        )
         if "pi auth check" not in help_result.stdout:
             return "runtime_unsupported"
 
