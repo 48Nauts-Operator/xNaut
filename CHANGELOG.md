@@ -2,6 +2,30 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.31.0] - 2026-10-12
+
+### Added
+- A structured Live Journal with Tickets, Timeline, Agents, Insights, Notes and Handoffs, using the existing application palette and one scrolling surface.
+- Ticket and assigned-release Timeline, Waterfall, Activity Map and Event log views. Inspect saved attempts, outputs and comparisons inline, with explicit source and state labels.
+- A full-year activity heatmap with year/month filters and correctly aligned partial weeks. Recorded ticket completion is shown separately from event volume.
+- Conversation search, creation-date grouping by year/month/day, archive navigation, and copy controls for user and agent messages.
+- Monthly Journal notes across saved daily documents, with author filters and dated groups.
+
+### Fixed
+- Keep Journal source reads off the UI executor and avoid redundant source loads.
+- Preserve the selected project/release/ticket scope across drill-down and refresh; keep activity-map inspection inside the Journal.
+- Log unattributed shared diagnostics without placing unrelated warnings in every project's panel. Project-specific source failures remain visible.
+- Reduce ticket-detail glare and spacing, distinguish checked criteria from pending ones, and remove the duplicate Waterfall heading.
+
+### Known limitations
+- Release forecasting, cutoff dates and CI/merge summaries are not supplied by this redesign. Insights show recorded completion history, not a predicted delivery date.
+- The release summary appears when an assigned release is selected. Unassigned tickets have no release version, and ticket drill-down currently hides that summary.
+- History is bounded to loaded records; recorded states do not establish that a worker is still running. Per-phase timing and spend are shown only when available.
+- Acceptance checkmarks are author-reported. Unchecked criteria do not imply a failed test; per-criterion failure results are not stored.
+
+### Release checks
+- Require the final Journal, lifecycle, conversation archive and conversation-context browser suites in the release behavior gate, alongside native Journal persistence and existing dispatch/updater checks.
+
 ## [1.30.14] - 2026-10-11
 
 ### Fixed

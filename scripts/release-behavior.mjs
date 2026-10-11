@@ -79,7 +79,8 @@ export const requiredNative = [
   'agent_tools::tests::swarm_tools_expose_destination_and_durable_queue_contract',
 ];
 export const browserFiles = [
-  'journal-console.spec.mjs', 'actions-rows.spec.mjs',
+  'journal-console.spec.mjs', 'journal-final.spec.mjs', 'journal-v4.spec.mjs',
+  'conversation-v4.spec.mjs', 'agent-journal-context.spec.mjs', 'actions-rows.spec.mjs',
   'cloud-agent-model.spec.mjs',
   'chat-model-picker.spec.mjs',
   'update-banner.spec.mjs',

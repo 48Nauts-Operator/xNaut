@@ -13,7 +13,7 @@
 
 **A native terminal for working with a fleet of coding agents.**
 
-[![Version](https://img.shields.io/badge/version-1.30.11-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
+[![Version](https://img.shields.io/badge/version-1.31.0-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -55,6 +55,18 @@ get a branch and a PR back. macOS & Windows.
 - Right-pane root picker switches the file tree between Home, project root, and
   the current project
 
+### Live Journal
+- Keep project work beside the agent conversation with **Tickets, Timeline, Agents,
+  Insights, Notes and Handoffs**.
+- Inspect ticket history through Timeline, Waterfall, Activity Map and Event log;
+  open recorded attempts, saved output and comparisons without leaving the pane.
+- Filter activity by year, month, date, ticket or an assigned release; pin the
+  view when it should stop following the conversation.
+- Browse conversations by year/month/day, search and archive finished threads,
+  and copy either side of the conversation.
+
+See the [Journal guide](JOURNAL.md) for navigation and current limitations.
+
 ### AI Agents
 - **Agent Library + AgentFather** — reusable agent profiles (personas, roles,
   skills, tools, access scopes, constraints, runtime model)
@@ -73,8 +85,9 @@ get a branch and a PR back. macOS & Windows.
 
 Cloud model selection currently supports the standard Pi, Codex and Claude
 commands. A provider catalog entry does not prove that a model supports every
-tool enabled in a harness. Automatic model selection by NautGate and paid Jev
-routing are later phases.
+tool enabled in a harness. An enabled NautGate connection takes precedence for cloud workers; an explicit
+model is preserved, and Auto delegates selection to the gateway. Paid Jev
+routing remains a later phase.
 
 ### NautLoom Cloud Agent
 - Hand a task (or a ticket) to a self-hosted coding agent: **Plan → sandbox →
