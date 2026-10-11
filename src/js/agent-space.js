@@ -1205,7 +1205,7 @@
         ? `${thread.journalPinnedProject ? 'Pinned to' : 'Following chat:'} ${context.project.name}. Journal and Wiki use this project.`
         : 'No single project identified. Choose one to capture this conversation in its Journal.';
       // A retained microphone/background reply cannot move another chat's pane.
-      if (pane.isConnected && !pane.hidden && pane.getClientRects().length) window.xnautAgentProjectContext.follow(context.project, {thread:thread.id,text:[...(thread.messages || [])].reverse().find(m=>m.role==='user'&&!m.voiceTranscript)?.text || ''});
+      if (pane.isConnected && !pane.hidden && pane.getClientRects().length) window.xnautAgentProjectContext.follow(context.project, {thread:thread.id,accent:profile.accent_color,text:[...(thread.messages || [])].reverse().find(m=>m.role==='user'&&!m.voiceTranscript)?.text || ''});
       return context.project?.key || '';
     };
     pane._followJournal = () => syncJournal();

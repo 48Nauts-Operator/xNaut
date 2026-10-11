@@ -49,7 +49,12 @@
     function selectScope(next,notify=true){scope=next;selected=next.startsWith('ticket:')?next.slice(7):'';eventId='';limit=40;persist();render();if(notify)options.onScope?.(scope);}
     function ticketClick(id){if(!scope.startsWith('ticket:'))remembered=scope;selectScope('ticket:'+id);}
     function context(){
-      const c=window.xnautJournalContext;if(!m||pinned||!c||![data.project.key,data.project.root].includes(c.project))return;
+      const c=window.xnautJournalContext;if(!m||!c||![data.project.key,data.project.root].includes(c.project))return;
+      // Reuse the selected agent's existing accent, never invent a Journal palette.
+      const surface=host.closest('.pj');
+      if(c.accent&&CSS.supports('color',c.accent)){surface?.style.setProperty('--pj-accent',c.accent);expanded?.style.setProperty('--pj-accent',c.accent);}
+      else {surface?.style.removeProperty('--pj-accent');expanded?.style.removeProperty('--pj-accent');}
+      if(pinned)return;
       const key=JSON.stringify(c);if(key===lastContext)return;lastContext=key;
       const text=String(c.text||'');
       const tickets=m.tickets.filter(t=>new RegExp('(^|[^A-Za-z0-9-])'+t.id+'(?![A-Za-z0-9-])','i').test(text));
@@ -135,7 +140,7 @@
       const evidence=target.querySelector('[data-ticket-evidence]');if(evidence)options.evidence?.(evidence,selected);
       target.querySelector('[data-expand]')?.addEventListener('click',()=>{
         if(expanded){expanded.close();return;}
-        expanded=document.createElement('dialog');expanded.className='pj jl-expanded';document.body.append(expanded);expanded.addEventListener('close',()=>{expanded.remove();expanded=null;lastRender='';render();});render();expanded.showModal();
+        expanded=document.createElement('dialog');expanded.className='pj jl-expanded';expanded.style.setProperty('--pj-accent',getComputedStyle(host.closest('.pj')).getPropertyValue('--pj-accent'));document.body.append(expanded);expanded.addEventListener('close',()=>{expanded.remove();expanded=null;lastRender='';render();});render();expanded.showModal();
       });
     }
     function render(){if(!m)return;renderToolbar();renderCalendar();const html=markup();if(html===lastRender)return;lastRender=html;const target=expanded||host;target.innerHTML=html;wire(target);}
