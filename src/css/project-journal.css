@@ -127,3 +127,20 @@
 @media(max-width:500px){.jd .pj-header,.jd .pj-document{padding-left:16px;padding-right:16px}.jd .pj-tabs{gap:12px;padding-left:16px;padding-right:16px}}
 .jd .jd-ticket-group{margin:0!important;padding:0!important}.jd .jd-ticket-group>h3{margin:12px 0 4px;line-height:18px}.jd .jd-ticket-row{padding:9px 0}.jd .jd-list-heading h2{font-size:16px;margin:0 0 8px;font-weight:600}.jd .pj-document h2{font-weight:600}.jd .jd-spark{gap:8px;border-bottom:1px solid var(--pj-border)}.jd .jd-spark>div{flex:0 1 30px}.jd .jd-spark i{max-width:18px}.jd [data-refresh-source]{font-size:10px;text-transform:none;letter-spacing:0;float:right;border:0;color:var(--pj-accent);padding:0}.jd-map-inspector{margin-bottom:16px}.jd-map-inspector .jd-detail-heading{margin-top:0}
 .jd-tool-call{padding:8px 0;border-bottom:1px solid var(--pj-border)}.jd-tool-call summary{font-size:12px;color:var(--pj-accent);cursor:pointer}.jd-tool-call pre{padding:12px;white-space:pre-wrap;max-height:300px}
+
+/* Ticket reading surface: existing accent headings, softer neutral text. */
+.jd .jd-tickets{--jd-reading:color-mix(in srgb,var(--pj-text) 80%,var(--pj-bg));color:var(--jd-reading);font-weight:400}
+.jd .jd-tickets>h2{color:var(--pj-accent);font-size:20px;line-height:1.35;margin:12px 0 18px}
+.jd .jd-tickets>h3{color:var(--pj-accent);font-size:11px;letter-spacing:.07em;margin:22px 0 10px}
+.jd .jd-tickets .jd-fields dd,.jd .jd-tickets .jd-ticket-row strong{color:var(--jd-reading);font-weight:400}
+.jd [data-ticket-body]{color:var(--jd-reading);font-size:13px;line-height:1.65;font-weight:400}
+.jd [data-ticket-body] :is(h1,h2,h3,h4,h5,h6){color:var(--pj-accent);font-size:16px;font-weight:500;line-height:1.4;letter-spacing:0;text-transform:none;margin:24px 0 10px}
+.jd [data-ticket-body] :is(p,li,td,th){color:var(--jd-reading);font-weight:400}
+.jd [data-ticket-body] p{margin:0 0 12px}
+.jd [data-ticket-body] :is(ul,ol){margin:8px 0 20px;padding:0 0 0 22px;list-style-position:outside}
+.jd [data-ticket-body] li{padding-left:4px;margin:0 0 9px}
+.jd [data-ticket-body] li::marker{color:var(--pj-muted)}
+.jd [data-ticket-body] strong{color:inherit;font-weight:600}
+.jd [data-ticket-body] code{font-size:.9em;font-weight:400;color:var(--jd-reading)}
+.jd [data-ticket-body] pre{padding:12px;border:1px solid var(--pj-border);border-radius:5px}
+.jd [data-ticket-body] a{color:var(--pj-accent);text-underline-offset:3px;overflow-wrap:anywhere}

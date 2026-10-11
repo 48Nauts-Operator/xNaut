@@ -37,7 +37,7 @@
         const href = node.getAttribute('href') || '';
         if (/^https:\/\/xnaut-wiki\.invalid\/Development\/[a-zA-Z0-9_./-]+\.md$/.test(href)) { node.dataset.wikiPath=href.slice('https://xnaut-wiki.invalid/'.length); node.removeAttribute('href'); }
         else if (!/^https?:\/\//i.test(href)) node.removeAttribute('href');
-        else { node.setAttribute('target','_blank'); node.setAttribute('rel','noopener noreferrer'); }
+        else { node.setAttribute('target','_blank'); node.setAttribute('rel','noopener noreferrer'); node.setAttribute('title','Opens in your browser. Private repositories require a browser sign-in.'); }
       }
     });
     el.replaceChildren(...parsed.body.childNodes);
