@@ -4,6 +4,20 @@
   const instances = new WeakMap();
   const drafts = new Map();
   const groupActions = new Map();
+  const loggedSharedDiagnostics = new Set();
+  function projectDiagnostics(snapshot) {
+    const all=snapshot?.diagnostics || [];
+    for(const d of all.filter(d=>d.blocking===false)){
+      const key=JSON.stringify([d.source,d.message]);
+      if(loggedSharedDiagnostics.has(key))continue;
+      if(loggedSharedDiagnostics.size>=256)loggedSharedDiagnostics.delete(loggedSharedDiagnostics.values().next().value);
+      loggedSharedDiagnostics.add(key);
+      console.info('[Journal system diagnostics; no project attribution]',d.source,d.message);
+    }
+    // Legacy diagnostics without a severity remain visible; never hide a
+    // project evidence failure simply because older records lack this field.
+    return all.filter(d=>d.blocking!==false);
+  }
   let mountId = 0;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
@@ -66,7 +80,7 @@
     const active=tickets.filter(current), other=tickets.filter(t=>!current(t));
     // Orphaned ticket references still need to be inspectable; never silently lose a run.
     const orphaned=assignments.filter(a=>(!filter || a.ticket===filter) && !(snapshot.tickets || []).some(t=>(t.assignment_ids || []).includes(a.run_id)));
-    const diagnostics=snapshot.diagnostics || [];
+    const diagnostics=projectDiagnostics(snapshot);
     return `${diagnostics.length?`<div class="pj-continuity-warning" role="status"><strong>Current state is incomplete.</strong><ul>${diagnostics.map(d=>`<li>${esc(d.message)} <small>Source: ${esc(d.source)}</small></li>`).join('')}</ul></div>`:''}
       <p class="pj-muted">${diagnostics.length?'Available records show ':''}${active.length} recorded work item${active.length===1?'':'s'} needing attention${filter?' in '+esc(filter):''}. Status comes from saved records; a recorded signal does not confirm a worker is still running.</p>
       ${active.map(card).join('')}
@@ -125,7 +139,7 @@
       const c=data.console?.project===data.project.key?data.console:null;
       const tickets=(snapshot?.tickets || []).filter(t=>inScope(t.id));
       const counts=['active','blocked','stalled','review','verified','unknown'].map(k=>[k,tickets.filter(t=>t.state===k).length]).filter(([,n])=>n);
-      const diagnostics=snapshot?.diagnostics || [];
+      const diagnostics=projectDiagnostics(snapshot);
       const summaryMarkup=(snapshot?`<p class="pj-counts">${counts.length?counts.map(([k,n])=>`<span class="pj-state-${esc(k)}"><strong>${n}</strong> ${esc({active:'active',blocked:'blocked',stalled:'stalled',review:'awaiting review',verified:'verified',unknown:'need inspection'}[k])}</span>`).join(''):'No work needs attention in this selection.'}</p>`:`<p class="pj-continuity-warning">${esc(data.continuity_error || 'Current project state is unavailable.')}</p>`)+(diagnostics.length?`<details class="pj-diagnostics"><summary>Current state is incomplete · ${diagnostics.length} source warning${diagnostics.length===1?'':'s'}</summary>${diagnostics.map(d=>`<p>${esc(d.message)} <small>${esc(d.source)}</small></p>`).join('')}</details>`:'');
       const summaryHost=$('[data-summary]');
       if(summaryHost.dataset.fingerprint!==summaryMarkup){const open=summaryHost.querySelector('details')?.open;summaryHost.innerHTML=summaryMarkup;summaryHost.dataset.fingerprint=summaryMarkup;if(open&&summaryHost.querySelector('details'))summaryHost.querySelector('details').open=true;}

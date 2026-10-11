@@ -105,3 +105,20 @@ test('large projects bound initial ticket DOM and preserve keyboard navigation',
  expect(await page.locator('.jd-ticket-row').count()).toBeLessThanOrEqual(44);
  await page.locator('.pj-tabs [data-journal-tab="tickets"]').focus();await page.keyboard.press('End');await expect(page.locator('.pj-tabs [data-journal-tab="handoffs"]')).toBeFocused();await expect(page.locator('[data-panel="handoffs"]')).toBeVisible();
 });
+
+
+test('unattributed shared diagnostics go to logs once; project failures remain visible',async({page})=>{
+ const logged=[];page.on('console',m=>{if(m.text().includes('[Journal system diagnostics; no project attribution]'))logged.push(m.text());});
+ await start(page);
+ await page.evaluate(()=>{window.data.continuity.diagnostics=[{blocking:false,source:'launch receipts',message:'Shared receipts have no project attribution.'}];return window.instance.refresh();});
+ await expect(page.locator('.pj-diagnostics')).toHaveCount(0);
+ await expect(page.locator('.pj')).not.toContainText('Shared receipts have no project attribution.');
+ expect(logged).toHaveLength(1);
+ await page.evaluate(()=>window.instance.refresh());expect(logged).toHaveLength(1);
+ await page.locator('.jd-ticket-row').first().click();
+ await expect(page.locator('.pj')).not.toContainText('Shared receipts have no project attribution.');
+ await page.evaluate(()=>{window.data.continuity.diagnostics.push({blocking:true,source:'project run',message:'Project evidence cannot be read.'},{source:'legacy project source',message:'Legacy failure remains visible.'});return window.instance.refresh();});
+ await expect(page.locator('.pj-diagnostics')).toContainText('Project evidence cannot be read.');
+ await expect(page.locator('.pj-diagnostics')).toContainText('Legacy failure remains visible.');
+ expect(logged).toHaveLength(1);
+});
