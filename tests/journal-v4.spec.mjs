@@ -69,12 +69,27 @@ test('compact waterfall fits a 600px right pane and selected detail remains acti
  await page.evaluate(()=>{const h=document.querySelector('#journal');h.style.width='600px';h.style.height='950px';});
  await page.locator('[data-event="d"]').click();
  expect(await page.locator('.jl-row').first().evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
- await expect(page.locator('.jl-detail')).toBeVisible();
- await page.screenshot({path:'/Users/cand0rian/xnaut-testing/fixes/20261011-journal-v4/journal-600.png'});
+ await expect(page.locator('.jl-detail')).toBeInViewport();
+ await page.screenshot({path:test.info().outputPath('journal-600.png')});
 });
 test('unknown timestamps do not produce bars and historical failure cannot repaint current success',async({page})=>{
  await start(page);await page.evaluate(()=>{window.data.lifecycle.events.push({id:'old-failure',ticket:'DEMO-1',project:'DEMO',state:'failed',at:'unknown',kind:'run.observed'});return window.instance.refresh();});
  await expect(page.locator('[data-lifecycle-ticket="DEMO-1"]>span.jl-success')).toHaveText('Verified');
  expect(await page.evaluate(()=>window.xnautLifecycle.intervals([{state:'running',kind:'ticket.updated',at:'bad'}]))).toEqual([]);
  await page.getByRole('tab',{name:'Event log',exact:true}).click();await expect(page.locator('.jl-content')).toContainText('Date unknown');
+});
+
+test('selected event stays visible above a long real-size event log',async({page})=>{
+ await page.setViewportSize({width:1440,height:1000});await start(page);
+ await page.evaluate(()=>{document.querySelector('#journal').style.height='950px';for(let i=0;i<140;i++)window.data.lifecycle.events.push({id:'extra-'+i,project:'DEMO',ticket:'DEMO-2',at:'2026-10-11T07:00:00Z',kind:'run.observed',state:'done',detail:'Recorded report '+i});return window.instance.refresh();});
+ await page.getByRole('tab',{name:'Event log',exact:true}).click();
+ await page.locator('.jl-log-row').first().click();
+ await expect(page.locator('.jl-detail')).toBeInViewport();
+});
+
+test('polling keeps the scope control intact while it is being used',async({page})=>{
+ await start(page);await page.getByLabel('Journal scope').focus();
+ await page.evaluate(()=>{window.scopeElement=document.querySelector('[data-scope]');return window.instance.refresh();});
+ expect(await page.evaluate(()=>window.scopeElement===document.querySelector('[data-scope]'))).toBe(true);
+ await expect(page.getByLabel('Journal scope')).toBeFocused();
 });

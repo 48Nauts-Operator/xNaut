@@ -18,6 +18,8 @@
     const extra=(data.entries||[]).filter(e=>ids.has(e.ticket)).map(e=>({...e,id:'journal:'+e.id,detail:e.title,source:'Journal',authority:'Saved report'}));
     const events=[...(native?.events||[]),...extra].filter(e=>ids.has(e.ticket)&&(!e.project||e.project===key));
     const unique=[...new Map(events.map(e=>[e.id,e])).values()].sort((a,b)=>(millis(b.at)||0)-(millis(a.at)||0));
+    const latest=new Map();for(const e of unique)latest.set(e.ticket,Math.max(latest.get(e.ticket)||0,millis(e.at)||0));
+    tickets.sort((a,b)=>Math.max(millis(b.updated_at)||0,latest.get(b.id)||0)-Math.max(millis(a.updated_at)||0,latest.get(a.id)||0)||a.id.localeCompare(b.id,undefined,{numeric:true}));
     const groups=(data.groups||[]).filter(g=>g.project===key&&g.approved_at!=null);
     const links=[...(native?.links||[]),...groups.flatMap(g=>(g.members||[]).filter(m=>ids.has(m.ticket)).map(m=>({from:g.id,to:m.ticket,kind:'group member',ticket:m.ticket})))];
     return {key,tickets,events:unique,groups,links,native,error:data.lifecycle_error};
@@ -66,10 +68,11 @@
     }
     function renderToolbar() {
       const releases=[...new Set(m.tickets.map(t=>t.release).filter(Boolean))].sort().reverse();
-      toolbar.innerHTML=`<select data-scope aria-label="Journal scope"><option value="project">Project · ${esc(data.project.name)}</option>${releases.map(r=>`<option value="release:${esc(r)}">Release · ${esc(r)}</option>`).join('')}${m.groups.map(g=>`<option value="group:${esc(g.id)}">Task group · ${esc(g.title||g.id)}</option>`).join('')}${m.tickets.map(t=>`<option value="ticket:${esc(t.id)}">Ticket · ${esc(t.id)}</option>`).join('')}</select><button data-pin aria-pressed="${pinned}">${pinned?'Unpin':'Pin view'}</button><small>${pinned?'Pinned':'Following conversation'}</small>`;
+      const html=`<select data-scope aria-label="Journal scope"><option value="project">Project · ${esc(data.project.name)}</option>${releases.map(r=>`<option value="release:${esc(r)}">Release · ${esc(r)}</option>`).join('')}${m.groups.map(g=>`<option value="group:${esc(g.id)}">Task group · ${esc(g.title||when(g.approved_at)+' · '+(g.members||[]).length+' tickets')}</option>`).join('')}${m.tickets.map(t=>`<option value="ticket:${esc(t.id)}">Ticket · ${esc(t.id)}</option>`).join('')}</select><button data-pin aria-pressed="${pinned}">${pinned?'Unpin':'Pin view'}</button><small>${pinned?'Pinned':'Following conversation'}</small>`;
+      if(toolbar.dataset.markup!==html){toolbar.innerHTML=html;toolbar.dataset.markup=html;}
       const scopeSelect=toolbar.querySelector('[data-scope]');
       if(![...scopeSelect.options].some(o=>o.value===scope)){const missing=document.createElement('option');missing.value=scope;missing.textContent='Unavailable · '+scope;scopeSelect.append(missing);}
-      scopeSelect.value=scope;
+      if(scopeSelect.value!==scope)scopeSelect.value=scope;
       toolbar.querySelector('[data-scope]').onchange=e=>selectScope(e.target.value);
       toolbar.querySelector('[data-pin]').onclick=()=>{pinned=!pinned;persist();lastContext='';renderToolbar();if(!pinned)context();};
     }
@@ -96,14 +99,20 @@
     }
     function mapView(tickets){
       const ids=new Set(tickets.map(t=>t.id));const links=m.links.filter(l=>ids.has(l.from)||ids.has(l.to)||ids.has(l.ticket));
-      const node=id=>{const t=m.tickets.find(t=>t.id===id);return t?ticketButton(t):`<span class="jl-map-node" title="${esc(id)}">${esc(id)}</span>`;};
+      const node=id=>{
+        const t=m.tickets.find(t=>t.id===id);if(t)return ticketButton(t);
+        const run=m.events.find(e=>e.run_id===id);
+        if(run)return `<button class="jl-map-node" data-inspect-event="${esc(id)}" title="${esc(id)}"><strong>@${esc(run.actor||'Unknown agent')} · ${esc(run.ticket)}</strong><small class="jl-${tone(run.state)}">${esc(label(run.state))} · recorded</small></button>`;
+        const group=m.groups.find(g=>g.id===id);
+        return `<span class="jl-map-node" title="${esc(id)}">${esc(group ? (group.title||'Approved group')+' · '+when(group.approved_at) : id)}</span>`;
+      };
       return `<p class="jl-muted">Only recorded relationships. Membership and continuation links are not dependency claims.</p>`+(links.length?links.slice(0,limit).map(l=>`<div class="jl-map-edge">${node(l.from)}<span class="jl-connector">${esc(l.kind)} →</span>${node(l.to)}</div>`).join(''):'<p>No explicit relationships recorded for this selection.</p>')+(links.length>limit?'<button data-more>Show more relationships</button>':'');
     }
     function markup(){
       const tickets=scoped(m,scope),events=visibleEvents(tickets),e=events.find(e=>e.id===eventId);
       const selectedTicket=m.tickets.find(t=>t.id===selected);
       const coverage=!m.native?'Lifecycle history unavailable. Current ticket evidence remains accessible.':m.native.limited?'Recent history only · older events fall outside the loaded window.':m.native.coverage;
-      return `<div class="jl-viewbar"><div role="tablist" aria-label="Lifecycle views">${['timeline','waterfall','map','event log'].map(v=>`<button role="tab" aria-selected="${view===v}" tabindex="${view===v?0:-1}" data-view="${v}">${v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div><button data-expand>${expanded?'Close expanded view':'Expand ↗'}</button></div>${selected?`<button data-back>‹ Back to ${remembered==='project'?'project':remembered.split(':')[0]}</button>`:''}<p class="jl-coverage">${esc(coverage)}${m.native?.unreadable?' '+m.native.unreadable+' source files unreadable.':''}</p><div class="jl-content">${view==='map'?mapView(tickets):view==='event log'?eventLog(events):ticketRows(tickets,events)}</div>${view==='waterfall'?'<small class="jl-muted">Points: observations · bars: time between recorded status changes · hatched: waiting/review. Open ends have no invented duration.</small>':''}${e?`<section class="jl-detail jl-detail-${tone(e.state)}"><strong class="jl-${tone(e.state)}">${esc(e.ticket)} · ${esc(label(e.state||e.kind))}</strong><small>${esc(when(e.at))} · ${esc(e.authority||'Recorded report')}</small><p>${esc(e.detail||e.title||'No further details recorded.')}</p><small>Source: ${esc(e.source||'Journal')}</small>${e.run_id?`<button data-inspect-event="${esc(e.run_id)}">Execution record ↗</button>`:''}<button data-ticket="${esc(e.ticket)}">Ticket details ↗</button><button data-close-detail>Close details</button></section>`:''}${selectedTicket?`<section class="jl-ticket-detail"><h3>${esc(selectedTicket.id)} · ${esc(selectedTicket.title)}</h3><p>${esc(selectedTicket.next_action||'Inspect the recorded evidence.')}</p><div data-ticket-evidence></div></section>`:''}`;
+      return `<div class="jl-viewbar"><div role="tablist" aria-label="Lifecycle views">${['timeline','waterfall','map','event log'].map(v=>`<button role="tab" aria-selected="${view===v}" tabindex="${view===v?0:-1}" data-view="${v}">${v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div><button data-expand>${expanded?'Close expanded view':'Expand ↗'}</button></div>${selected?`<button data-back>‹ Back to ${remembered==='project'?'project':remembered.split(':')[0]}</button>`:''}<p class="jl-coverage">${esc(coverage)}${m.native?.unreadable?' '+m.native.unreadable+' source files unreadable.':''}</p>${e?`<section class="jl-detail jl-detail-${tone(e.state)}"><strong class="jl-${tone(e.state)}">${esc(e.ticket)} · ${esc(label(e.state||e.kind))}</strong><small>${esc(when(e.at))} · ${esc(e.authority||'Recorded report')}</small><p>${esc(e.detail||e.title||'No further details recorded.')}</p><small>Source: ${esc(e.source||'Journal')}</small>${e.run_id?`<button data-inspect-event="${esc(e.run_id)}">Execution record ↗</button>`:''}<button data-ticket="${esc(e.ticket)}">Ticket details ↗</button><button data-close-detail>Close details</button></section>`:''}<div class="jl-content">${view==='map'?mapView(tickets):view==='event log'?eventLog(events):ticketRows(tickets,events)}</div>${view==='waterfall'?'<small class="jl-muted">Points: observations · bars: time between recorded status changes · hatched: waiting/review. Open ends have no invented duration.</small>':''}${selectedTicket?`<section class="jl-ticket-detail"><h3>${esc(selectedTicket.id)} · ${esc(selectedTicket.title)}</h3><p>${esc(selectedTicket.next_action||'Inspect the recorded evidence.')}</p><div data-ticket-evidence></div></section>`:''}`;
     }
     function wire(target){
       target.querySelectorAll('[data-view]').forEach((b,i,bs)=>{b.onclick=()=>{view=b.dataset.view;limit=40;persist();render();(expanded||host).querySelector('[data-view="'+view+'"]')?.focus();};b.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();bs[(i+(e.key==='ArrowRight'?1:bs.length-1))%bs.length].click();};});
@@ -112,7 +121,7 @@
       target.querySelector('[data-more]')?.addEventListener('click',()=>{limit+=40;render();});
       target.querySelector('[data-close-detail]')?.addEventListener('click',()=>{eventId='';render();});
       target.querySelector('[data-back]')?.addEventListener('click',()=>selectScope(remembered));
-      target.querySelector('[data-inspect-event]')?.addEventListener('click',e=>options.onInspect?.(e.currentTarget.dataset.inspectEvent));
+      target.querySelectorAll('[data-inspect-event]').forEach(b=>{b.onclick=()=>options.onInspect?.(b.dataset.inspectEvent);});
       const evidence=target.querySelector('[data-ticket-evidence]');if(evidence)options.evidence?.(evidence,selected);
       target.querySelector('[data-expand]')?.addEventListener('click',()=>{
         if(expanded){expanded.close();return;}

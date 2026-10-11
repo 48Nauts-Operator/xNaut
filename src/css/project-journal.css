@@ -54,3 +54,5 @@
 .pj-agent>div:first-child{grid-column:1/-1}.pj-agent-links{margin:0;gap:2px}.pj-agent-links button{font-size:9px;padding:1px 3px}.pj-agent>small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;align-self:center}.pj-live-context{max-height:33%}
 
 .jl-detail-failure{border-left-color:var(--jl-red)}.jl-detail-success{border-left-color:var(--jl-green)}
+
+.jl-map-node{text-align:left!important}.jl-map-node strong,.jl-map-node small{display:block;font-size:10px}

@@ -42,3 +42,12 @@ test('visible copy controls copy original text for both roles and report failure
  await page.getByRole('button',{name:'Copy agent message',exact:true}).focus();await page.keyboard.press('Enter');expect(await page.evaluate(()=>window.copiedText)).toBe(saved.messages[1].text);
  await page.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw Error('denied');};});await page.getByRole('button',{name:'Copy your message',exact:true}).click();await expect(page.locator('[data-copy-message="old-user"]')).toContainText('Copy failed');
 });
+
+test('narrow conversation header stays above its context bar',async({page})=>{
+ await open(page,[thread('old','2026-10-10T12:00:00Z')]);
+ await page.locator('.as-conv').evaluate(e=>{e.style.width='380px';e.style.height='750px';});
+ const header=await page.locator('.as-head').boundingBox(),context=await page.locator('.as-context-bar').boundingBox();
+ expect(header.y+header.height).toBeLessThanOrEqual(context.y+1);
+ const archive=await page.locator('[data-archive-thread]').boundingBox();
+ expect(archive.y+archive.height).toBeLessThanOrEqual(header.y+header.height);
+});

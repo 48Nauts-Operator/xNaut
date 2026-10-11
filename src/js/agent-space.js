@@ -345,11 +345,11 @@
       .asl-archive-head { display:flex; align-items:center; justify-content:space-between; padding:7px 9px 3px; color:var(--text-secondary,#666670); font-size:8px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
       .asl-archive-clear { border:none; background:transparent; color:#ff6b63; font:inherit; font-size:8px; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; padding:0; opacity:.8; }
       .asl-archive-clear:hover { opacity:1; }
-      .as-head { display:flex; flex-wrap:wrap; align-items:center; gap:12px; min-height:58px; padding:9px 22px;
+      .as-head { display:flex; flex-shrink:0; flex-wrap:wrap; align-items:center; gap:12px; min-height:58px; padding:9px 22px;
         border-bottom:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
       .as-avatar { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; flex:0 0 auto;
         color:#fff; background:var(--profile-accent,#f5b840); font-size:13px; font-weight:750; }
-      .as-title { min-width:0; flex:1; } .as-title-row { display:flex; gap:8px; align-items:baseline; }
+      .as-title { min-width:120px; flex:1; } .as-title-row { display:flex; gap:8px; align-items:baseline; }
       .as-title h1 { margin:0; color:var(--text-primary,#f3f3f6); font-size:15px; font-weight:680; }
       .as-handle,.as-subtle { color:var(--text-secondary,#92929d); font-size:12px; }
       .as-status { display:flex; align-items:center; gap:6px; margin-top:3px; color:var(--text-secondary,#92929d); font-size:11px; }
