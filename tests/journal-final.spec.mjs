@@ -19,7 +19,7 @@ async function start(page,width=600){
     if(window.sourceDelay)await new Promise(r=>setTimeout(r,window.sourceDelay));
     if(args.kind==='ticket')return {text:JSON.stringify({id:args.id,project:window.wrongProject?'FOREIGN':'DEMO',body:'## Description\nFix Unicode display width.\n- [x] Emoji aligns\n- [ ] CJK aligns',release:'2.0'})};
     if(args.kind==='log')return {text:args.id==='old-run'?'FAIL expected 18 got 22':'FAIL expected 18 got 20'};
-    return {text:JSON.stringify({project:'DEMO',run_id:args.id,ticket:window.data.continuity.assignments.find(a=>a.run_id===args.id)?.ticket||'DEMO-1',runtime_id:'claude',model:'routed-model',remote_env:'exe-dev',state:window.data.continuity.assignments.find(a=>a.run_id===args.id)?.run_state||'failed',branch:'fix/one',last_commit:args.id==='old-run'?'aaa':'bbb',last_signal:'CJK cursor test failed',admission_refused:args.id==='old-run'})};
+    return {text:JSON.stringify({project:'DEMO',run_id:args.id,ticket:window.data.continuity.assignments.find(a=>a.run_id===args.id)?.ticket||'DEMO-1',runtime_id:'claude',model:'routed-model',remote_env:'exe-dev',state:window.data.continuity.assignments.find(a=>a.run_id===args.id)?.run_state||'failed',branch:'fix/one',last_commit:args.id==='old-run'?'aaa':'bbb',last_signal:['old-run','new-run'].includes(args.id)?'CJK cursor test failed':'Recorded run outcome; inspect its evidence.',admission_refused:args.id==='old-run'})};
    }
    return original(name,args);
   };
