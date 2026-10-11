@@ -4,6 +4,7 @@
 use super::*;
 mod activity;
 mod console;
+mod lifecycle;
 const MARK: &str = "<!-- xnaut-journal-entry ";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
@@ -368,6 +369,7 @@ fn read_journal_page(key: &str, selected: Option<&str>, action_before: Option<us
         .join("\n");
     let all_runs = runs(&p.key);
     let console = console::read(&p, &rel, &all_runs, action_before);
+    let (lifecycle,lifecycle_error)=match lifecycle::read(&p.key,&all_runs) {Ok(v)=>(v,None),Err(e)=>(Value::Null,Some(e))};
     let current: Vec<_> = all_runs
         .into_iter()
         .filter(|r| !r.state.terminal())
@@ -390,7 +392,7 @@ fn read_journal_page(key: &str, selected: Option<&str>, action_before: Option<us
             ),
         };
     Ok(
-        json!({"console":console,"groups":groups,"groups_error":groups_error,"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"continuity":continuity,"continuity_error":continuity_error,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
+        json!({"lifecycle":lifecycle,"lifecycle_error":lifecycle_error,"console":console,"groups":groups,"groups_error":groups_error,"project":p,"path":rel,"documents":docs,"opening":opening,"entries":rows,"runs":current,"continuity":continuity,"continuity_error":continuity_error,"observed_at":now(),"warning":CAPTURE_WARNING.lock().map(|s|s.clone()).unwrap_or_default()}),
     )
 }
 #[tauri::command]

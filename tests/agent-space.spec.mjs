@@ -115,10 +115,10 @@ test('each thread menu can archive and permanently delete a thread', async ({ pa
   if (!await threadRows.count()) await page.locator('[data-threads-toggle="builder"]').click();
   const archiveRow = threadRows;
   await archiveRow.getByRole('button', { name:/Actions for thread/ }).click();
-  await page.getByRole('button', { name:'Archive', exact:true }).click();
+  await page.locator('[data-thread-menu]').getByRole('button', { name:'Archive', exact:true }).click();
   // The archived section is collapsible and counts what it holds.
-  await expect(page.locator('.asl-archive-head')).toContainText('Archived · 1');
-  await page.locator('.asl-archive-head').click();
+  await expect(page.locator('[data-thread-mode="archived"]')).toContainText('Archived · 1');
+  await page.locator('[data-thread-mode="archived"]').click();
 
   const archivedRow = page.locator('[data-library-thread="archive-thread"]');
   await archivedRow.getByRole('button', { name:/Actions for archived thread/ }).click();
@@ -127,6 +127,7 @@ test('each thread menu can archive and permanently delete a thread', async ({ pa
   await page.getByRole('button', { name:'Delete…', exact:true }).click();
   await page.locator('.xdlg').getByRole('button', { name:'Delete', exact:true }).click();
   await expect(page.locator('[data-library-thread="archive-thread"]')).toHaveCount(0);
+  await page.locator('[data-thread-mode="active"]').click();
   await expect(page.locator('[data-library-thread="keep-thread"]')).toBeVisible();
 });
 

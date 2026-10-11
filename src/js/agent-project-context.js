@@ -41,8 +41,11 @@
     const project = saved ? find(saved.journalProject) : find(thread.workspace) || find(profile.default_project) || (!messages.length && find(fallback));
     return {project:project || null, reason:project ? 'context' : 'unknown'};
   }
-  function follow(project) {
+  function follow(project, conversation = {}) {
     if (!project) return;
+    window.xnautJournalContext={project:project.key || project.root,...conversation};
+    window.dispatchEvent(new CustomEvent('xnaut:journal-context'));
+    if(window.xnautJournalPin && ![project.key,project.root].includes(window.xnautJournalPin.root))return;
     const current = document.querySelector('.rpws-nav button.active')?.dataset.sub;
     const tab = current === 'wiki' ? 'wiki' : 'journal';
     const root = project.root || project.key;

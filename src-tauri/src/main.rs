@@ -147,6 +147,7 @@ use state::AppState;
 
 // Separate full-application acceptance build; never a runtime production switch.
 pub(crate) const CONTINUITY_PREVIEW: bool = option_env!("XNAUT_CONTINUITY_PREVIEW").is_some();
+pub(crate) const JOURNAL_V4_PREVIEW: bool = option_env!("XNAUT_JOURNAL_V4_PREVIEW").is_some();
 pub(crate) const JOURNAL_PREVIEW: bool = option_env!("XNAUT_JOURNAL_PREVIEW").is_some();
 pub(crate) const FULL_WIKI_PREVIEW: bool = option_env!("XNAUT_FULL_WIKI_PREVIEW").is_some();
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -752,8 +753,10 @@ async fn main() {
             docsgen::docgen_generate,
         ])
         .setup(|app| {
-            // Journal capture is passive and runs for all projects, including previews.
-            std::thread::spawn(project_wiki::journal::capture_loop);
+            // The V4 UI preview reads existing evidence without duplicating capture.
+            if !JOURNAL_V4_PREVIEW {
+                std::thread::spawn(project_wiki::journal::capture_loop);
+            }
             if !FULL_WIKI_PREVIEW && !loop_acceptance::ENABLED {
             // Credentials and evidence live here; nobody else on this machine
             // needs read access. Idempotent, and it also closes files written

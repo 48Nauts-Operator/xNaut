@@ -79,14 +79,14 @@
   const isWorkerActivity = e => e.id?.startsWith('activity:') || (e.run_id && ['execution','summary'].includes(e.kind));
   function mount(host, root, openWiki) {
     instances.get(host)?.dispose();
-    let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, groupsFingerprint='', timer, sessions=[], sessionsError='', tab='actions', actionKind='', actionBefore=null;
+    let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, groupsFingerprint='', timer, sessions=[], sessionsError='', tab='tickets', actionKind='', actionBefore=null;
     const id=++mountId;
-    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header>
-      <div class="pj-live-context"><section class="pj-summary"><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-summary></div></section><section aria-label="Deployed agents" class="pj-deployed"><div class="pj-section-heading"><h3>Deployed agents <small>· current project</small></h3><button data-approvals>Approvals ↗</button></div><div data-agents class="pj-agent-grid"></div></section></div>
+    host.innerHTML = `<section class="pj"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div data-scope-host></div><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header>
+      <div class="pj-live-context"><section class="pj-summary"><div data-calendar-host></div><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-summary></div></section><section aria-label="Deployed agents" class="pj-deployed"><div class="pj-section-heading"><h3>Deployed agents <small>· current project</small></h3><button data-approvals>Approvals ↗</button></div><div data-agents class="pj-agent-grid"></div></section></div>
       <nav class="pj-tabs" role="tablist" aria-label="Journal sections">${['actions','tickets','notes','handoffs'].map(k=>`<button role="tab" id="pj-${id}-${k}" aria-controls="pj-${id}-${k}-panel" aria-selected="${k===tab}" tabindex="${k===tab?0:-1}" data-journal-tab="${k}">${k[0].toUpperCase()+k.slice(1)}</button>`).join('')}</nav>
       <div class="pj-scroll"><article class="pj-document">
-      <section role="tabpanel" id="pj-${id}-actions-panel" aria-labelledby="pj-${id}-actions" data-panel="actions"><div class="pj-section-heading"><h2>Actions</h2><button data-tools>Computers & verification</button></div><p class="pj-muted" data-actions-date></p><section data-groups></section><div data-actions></div></section>
-      <section role="tabpanel" id="pj-${id}-tickets-panel" aria-labelledby="pj-${id}-tickets" data-panel="tickets" hidden><h2>Tickets <small>· current state</small></h2><div data-continuity></div><section data-current></section></section>
+      <section role="tabpanel" id="pj-${id}-actions-panel" aria-labelledby="pj-${id}-actions" data-panel="actions" hidden><div class="pj-section-heading"><h2>Actions</h2><button data-tools>Computers & verification</button></div><p class="pj-muted" data-actions-date></p><section data-groups></section><div data-actions></div></section>
+      <section role="tabpanel" id="pj-${id}-tickets-panel" aria-labelledby="pj-${id}-tickets" data-panel="tickets"><div data-lifecycle></div><div data-continuity></div><section data-current></section></section>
       <section role="tabpanel" id="pj-${id}-notes-panel" aria-labelledby="pj-${id}-notes" data-panel="notes" hidden><h2>Notes</h2><p class="pj-muted" data-history-date></p><details class="pj-notes"><summary>Add your note or question</summary><form data-form><input data-ticket aria-label="Existing project ticket" placeholder="Ticket, e.g. XNAUT-455" required><select data-kind aria-label="Note type"><option value="note">Note</option><option value="question">Question</option><option value="decision">Decision</option></select><textarea data-note aria-label="Journal note" placeholder="Add context for the next person, a decision, or a question…" required></textarea><button type="submit">Save to Journal</button><small>Your name and time are recorded. Questions are saved here; use chat to ask an agent to answer.</small></form></details><details class="pj-saved-context"><summary>Saved context & previous journals</summary><div class="pj-evidence" data-opening></div></details><p data-empty class="pj-muted"></p><div data-entries></div></section>
       <section role="tabpanel" id="pj-${id}-handoffs-panel" aria-labelledby="pj-${id}-handoffs" data-panel="handoffs" hidden><h2>Handoffs <small>· current recorded outcomes</small></h2><div data-handoffs></div></section>
       </article></div></section>`;
@@ -95,6 +95,16 @@
     const remember = () => drafts.set(root,{text:$('[data-note]').value,ticket:$('[data-ticket]').value,kind:$('[data-kind]').value});
     const draft=drafts.get(root); if(draft){$('[data-note]').value=draft.text;$('[data-ticket]').value=draft.ticket;$('[data-kind]').value=draft.kind;}
     $('[data-form]').oninput=remember;
+    const lifecycle=window.xnautLifecycle?.mount($('[data-lifecycle]'),{
+      root,toolbar:$('[data-scope-host]'),calendar:$('[data-calendar-host]'),
+      day:()=>selected?.split('/').pop().replace('.md','') || '',
+      onDate:day=>{selected='Development/journal/'+day+'.md';actionBefore=null;fingerprint='';void refresh();},
+      onScope:next=>{filter=next.startsWith('ticket:')?next.slice(7):'';fingerprint='';if(data)paint();},
+      onInspect:showSource,
+      evidence:(el,ticket)=>{const snapshot=data?.continuity;if(!snapshot)return;el.innerHTML=continuityMarkup(snapshot,ticket);el.querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});}
+    });
+    const inScope=ticket=>{const ids=lifecycle?.ticketIds();return (!filter||ticket===filter)&&(!ids||ids.has(ticket));};
+
     function switchTab(key, focus=false) {
       tab=key;
       host.querySelectorAll('[data-journal-tab]').forEach(b=>{const active=b.dataset.journalTab===key;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;if(active&&focus)b.focus();});
@@ -109,13 +119,13 @@
     $('[data-tools]').onclick=()=>window.xnautOpenAgentTools?.(data?.project);
     function paintConsole(snapshot) {
       const c=data.console?.project===data.project.key?data.console:null;
-      const tickets=(snapshot?.tickets || []).filter(t=>!filter||t.id===filter);
-      const counts=['active','blocked','stalled','review','unknown'].map(k=>[k,tickets.filter(t=>t.state===k).length]).filter(([,n])=>n);
+      const tickets=(snapshot?.tickets || []).filter(t=>inScope(t.id));
+      const counts=['active','blocked','stalled','review','verified','unknown'].map(k=>[k,tickets.filter(t=>t.state===k).length]).filter(([,n])=>n);
       const diagnostics=snapshot?.diagnostics || [];
-      const summaryMarkup=(snapshot?`<p class="pj-counts">${counts.length?counts.map(([k,n])=>`<span><strong>${n}</strong> ${esc({active:'active',blocked:'blocked',stalled:'stalled',review:'awaiting review',unknown:'need inspection'}[k])}</span>`).join(''):'No work needs attention in this selection.'}</p>`:`<p class="pj-continuity-warning">${esc(data.continuity_error || 'Current project state is unavailable.')}</p>`)+(diagnostics.length?`<details class="pj-diagnostics"><summary>Current state is incomplete · ${diagnostics.length} source warning${diagnostics.length===1?'':'s'}</summary>${diagnostics.map(d=>`<p>${esc(d.message)} <small>${esc(d.source)}</small></p>`).join('')}</details>`:'');
+      const summaryMarkup=(snapshot?`<p class="pj-counts">${counts.length?counts.map(([k,n])=>`<span class="pj-state-${esc(k)}"><strong>${n}</strong> ${esc({active:'active',blocked:'blocked',stalled:'stalled',review:'awaiting review',verified:'verified',unknown:'need inspection'}[k])}</span>`).join(''):'No work needs attention in this selection.'}</p>`:`<p class="pj-continuity-warning">${esc(data.continuity_error || 'Current project state is unavailable.')}</p>`)+(diagnostics.length?`<details class="pj-diagnostics"><summary>Current state is incomplete · ${diagnostics.length} source warning${diagnostics.length===1?'':'s'}</summary>${diagnostics.map(d=>`<p>${esc(d.message)} <small>${esc(d.source)}</small></p>`).join('')}</details>`:'');
       const summaryHost=$('[data-summary]');
       if(summaryHost.dataset.fingerprint!==summaryMarkup){const open=summaryHost.querySelector('details')?.open;summaryHost.innerHTML=summaryMarkup;summaryHost.dataset.fingerprint=summaryMarkup;if(open&&summaryHost.querySelector('details'))summaryHost.querySelector('details').open=true;}
-      const agents=c?.deployed || [];
+      const agents=(c?.deployed || []).filter(r=>!lifecycle||!['release','group'].includes(lifecycle.scope().split(':')[0])||lifecycle.ticketIds()?.has(r.ticket));
       const markup=agents.map(r=>{
         // A harness name or owner is not a session identity. Adoption can change
         // PTY id, so permit only the exact durable zellij identity as fallback.
@@ -135,7 +145,7 @@
         detail:e.title,entry:e,
       })) : [];
       const actions=[...workerActions,...(c?.activity?.entries || [])]
-        .filter(e=>!filter||e.ticket===filter)
+        .filter(e=>inScope(e.ticket))
         .sort((a,b)=>(Date.parse(b.at)||0)-(Date.parse(a.at)||0));
       const actionHost=$('[data-actions]');
       const groups=[];
@@ -146,12 +156,15 @@
       }
       const actionsKey=JSON.stringify([groups,actionKind,c?.error,c?.activity?.total,c?.activity?.next_before,actionBefore,sessions.map(s=>s.session_id)]);
       if(actionHost.dataset.fingerprint!==actionsKey){
+        const openRows=new Set([...actionHost.querySelectorAll('.pj-action[open]')].map(d=>d.dataset.actionKey));
         const open=new Set([...actionHost.querySelectorAll('details[open]')].map(d=>d.dataset.workerHistory?'worker:'+d.dataset.workerHistory:d.dataset.actionRepeat));
         actionHost.innerHTML=`${c?.error?`<p class="pj-continuity-warning">${esc(c.error)} Saved worker history remains available.</p>`:!c?'<p class="pj-muted">System actions are unavailable. Saved worker history remains available.</p>':''}${actionKind?`<p class="pj-action-filter">${esc(actionKind)} <button data-act-clear-kind>Clear action filter</button></p>`:''}${c?.activity?.total>c?.activity?.limit?`<p class="pj-muted">${actionBefore==null?'Latest':'Earlier'} system actions · ${c.activity.total} recorded for this date.${actionBefore!=null?' Choose Latest actions to include saved worker history.':''}</p>`:''}<div class="pj-toolbar">${c?.activity?.next_before!=null?'<button data-older-actions>Older actions</button>':''}${actionBefore!=null?'<button data-latest-actions>Latest actions</button>':''}</div>${groups.length?groups.map(({key,rows})=>{
           const e=rows[0];
-          return `<article class="pj-action"><div><time>${esc(date(e.at))}</time><button data-act-kind="${esc(e.kind)}">${esc(e.kind.replace(/_/g,' '))}</button></div><small>${esc(e.actor || '@'+e.agent)}</small> ${e.ticket?`<button data-act-ticket="${esc(e.ticket)}">${esc(e.ticket)}</button>`:''}<p>${esc(e.detail)}</p>${e.entry?`<details data-worker-history="${esc(e.entry.id)}"><summary>Recorded details and evidence</summary><div data-worker-body></div></details>`:''}${e.run_id?`<button data-action-run="${esc(e.run_id)}">Execution record ↗</button>`:''}${e.session&&sessions.some(s=>s.session_id===e.session)?`<button data-act-session="${esc(e.session)}">Open session ↗</button>`:''}${rows.length>1?`<details data-action-repeat="${esc(key)}"><summary>${rows.length} occurrences</summary>${rows.map(row=>`<p>${esc(date(row.at))} · ${esc(row.detail)}</p>`).join('')}</details>`:''}</article>`;
+          return `<details class="pj-action" data-action-key="${esc(key)}"><summary><time>${esc(date(e.at))}</time><button data-act-kind="${esc(e.kind)}">${esc(e.kind.replace(/_/g,' '))}</button><small>${esc(e.actor || '@'+e.agent)}</small> ${e.ticket?`<button data-act-ticket="${esc(e.ticket)}">${esc(e.ticket)}</button>`:''}<p>${esc(e.detail)}</p></summary><div class="pj-action-details">${e.entry?`<details data-worker-history="${esc(e.entry.id)}"><summary>Recorded details and evidence</summary><div data-worker-body></div></details>`:''}${e.run_id?`<button data-action-run="${esc(e.run_id)}">Execution record ↗</button>`:''}${e.session&&sessions.some(s=>s.session_id===e.session)?`<button data-act-session="${esc(e.session)}">Open session ↗</button>`:''}${rows.length>1?`<details data-action-repeat="${esc(key)}"><summary>${rows.length} occurrences</summary>${rows.map(row=>`<p>${esc(date(row.at))} · ${esc(row.detail)}</p>`).join('')}</details>`:''}</div></details>`;
         }).join(''):'<p class="pj-muted">No actions recorded for this selection.</p>'}`;
+        const card=document.createElement('details');card.className='pj-action-day';card.open=true;const heading=document.createElement('summary');heading.textContent=data.path.split('/').pop().replace('.md','')+' · '+groups.length+' actions (UTC)';card.append(heading,...actionHost.querySelectorAll('.pj-action'));actionHost.append(card);
         actionHost.dataset.fingerprint=actionsKey;
+        actionHost.querySelectorAll('.pj-action').forEach(d=>{d.open=openRows.has(d.dataset.actionKey);});
         actionHost.querySelectorAll('[data-action-repeat]').forEach(d=>{d.open=open.has(d.dataset.actionRepeat);});
         actionHost.querySelectorAll('[data-worker-history]').forEach(d=>{
           const entry=workerActions.find(a=>a.entry.id===d.dataset.workerHistory)?.entry;
@@ -201,15 +214,17 @@
       } catch(e){status(String(e));}
     }
     function paintGroups() {
-      const groups=(data.groups || []).filter(g=>g.project===data.project.key && g.approved_at!=null && (!filter || g.members?.some(m=>m.ticket===filter)));
+      const groups=(data.groups || []).filter(g=>g.project===data.project.key && g.approved_at!=null && g.members?.some(m=>inScope(m.ticket)));
       const key=g=>data.project.key+':'+g.id;
       const next=JSON.stringify([filter,groups,data.groups_error,groups.map(g=>groupActions.get(key(g)))]);
       if(next===groupsFingerprint)return;groupsFingerprint=next;
-      $('[data-groups]').innerHTML=(data.groups_error?`<p class="pj-continuity-warning">${esc(data.groups_error)}</p>`:'')+(groups.length?`<h3>Approved groups</h3><p class="pj-muted">Stopping further dispatch prevents this group from starting more work. Active workers retain their current work.</p>${groups.map(g=>{
+      const expandedGroups=new Set([...$('[data-groups]').querySelectorAll('[data-group][open]')].map(d=>d.dataset.group));
+      $('[data-groups]').innerHTML=(data.groups_error?`<p class="pj-continuity-warning">${esc(data.groups_error)}</p>`:'')+(groups.length?`<h3 class="pj-groups-heading">Approved task groups</h3>${groups.map(g=>{
         const action=groupActions.get(key(g)) || {}, ended=g.stopped_at ?? action.stoppedAt;
         const counts=g.counts || {};
-        return `<section class="pj-work" data-group="${esc(g.id)}"><strong>${ended!=null?'Further dispatch stopped':'Approved group'}</strong><p>${esc(counts.queued || 0)} queued · ${esc(counts.running || 0)} active · ${esc(counts.blocked || 0)} blocked${counts.verified?' · '+esc(counts.verified)+' verified':''}</p><small>${ended!=null?'Stopped '+esc(date(ended)):'Approved '+esc(date(g.approved_at))}</small><details><summary>Group members · ${g.members?.length || 0}</summary><ul>${(g.members || []).map(m=>`<li><strong>${esc(m.ticket)}</strong> · ${esc(String(m.state || '').replace(/_/g,' '))}${m.reason?' — '+esc(m.reason):''}</li>`).join('')}</ul></details>${ended==null?`<button data-stop-group="${esc(g.id)}" ${action.pending?'disabled':''}>${action.pending?'Stopping…':'Stop further dispatch'}</button>`:''}${action.error?`<p role="status" class="pj-continuity-warning">${esc(action.error)}</p>`:''}</section>`;
+        return `<details class="pj-work pj-group-row" data-group="${esc(g.id)}"><summary><strong>${ended!=null?'Further dispatch stopped':'Approved group'}</strong><p>${esc(counts.queued || 0)} queued · ${esc(counts.running || 0)} active · ${esc(counts.blocked || 0)} blocked${counts.verified?' · '+esc(counts.verified)+' verified':''}</p><small>${ended!=null?'Stopped '+esc(date(ended)):'Approved '+esc(date(g.approved_at))}</small></summary><p class="pj-muted">Stopping further dispatch prevents new launches. Active workers retain their current work.</p><details><summary>Group members · ${g.members?.length || 0}</summary><ul>${(g.members || []).map(m=>`<li><strong>${esc(m.ticket)}</strong> · ${esc(String(m.state || '').replace(/_/g,' '))}${m.reason?' — '+esc(m.reason):''}</li>`).join('')}</ul></details>${ended==null&&(counts.queued || 0)>0?`<button data-stop-group="${esc(g.id)}" ${action.pending?'disabled':''}>${action.pending?'Stopping…':'Stop further dispatch'}</button>`:''}${action.error?`<p role="status" class="pj-continuity-warning">${esc(action.error)}</p>`:''}</details>`;
       }).join('')}`:'');
+      $('[data-groups]').querySelectorAll('[data-group]').forEach(d=>{d.open=expandedGroups.has(d.dataset.group);});
       $('[data-groups]').querySelectorAll('[data-stop-group]').forEach(button=>{button.onclick=()=>stopGroup(button.dataset.stopGroup);});
     }
     async function stopGroup(id) {
@@ -238,11 +253,12 @@
       $('[data-history-date]').textContent='Journal date: '+data.path.split('/').pop().replace('.md','')+'. Earlier reports retain their original dates and are not fresh verification.';
       // Read timestamps change each poll; only changed records should replace the DOM.
       const next=JSON.stringify([data.path,data.opening,data.entries,data.runs,snapshot&&{...snapshot,observed_at:0},data.continuity_error,filter]);
+      lifecycle?.update(data);
       paintGroups();
       paintConsole(snapshot);
       if(next===fingerprint)return;fingerprint=next;
       const expanded=new Set([...$('[data-continuity]').querySelectorAll('details[open]')].map(d=>d.dataset.continuityDetail));
-      $('[data-continuity]').innerHTML=snapshot ? continuityMarkup(snapshot,filter) : `<p class="pj-continuity-warning">${esc(data.continuity_error || 'Could not reconcile current project records. Refresh to retry.')} Saved context remains available below.</p>`;
+      $('[data-continuity]').innerHTML=lifecycle ? '' : snapshot ? continuityMarkup(snapshot,filter) : `<p class="pj-continuity-warning">${esc(data.continuity_error || 'Could not reconcile current project records. Refresh to retry.')} Saved context remains available below.</p>`;
       $('[data-continuity]').querySelectorAll('[data-continuity-detail]').forEach(d=>{d.open=expanded.has(d.dataset.continuityDetail);});
       $('[data-continuity]').querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});
       if(openingFingerprint!==data.opening){markdown($('[data-opening]'),data.opening,openWiki);openingFingerprint=data.opening;}
@@ -286,7 +302,7 @@
       finally{busy=false;if(queued&&!stopped){queued=false;void refresh();}}
     }
     $('[data-date]').onchange=e=>{selected=e.target.value||null;actionBefore=null;fingerprint='';void refresh();};
-    $('[data-filter]').onchange=e=>{filter=e.target.value;actionKind='';if(actionBefore!=null){actionBefore=null;void refresh();}paint();};
+    $('[data-filter]').onchange=e=>{filter=e.target.value;lifecycle?.selectScope(filter?'ticket:'+filter:'project');actionKind='';if(actionBefore!=null){actionBefore=null;void refresh();}paint();};
     $('[data-refresh]').onclick=refresh;
     $('[data-wiki]').onclick=()=>{if(data)openWiki?.(data.documents.some(d=>d.path===data.path)?data.path:null);};
     $('[data-form]').onsubmit=async e=>{
@@ -296,7 +312,7 @@
       catch(err){if(!stopped)status('Note not saved: '+String(err));}finally{if(button.isConnected)button.disabled=false;}
     };
     void refresh();timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);stopped=true;return;}if(!document.hidden&&host.getClientRects().length)void refresh();},5000);
-    const instance={switchTab,dispose(){remember();stopped=true;clearInterval(timer);},refresh};instances.set(host,instance);return instance;
+    const instance={switchTab,dispose(){remember();stopped=true;clearInterval(timer);lifecycle?.dispose();},refresh};instances.set(host,instance);return instance;
   }
   window.xnautJournal={mount};
 })();

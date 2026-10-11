@@ -30,4 +30,5 @@ export async function startJournalConsole(page){
   window.instance=window.xnautJournal.mount(document.querySelector('#journal'),'DEMO',path=>{window.openedWiki=path;});
  });
  await expect(page.locator('[data-title]')).toHaveText('NautGate · Live Journal');
+ await page.getByRole('tab',{name:'Actions',exact:true}).click();
 }

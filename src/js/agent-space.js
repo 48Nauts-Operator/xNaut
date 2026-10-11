@@ -301,6 +301,9 @@
     const style = document.createElement('style');
     style.id = 'agent-space-styles';
     style.textContent = `
+/* XNAUT-492/493: bounded conversation navigation and source-text copying. */
+.asl-thread-section{padding:6px 8px 12px}.asl-thread-search{box-sizing:border-box;width:100%;padding:7px;background:transparent;color:inherit;border:1px solid #444;border-radius:5px;font:inherit;font-size:11px}.asl-thread-modes{display:flex;gap:6px;margin:8px 0}.asl-thread-modes button{background:transparent;color:#aaa;border:0;padding:5px 2px;font-size:11px;cursor:pointer}.asl-thread-modes button[aria-pressed=true]{color:var(--accent,#d9cd81);border-bottom:1px solid currentColor}.asl-date-group{margin:3px 0}.asl-date-group>summary{cursor:pointer;font-size:11px;padding:6px 1px;color:#bbb}.asl-date-group .asl-date-group{margin-left:8px}.asl-thread-section .asl-thread{margin-left:0}.asl-thread-section button[data-thread-more-rows]{font-size:11px;background:transparent;border:1px solid #444;color:#bbb;padding:6px;cursor:pointer}.as-message{position:relative;padding-right:35px!important}.as-message-copy{position:absolute;right:5px;top:5px;display:flex;align-items:center;gap:4px;border:0;background:transparent;color:#aaa;padding:5px;cursor:pointer}.as-message-copy:hover{color:#eee}.as-message-copy:focus-visible{outline:2px solid var(--accent,#d9cd81)}.as-copy-feedback{font-size:10px}.asl-thread.new{background:transparent;border:0;color:var(--accent,#d9cd81);font:inherit;font-size:11px;cursor:pointer}
+
       .agent-space { --as-accent:var(--agent-thinking,#f5b840); display:flex; flex-direction:row; flex:1 1 auto;
         min-width:0; min-height:0; color:var(--text-primary,#e8e8ec); background:var(--bg-primary,#101014);
         font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif); }
@@ -342,7 +345,7 @@
       .asl-archive-head { display:flex; align-items:center; justify-content:space-between; padding:7px 9px 3px; color:var(--text-secondary,#666670); font-size:8px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
       .asl-archive-clear { border:none; background:transparent; color:#ff6b63; font:inherit; font-size:8px; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; padding:0; opacity:.8; }
       .asl-archive-clear:hover { opacity:1; }
-      .as-head { display:flex; align-items:center; gap:12px; min-height:58px; padding:9px 22px;
+      .as-head { display:flex; flex-wrap:wrap; align-items:center; gap:12px; min-height:58px; padding:9px 22px;
         border-bottom:1px solid var(--border-color,var(--border,#303038)); background:var(--editor-surface,#18181d); }
       .as-avatar { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; flex:0 0 auto;
         color:#fff; background:var(--profile-accent,#f5b840); font-size:13px; font-weight:750; }
@@ -606,6 +609,41 @@
     }
   }
 
+  // XNAUT-492: navigation is a projection of the existing durable thread store.
+  const libraryViews = new Map();
+  function libraryView(handle) {
+    if (!libraryViews.has(handle)) libraryViews.set(handle,{archive:false,query:'',limit:100,groups:new Map()});
+    return libraryViews.get(handle);
+  }
+  function threadLibrary(profile, threads, archived, selectedThreadId, threadRow) {
+    const view=libraryView(profile.handle);
+    const rows=(view.archive?archived:threads).filter(t=>String(t.title || 'Untitled thread').toLocaleLowerCase().includes(view.query.toLocaleLowerCase()))
+      .sort((a,b)=>String(b.created_at || '').localeCompare(String(a.created_at || '')) || a.id.localeCompare(b.id));
+    const buckets=new Map();
+    for(const t of rows.slice(0,view.limit)) {
+      const d=new Date(t.created_at), valid=Number.isFinite(d.getTime());
+      const year=valid?String(d.getFullYear()):'Undated';
+      const month=valid?d.toLocaleString([], {month:'long'}):'Creation date unavailable';
+      const day=valid?d.toLocaleDateString([], {day:'numeric',month:'short'}):'Unknown date';
+      if(!buckets.has(year))buckets.set(year,new Map());
+      if(!buckets.get(year).has(month))buckets.get(year).set(month,new Map());
+      if(!buckets.get(year).get(month).has(day))buckets.get(year).get(month).set(day,[]);
+      buckets.get(year).get(month).get(day).push(t);
+    }
+    const group=(key,label,content,selected,first)=>`<details class="asl-date-group" data-thread-group="${esc(key)}" ${view.groups.has(key)?(view.groups.get(key)?'open':''):(selected||first||view.query?'open':'')}><summary>${esc(label)}</summary>${content}</details>`;
+    let yi=0;
+    const tree=[...buckets].map(([year,months])=>{
+      let mi=0,ys=false;
+      const ym=[...months].map(([month,days])=>{
+        let di=0,ms=false;
+        const md=[...days].map(([day,items])=>{const sel=items.some(t=>t.id===selectedThreadId);ms ||=sel;return group(year+'/'+month+'/'+day,day+' · '+items.length,items.map(t=>threadRow(t,view.archive)).join(''),sel,yi===0&&mi===0&&di++===0);}).join('');
+        ys ||=ms;return group(year+'/'+month,month,md,ms,yi===0&&mi++===0);
+      }).join('');
+      return group(year,year,ym,ys,yi++===0);
+    }).join('');
+    return `<div class="asl-thread-section"><input class="asl-thread-search" data-thread-search aria-label="Find a conversation" placeholder="Find a conversation" value="${esc(view.query)}"><div class="asl-thread-modes"><button data-thread-mode="active" aria-pressed="${!view.archive}">Active · ${threads.length}</button><button data-thread-mode="archived" aria-pressed="${view.archive}">Archived · ${archived.length}</button></div><div class="asl-thread-tree">${tree || '<p class="as-help">No conversations in this view.</p>'}</div>${rows.length>view.limit?`<button data-thread-more-rows>Show next ${Math.min(100,rows.length-view.limit)} conversations</button>`:''}<button class="asl-thread new" data-library-new-thread>+ New thread</button></div>`;
+  }
+
   function libraryMarkup(profiles, sessions, selectedHandle, selectedThreadId) {
     return `<aside class="asl" aria-label="Agent Library"><div class="asl-head"><span>Agents</span><button class="asl-add" data-library-new aria-label="New Agent" title="New Agent">+</button></div><div class="asl-list">${profiles.map((profile) => {
       const session = sessionFor(profile, sessions);
@@ -615,7 +653,7 @@
       const archived = selected ? archivedThreadsFor(profile.handle) : [];
       const threadRow = (thread, archivedThread = false) => `<div class="asl-thread ${thread.id === selectedThreadId ? 'selected' : ''} ${archivedThread ? 'archived' : ''}" data-library-thread="${esc(thread.id)}"><span class="asl-thread-label">${esc(thread.title || 'Untitled thread')}</span><button class="asl-thread-more" data-thread-more aria-label="Actions for ${archivedThread ? 'archived ' : ''}thread ${esc(thread.title || 'Untitled thread')}">•••</button></div>`;
       const note = libraryNotes[profile.handle] || '';
-      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"${note ? ` title="${esc(note)}"` : ''}><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}${note ? ' <span class="asl-note" aria-label="Store note">·</span>' : ''}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? `<div class="asl-threads">${threads.map((thread) => threadRow(thread)).join('')}<div class="asl-thread new" data-library-new-thread>+ New thread</div>${archived.length ? (() => { let archivedOpen = false; try { archivedOpen = (window.xnautConversationStorage || localStorage).getItem('xnaut-as-archived-open:' + profile.handle) === '1'; } catch (_) {} return `<div class="asl-archive-head" data-archived-toggle title="Show or hide archived threads"><span>${archivedOpen ? '▾' : '▸'} Archived · ${archived.length}</span><button class="asl-archive-clear" data-archived-clear title="Delete all archived threads">Delete all…</button></div>${archivedOpen ? archived.map((thread) => threadRow(thread, true)).join('') : ''}`; })() : ''}</div>` : ''}`;
+      return `<div class="asl-agent ${selected ? 'selected' : ''}" data-library-agent="${esc(profile.handle)}" style="--agent-accent:${esc(profile.accent_color || '#666')}"${note ? ` title="${esc(note)}"` : ''}><span class="asl-avatar">${esc(initials(profile))}</span><span class="asl-copy"><span class="asl-name">${esc(profile.display_name)}${note ? ' <span class="asl-note" aria-label="Store note">·</span>' : ''}</span><span class="asl-meta"><span class="asl-dot ${esc(status)}"></span><span>@${esc(profile.handle)}</span><span>· ${esc(status === 'idle' ? 'Ready' : status)}</span></span></span><button class="asl-caret" data-threads-toggle="${esc(profile.handle)}" aria-label="Show threads for ${esc(profile.display_name)}">${selected && threadsOpen(profile.handle) ? '▾' : '▸'}</button><button class="asl-more" data-library-more aria-label="Actions for ${esc(profile.display_name)}">•••</button></div>${selected && threadsOpen(profile.handle) ? threadLibrary(profile,threads,archived,selectedThreadId,threadRow) : ''}`;
     }).join('') || '<div class="as-help" style="padding:12px">No agents yet.</div>'}</div></aside>`;
   }
 
@@ -696,13 +734,13 @@
         const handle = caret.dataset.threadsToggle;
         if (handle !== selectedHandle) { toggleThreads(handle); window.xnautOpenAgentSpace(handle); return; }
         toggleThreads(handle);
-        window.xnautOpenAgentSpace(handle);
+        window.xnautOpenAgentSpace(handle, pane.dataset.voiceThread || null);
       };
       row.oncontextmenu = (event) => openLibraryMenu(event, profile);
       row.querySelector('[data-library-more]').onclick = (event) => openLibraryMenu(event, profile);
     });
     if (!selected) return;
-    const selectedThreadId = pane.querySelector('[data-library-thread].selected')?.dataset.libraryThread || null;
+    const selectedThreadId = pane.dataset.voiceAgent === selectedHandle ? pane.dataset.voiceThread : null;
     pane.querySelectorAll('[data-library-thread]').forEach((row) => {
       const thread = allThreadsFor(selected.handle).find((item) => item.id === row.dataset.libraryThread);
       row.onclick = () => window.xnautOpenAgentSpace(selected.handle, row.dataset.libraryThread);
@@ -710,6 +748,21 @@
       const more = row.querySelector('[data-thread-more]');
       if (more) more.onclick = (event) => thread && openThreadMenu(event, selected, thread, selectedThreadId);
     });
+    const view=libraryView(selected.handle);
+    const repaintLibrary=(focusSearch=false)=>{
+      const query=view.query;
+      const old=pane.querySelector('.asl');
+      const next=document.createElement('div');next.innerHTML=libraryMarkup(profiles, [], selectedHandle, selectedThreadId);
+      // Keep agent liveness from the current library; only replace its thread section.
+      const section=next.querySelector('.asl-thread-section');
+      if(section)old.querySelector('.asl-thread-section')?.replaceWith(section);
+      wireLibrary(pane,profiles,selectedHandle);
+      if(focusSearch){const input=pane.querySelector('[data-thread-search]');input?.focus();input?.setSelectionRange(query.length,query.length);}
+    };
+    pane.querySelectorAll('[data-thread-mode]').forEach(b=>{b.onclick=()=>{view.archive=b.dataset.threadMode==='archived';view.limit=100;repaintLibrary();};});
+    const search=pane.querySelector('[data-thread-search]');if(search)search.oninput=()=>{view.query=search.value;view.limit=100;repaintLibrary(true);};
+    pane.querySelectorAll('[data-thread-group]').forEach(d=>{d.ontoggle=()=>{if(d.isConnected)view.groups.set(d.dataset.threadGroup,d.open);};});
+    const moreRows=pane.querySelector('[data-thread-more-rows]');if(moreRows)moreRows.onclick=()=>{view.limit+=100;repaintLibrary();};
     const fresh = pane.querySelector('[data-library-new-thread]'); if (fresh) fresh.onclick = () => window.xnautOpenAgentSpace(selected.handle, null, true);
     const clearArchived = pane.querySelector('[data-archived-clear]');
     if (clearArchived) clearArchived.onclick = async (event) => {
@@ -864,7 +917,7 @@
     // remount resurrected the look of a thread the user had just deleted —
     // which read as "delete does not work".
     const emptyExisting = recent.find((item) => !(Array.isArray(item.messages) && item.messages.length));
-    let thread = options.newThread ? emptyExisting : (recent.find((item) => item.id === options.threadId) || recent[0]);
+    let thread = options.newThread ? emptyExisting : (allThreadsFor(profile.handle).find((item) => item.id === options.threadId) || recent[0]);
     if (!thread) thread = emptyExisting || newThread(profile.handle, 'New thread');
     pane.dataset.voiceThread = thread.id; pane.dataset.voiceAgent = profile.handle;
     pane.dataset.notebookContext = 'agent';
@@ -896,7 +949,7 @@
         <button class="as-button" data-project-new title="${profile.default_project ? esc(profile.default_project) : 'No project set — a build will ask'}" aria-label="Project folder">${profile.default_project ? '📁' : '📂'}</button>
         <button class="as-button" data-canvas title="Canvas" aria-label="Canvas" hidden>▦</button>
         <button class="as-button" data-attach title="Plugins for this agent" aria-label="Plugins">+</button>
-        <button class="as-button" data-settings>Settings</button>
+        <button class="as-button" data-archive-thread>${thread.archived_at ? 'Restore' : 'Archive'}</button><button class="as-button" data-settings>Settings</button>
       </header>
       <div class="as-context-bar"><span>Journal &amp; Wiki</span><select class="as-harness as-project-context" data-journal-project aria-label="Conversation project" title="Journal and Wiki follow this conversation. Select a project to pin it."><option value="">Auto · follow chat</option>${(Array.isArray(journalProjects) ? journalProjects : []).map(p => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('')}</select></div>
       <div class="as-body as-thread">
@@ -1091,8 +1144,15 @@
         ? swarmCard(message)
         : message.kind === 'action'
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
-        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><div class="as-message-text${message.role === 'user' ? '' : ' as-md'}">${message.role === 'user' ? esc(message.text) : markdown(message.text)}</div>${receiptLine(message)}${buildCard(message)}</div>`
+        : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><button class="as-message-copy" data-copy-message="${esc(message.id)}" aria-label="Copy ${message.role === 'user' ? 'your' : 'agent'} message" title="Copy message"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1" stroke="currentColor"/><path d="M10 3H3v7" stroke="currentColor"/></svg><span class="as-copy-feedback" aria-live="polite"></span></button><div class="as-message-text${message.role === 'user' ? '' : ' as-md'}">${message.role === 'user' ? esc(message.text) : markdown(message.text)}</div>${receiptLine(message)}${buildCard(message)}</div>`
       ).join('');
+      messages.querySelectorAll('[data-copy-message]').forEach(button=>{button.onclick=async()=>{
+        const record=thread.messages.find(m=>m.id===button.dataset.copyMessage);if(!record)return;
+        const feedback=button.querySelector('.as-copy-feedback');
+        try{await navigator.clipboard.writeText(record.text || '');feedback.textContent='Copied';}
+        catch(_){feedback.textContent='Copy failed';}
+        setTimeout(()=>{if(feedback.isConnected)feedback.textContent='';},2200);
+      };});
       wireBuildCards();
       wireSwarmCards();
       if (window.xnautLinkTickets) window.xnautLinkTickets(messages);
@@ -1145,7 +1205,7 @@
         ? `${thread.journalPinnedProject ? 'Pinned to' : 'Following chat:'} ${context.project.name}. Journal and Wiki use this project.`
         : 'No single project identified. Choose one to capture this conversation in its Journal.';
       // A retained microphone/background reply cannot move another chat's pane.
-      if (pane.isConnected && !pane.hidden && pane.getClientRects().length) window.xnautAgentProjectContext.follow(context.project);
+      if (pane.isConnected && !pane.hidden && pane.getClientRects().length) window.xnautAgentProjectContext.follow(context.project, {thread:thread.id,text:[...(thread.messages || [])].reverse().find(m=>m.role==='user'&&!m.voiceTranscript)?.text || ''});
       return context.project?.key || '';
     };
     pane._followJournal = () => syncJournal();
@@ -1970,6 +2030,12 @@
       // this the thread is switched and permanently unable to send.
       send.disabled = false;
       paintMessages();
+    };
+    pane.querySelector('[data-archive-thread]').onclick=()=>{
+      const archived=!!thread.archived_at;
+      updateThread(profile.handle,thread.id,next=>{if(archived)delete next.archived_at;else next.archived_at=nowIso();return next;});
+      libraryView(profile.handle).archive=false;
+      window.xnautOpenAgentSpace(profile.handle,archived?thread.id:null);
     };
     pane.querySelector('[data-settings]').onclick = () => window.xnautOpenAgentSettings(profile.handle);
     if (terminalButton) terminalButton.onclick = async () => {

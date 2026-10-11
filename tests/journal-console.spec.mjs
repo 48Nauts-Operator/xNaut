@@ -147,6 +147,7 @@ test('native worker history is visible with an empty or failed system ledger and
  await expect(page.locator('.pj-action')).toHaveCount(2);
  await expect(page.locator('.pj-action').first()).toContainText('Worker returned for review');
  await expect(page.locator('[data-actions]')).not.toContainText('Keep the existing implementation');
+ await page.locator('.pj-action').filter({has:page.locator('[data-worker-history="receipt-0"]')}).locator(':scope > summary').click();
  await page.locator('[data-worker-history="receipt-0"] summary').click();
  await page.getByRole('button',{name:'Source evidence',exact:true}).click();
  expect(await page.evaluate(()=>window.openedWiki)).toBe('Development/evidence/run.md');

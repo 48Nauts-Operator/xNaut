@@ -33,6 +33,7 @@ test('closed execution evidence is rendered on demand and survives refresh', asy
   await expect(page.locator('[data-worker-history]')).toHaveCount(200);
   expect(await page.evaluate(() => window.__renderedEvidence)).toBe(0);
   const first = page.locator('[data-worker-history]').first();
+  await first.locator('..').locator('..').locator(':scope > summary').click();
   await first.getByText('Recorded details and evidence', { exact: true }).click();
   await expect(first.locator('[data-worker-body]')).toContainText('Detailed evidence 0');
   expect(await page.evaluate(() => window.__renderedEvidence)).toBe(1);
@@ -218,6 +219,7 @@ test('review and repair history keeps source attribution and evidence across ref
  await page.getByRole('tab',{name:'Actions',exact:true}).click();
  const finding=page.locator('.pj-action').filter({has:page.locator('[data-worker-history="activity:review"]')});
  await expect(finding).toContainText('xNAUT coordinator');
+ await finding.locator(':scope > summary').click();
  await finding.getByText('Recorded details and evidence',{exact:true}).click();
  await expect(finding).toContainText('Parser loses the last item');
  await finding.getByRole('button',{name:'Execution record ↗'}).click();
@@ -231,6 +233,8 @@ test('review and repair history keeps source attribution and evidence across ref
  await expect(page.locator('[data-entries] .pj-entry')).toHaveCount(0);
  await page.evaluate(()=>window.xnautJournal.mount(document.querySelector('#journal'),'DEMO',p=>{window.openedWiki=p;}));
  await expect(page.locator('[data-worker-history]')).toHaveCount(2);
+ await page.getByRole('tab',{name:'Actions',exact:true}).click();
+ await page.locator('.pj-action').filter({has:page.locator('[data-worker-history="activity:repair"]')}).locator(':scope > summary').click();
  await page.locator('[data-worker-history="activity:repair"] summary').click();
  await expect(page.locator('[data-worker-history="activity:repair"]')).toContainText('Preserved the last item');
 });
@@ -260,12 +264,13 @@ test('approved groups show queued work and scoped controls without internal appr
  await expect(page.locator('[data-group]')).toHaveCount(1);
  await expect(page.locator('[data-groups]')).toContainText('1 queued · 1 active · 1 blocked');
  await expect(page.locator('[data-groups]')).toContainText('Active workers retain their current work.');
+ await page.locator('[data-group="DEMO-approved"] > summary').click();
  await expect(page.getByRole('button',{name:'Stop further dispatch',exact:true})).toHaveCount(1);
  await expect(page.locator('[data-groups]')).not.toContainText('OTHER');
  await expect(page.locator('[data-groups]')).not.toContainText('private scope hash');
  await page.getByLabel('Journal workstream').selectOption('DEMO-10');
  await expect(page.locator('[data-group]')).toHaveCount(1);
- await page.locator('[data-group] summary').click();
+ await page.locator('[data-group] > details > summary').click();
  await expect(page.locator('[data-group]')).toContainText('Waiting for capacity');
  await page.locator('#journal').evaluate(e=>{e.style.width='420px';});
  expect(await page.locator('.pj-scroll').evaluate(e=>e.scrollWidth<=e.clientWidth)).toBeTruthy();
@@ -274,10 +279,13 @@ test('approved groups show queued work and scoped controls without internal appr
 test('group stop uses the native command once and survives polling, reopen and project switching',async({page})=>{
  await start(page);await approvedGroups(page);await page.getByRole('tab',{name:'Actions',exact:true}).click();
  await page.evaluate(()=>{window.delayGroupStop=true;});
+ await page.locator('[data-group="DEMO-approved"]').evaluate(d=>{d.open=true;});
  await page.getByRole('button',{name:'Stop further dispatch',exact:true}).click();
  await expect(page.getByRole('button',{name:'Stopping…',exact:true})).toBeDisabled();
  await page.evaluate(()=>{document.querySelector('[data-stop-group]').dispatchEvent(new MouseEvent('click'));return window.journalInstance.refresh();});
  await page.evaluate(()=>{window.journalInstance=window.xnautJournal.mount(document.querySelector('#journal'),'DEMO',()=>{});});
+ await page.getByRole('tab',{name:'Actions',exact:true}).click();
+ await page.locator('[data-group="DEMO-approved"] > summary').click();
  await expect(page.getByRole('button',{name:'Stopping…',exact:true})).toBeDisabled();
  expect(await page.evaluate(()=>window.journalCalls.filter(c=>c.name==='swarm_plan_stop'))).toEqual([{name:'swarm_plan_stop',args:{planId:'DEMO-approved'}}]);
  await page.evaluate(()=>window.releaseGroupStop());
@@ -287,6 +295,8 @@ test('group stop uses the native command once and survives polling, reopen and p
  await page.evaluate(()=>{window.journalInstance=window.xnautJournal.mount(document.querySelector('#journal'),'OTHER',()=>{});});
  await expect(page.locator('[data-title]')).toHaveText('Other · Live Journal');
  await expect(page.locator('[data-group]')).toHaveAttribute('data-group','OTHER-approved');
+ await page.getByRole('tab',{name:'Actions',exact:true}).click();
+ await page.locator('[data-group="OTHER-approved"] > summary').click();
  await expect(page.getByRole('button',{name:'Stop further dispatch',exact:true})).toBeEnabled();
  await expect(page.locator('[data-groups]')).not.toContainText('DEMO-');
  await page.evaluate(()=>{window.journalInstance=window.xnautJournal.mount(document.querySelector('#journal'),'DEMO',()=>{});});
@@ -298,12 +308,14 @@ test('group stop uses the native command once and survives polling, reopen and p
 test('failed group stop stays retryable and does not claim dispatch stopped',async({page})=>{
  await start(page);await approvedGroups(page);await page.getByRole('tab',{name:'Actions',exact:true}).click();
  await page.evaluate(()=>{window.failGroupStop=true;});
+ await page.locator('[data-group="DEMO-approved"]').evaluate(d=>{d.open=true;});
  await page.getByRole('button',{name:'Stop further dispatch',exact:true}).click();
  await expect(page.locator('[data-group] [role="status"]')).toContainText('Coordinator store is busy');
  await expect(page.getByRole('button',{name:'Stop further dispatch',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'Refresh',exact:true}).click();
  await expect(page.locator('[data-group]')).not.toContainText('Further dispatch stopped');
  await page.evaluate(()=>{window.failGroupStop=false;});
+ await page.locator('[data-group="DEMO-approved"]').evaluate(d=>{d.open=true;});
  await page.getByRole('button',{name:'Stop further dispatch',exact:true}).click();
  await expect(page.locator('[data-groups]')).toContainText('Further dispatch stopped');
  expect(await page.evaluate(()=>window.journalCalls.filter(c=>c.name==='swarm_plan_stop').length)).toBe(2);

@@ -11,7 +11,9 @@ if sys.platform != "darwin":
     raise SystemExit("This local preview profile helper currently supports macOS.")
 source = Path.home() / "Library/Application Support/xnaut"
 target = source / (
-    "continuity-preview"
+    "journal-v4-preview"
+    if "--journal-v4" in sys.argv
+    else "continuity-preview"
     if "--continuity" in sys.argv
     else "journal-preview-3"
     if "--journal" in sys.argv
