@@ -401,6 +401,45 @@ pub async fn project_journal_read(project: String, path: Option<String>, action_
         .await
         .map_err(|e| e.to_string())?
 }
+// Read only the month's Journal notes, without recomputing runs/continuity for
+// every day. Bounded work runs off the UI thread and retains document provenance.
+fn notes_month_in(root: &Path, month: &str) -> Result<Value, String> {
+    if month.len() != 7 || !month.bytes().enumerate().all(|(i,c)| if i==4 {c==b'-'} else {c.is_ascii_digit()})
+        || chrono::NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d").is_err() {
+        return Err("Select a month in YYYY-MM format".into());
+    }
+    let mut rows = Vec::new();
+    let mut warnings = Vec::new();
+    let mut bytes = 0;
+    let mut limited = false;
+    for day in (1..=31).rev() {
+        let rel = format!("Development/journal/{month}-{day:02}.md");
+        let target = match markdown_path(root, &rel) { Ok(p)=>p, Err(e)=>{warnings.push(format!("{rel}: {e}"));continue;} };
+        if !target.exists() { continue; }
+        let text = match read(&target) { Ok(t)=>t, Err(e)=>{warnings.push(format!("{rel}: {e}"));continue;} };
+        bytes += text.len();
+        if bytes > 8 * 1024 * 1024 { limited=true; break; }
+        for e in entries(&text) {
+            if e.id.starts_with("activity:") || (!e.run_id.is_empty() && ["execution","summary"].contains(&e.kind.as_str())) { continue; }
+            let mut value=serde_json::to_value(e).map_err(|e|e.to_string())?;
+            value["document_path"]=json!(rel);
+            rows.push(value);
+        }
+    }
+    rows.sort_by(|a,b| b["at"].as_str().cmp(&a["at"].as_str()));
+    if rows.len()>300 { rows.truncate(300);limited=true; }
+    Ok(json!({"month":month,"entries":rows,"limited":limited,"warnings":warnings}))
+}
+#[tauri::command]
+pub async fn project_journal_notes_month(project: String, month: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p=self::project(&project)?;
+        let mut value=notes_month_in(Path::new(&p.vault_path), &month)?;
+        value["project"]=json!(p.key);
+        Ok(value)
+    }).await.map_err(|e|e.to_string())?
+}
+
 fn write(request: Request, actor: &str) -> Result<Value, String> {
     let p = project(&request.project)?;
     ticket(&p, &request.ticket)?;
@@ -607,6 +646,28 @@ mod tests {
             source_at: String::new(),
             content: "Keep existing archives.\n\n```js\nconst keep = true;\n```".into(),
         }
+    }
+    #[test]
+    fn month_notes_are_scoped_bounded_and_preserve_provenance() {
+        let root=std::env::temp_dir().join(format!("journal-month-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("Development/journal")).unwrap();
+        let root=root.canonicalize().unwrap();
+        let mut one=sample("one");one.at="2026-10-03T20:00:00Z".into();
+        let mut two=sample("two");two.at="2026-10-04T20:00:00Z".into();
+        let mut other=sample("other");other.at="2026-09-04T20:00:00Z".into();
+        for e in [&one,&two,&other] { append_in(&root,"Demo",e,"").unwrap(); }
+        let v=notes_month_in(&root,"2026-10").unwrap();
+        assert_eq!(v["entries"].as_array().unwrap().len(),2);
+        assert_eq!(v["entries"][0]["id"],"two");
+        assert_eq!(v["entries"][1]["document_path"],"Development/journal/2026-10-03.md");
+        assert_eq!(v["limited"],false);
+        assert!(notes_month_in(&root,"../outside").is_err());
+        assert!(notes_month_in(&root,"2026-13").is_err());
+        let mut bulk=String::new();
+        for i in 0..305 { let e=sample(&format!("bulk-{i}"));bulk.push_str(&format!("{MARK}{} -->\n{}\n",serde_json::to_string(&e).unwrap(),e.content)); }
+        std::fs::write(root.join("Development/journal/2026-10-06.md"),bulk).unwrap();
+        let v=notes_month_in(&root,"2026-10").unwrap();assert_eq!(v["entries"].as_array().unwrap().len(),300);assert_eq!(v["limited"],true);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn group_summary_is_scoped_compact_and_reloads_saved_stop_state() {

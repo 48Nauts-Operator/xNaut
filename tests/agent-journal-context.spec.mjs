@@ -36,34 +36,34 @@ const thread=(id,text)=>({id,title:text,updated_at:'2026-10-03T21:00:00Z',messag
 test('Chess App overrides stale workspace before capture and follow-ups retain project',async({page})=>{
  await setup(page);
  await send(page,'whats the status of the Chess App?');
- await expect(page.locator('[data-title]')).toHaveText('ChessTrainer · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('ChessTrainer');
  await expect(page.locator('[data-journal-project] option:checked')).toHaveText('Auto · ChessTrainer');
  await send(page,'What remains to finish it?');
  expect(await page.evaluate(()=>window.projectCalls.map(c=>c.projectScope))).toEqual(['CHESSTRAINER','CHESSTRAINER']);
  const messages=await page.evaluate(()=>JSON.parse(localStorage.getItem('xnaut-agent-threads:v1')).nautbot[0].messages);
  expect(messages.map(m=>m.journalProject)).toEqual(Array(4).fill('CHESSTRAINER'));
  await send(page,'Now check VYNL-2');
- await expect(page.locator('[data-title]')).toHaveText('Vynl · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('Vynl');
 });
 test('opening saved conversations follows owner context without rewriting old messages',async({page})=>{
  await setup(page,[thread('chess','Status of the Chess App?'),thread('vynl','Review VYNL-2')]);
- await expect(page.locator('[data-title]')).toHaveText('ChessTrainer · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('ChessTrainer');
  await page.evaluate(()=>window.xnautOpenAgentSpace('nautbot','vynl'));
- await expect(page.locator('[data-title]')).toHaveText('Vynl · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('Vynl');
  await page.evaluate(()=>window.xnautOpenAgentSpace('nautbot','chess'));
- await expect(page.locator('[data-title]')).toHaveText('ChessTrainer · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('ChessTrainer');
  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('xnaut-agent-threads:v1')).nautbot.find(t=>t.id==='chess').messages[0].journalProject)).toBe('/work/xnaut');
 });
 test('pin survives reopening and auto resumes owner context',async({page})=>{
  await setup(page,[thread('chess','Status of the Chess App?')]);
  await page.getByLabel('Conversation project').selectOption('VYNL');
- await expect(page.locator('[data-title]')).toHaveText('Vynl · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('Vynl');
  await send(page,'Check ChessTrainer as a comparison');
  expect(await page.evaluate(()=>window.projectCalls[0].projectScope)).toBe('VYNL');
  await page.evaluate(()=>window.xnautOpenAgentSpace('nautbot','chess'));
  await expect(page.getByLabel('Conversation project')).toHaveValue('VYNL');
  await page.getByLabel('Conversation project').selectOption('');
- await expect(page.locator('[data-title]')).toHaveText('ChessTrainer · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('ChessTrainer');
 });
 test('multiple-project discussion is unassigned, assistant references do not choose scope',async({page})=>{
  await setup(page);
@@ -82,10 +82,10 @@ test('delayed background answer retains original scope and cannot move visible J
  await page.getByLabel('Message @nautbot').press('Enter');
  await expect.poll(()=>page.evaluate(()=>Boolean(window.finishReply))).toBe(true);
  await page.evaluate(()=>window.xnautOpenAgentSpace('nautbot','vynl'));
- await expect(page.locator('[data-title]')).toHaveText('Vynl · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('Vynl');
  await page.evaluate(()=>window.finishReply('Chess check completed.'));
  await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('xnaut-agent-threads:v1')).nautbot.find(t=>t.id==='chess').messages.at(-1).text)).toBe('Chess check completed.');
- await expect(page.locator('[data-title]')).toHaveText('Vynl · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('Vynl');
  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('xnaut-agent-threads:v1')).nautbot.find(t=>t.id==='chess').messages.at(-1).journalProject)).toBe('CHESSTRAINER');
 });
 test('qualified aliases are conservative and collisions remain unresolved',async({page})=>{
@@ -108,11 +108,11 @@ test('ordinary keep instruction does not switch to the Keep project; xNAUT spell
 });
 test('returning from another top-level tab restores the conversation Journal',async({page})=>{
  await setup(page,[thread('chess','Status of the Chess App?')]);
- await expect(page.locator('[data-title]')).toHaveText('ChessTrainer · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('ChessTrainer');
  await page.evaluate(()=>window.xnautOpenWorkspace({project:'XNAUT'}));
  await page.evaluate(()=>window.xnautRightPaneSetRoot('/work/xnaut'));
  await page.locator('.tab').filter({hasText:'Agent Space'}).click();
- await expect(page.locator('[data-title]')).toHaveText('ChessTrainer · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('ChessTrainer');
 });
 test('voice commit resolves before capture and dispatch uses the same project',async({page})=>{
  await setup(page);
@@ -124,7 +124,7 @@ test('voice commit resolves before capture and dispatch uses the same project',a
   const id=window.__xnautInvokes.find(i=>i.cmd==='voice_live_open').args.sessionId;
   for(const event of [{kind:'ready'},{kind:'commit',role:'user',text:'What is happening in the Chess App?',turn:0},{kind:'dispatch',turn:0,epoch:0}])window.__xnautEmit(`voice-live://${id}`,event);
  });
- await expect(page.locator('[data-title]')).toHaveText('ChessTrainer · Live Journal');
+ await expect(page.locator('.jd-project-name')).toHaveText('ChessTrainer');
  await expect.poll(()=>page.evaluate(()=>window.projectCalls.length)).toBe(1);
  expect(await page.evaluate(()=>window.projectCalls[0].projectScope)).toBe('CHESSTRAINER');
  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('xnaut-agent-threads:v1')).nautbot[0].messages.find(m=>m.role==='user').journalProject)).toBe('CHESSTRAINER');

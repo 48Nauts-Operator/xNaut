@@ -13,12 +13,13 @@ async function start(page,width=600){
   window.data.entries=[{id:'note-one',ticket:'DEMO-1',kind:'note',actor:'You',at:now,title:'Keep the test',content:'Keep **the original assertion**.'},{id:'note-other',ticket:'DEMO-5',kind:'note',actor:'NautBot',at:now,title:'Other release',content:'Other release note'}];
   const original=window.__TAURI__.core.invoke;
   window.__TAURI__.core.invoke=async(name,args)=>{
+   if(name==='project_journal_notes_month'){window.calls.push({name,args});return {project:args.project,month:args.month,entries:structuredClone(window.data.entries).map(e=>({...e,document_path:window.data.path})),limited:false,warnings:[]};}
    if(name==='project_wiki_source'){
     window.calls.push({name,args});if(window.sourceFails)throw Error('Source unavailable');
     if(window.sourceDelay)await new Promise(r=>setTimeout(r,window.sourceDelay));
     if(args.kind==='ticket')return {text:JSON.stringify({id:args.id,project:window.wrongProject?'FOREIGN':'DEMO',body:'## Description\nFix Unicode display width.\n- [x] Emoji aligns\n- [ ] CJK aligns',release:'2.0'})};
     if(args.kind==='log')return {text:args.id==='old-run'?'FAIL expected 18 got 22':'FAIL expected 18 got 20'};
-    return {text:JSON.stringify({project:'DEMO',run_id:args.id,ticket:'DEMO-1',runtime_id:'claude',model:'routed-model',remote_env:'exe-dev',state:'failed',branch:'fix/one',last_commit:args.id==='old-run'?'aaa':'bbb',last_signal:'CJK cursor test failed',admission_refused:args.id==='old-run'})};
+    return {text:JSON.stringify({project:'DEMO',run_id:args.id,ticket:window.data.continuity.assignments.find(a=>a.run_id===args.id)?.ticket||'DEMO-1',runtime_id:'claude',model:'routed-model',remote_env:'exe-dev',state:window.data.continuity.assignments.find(a=>a.run_id===args.id)?.run_state||'failed',branch:'fix/one',last_commit:args.id==='old-run'?'aaa':'bbb',last_signal:'CJK cursor test failed',admission_refused:args.id==='old-run'})};
    }
    return original(name,args);
   };
@@ -45,7 +46,7 @@ test('trace and comparison retain admission failure, exact models, commits and s
  await start(page);await page.locator('.jd-ticket-row[data-open-ticket="DEMO-1"]').click();await page.locator('[data-open-trace]').click();
  await expect(page.locator('.jd-attempt[open]')).toContainText('routed-model');
  await page.locator('[data-load-log]').click();await expect(page.locator('.jd-output')).toContainText('got 20');
- await page.locator('[data-compare]').click();await expect(page.locator('.jd-compare-field')).toContainText(['claude','routed-model','exe-dev','failed','true','fix/one','aaa','CJK']);
+ await page.locator('[data-compare]').click();await expect(page.locator('.jd-compare-field')).toHaveCount(8);for(const value of ['claude','routed-model','exe-dev','failed','true','fix/one','aaa','CJK'])await expect(page.locator('.jd-tickets')).toContainText(value);
  await page.locator('[data-compare-output]').click();await expect(page.locator('.jd-compare-logs')).toContainText('got 22');await expect(page.locator('.jd-compare-logs')).toContainText('got 20');
  await page.locator('[data-back-trace]').click();await page.locator('[data-attempt="old-run"]>summary').click();await expect(page.locator('.jd-attempt[open]')).toContainText('Refused before execution');
 });
@@ -121,4 +122,59 @@ test('unattributed shared diagnostics go to logs once; project failures remain v
  await expect(page.locator('.pj-diagnostics')).toContainText('Project evidence cannot be read.');
  await expect(page.locator('.pj-diagnostics')).toContainText('Legacy failure remains visible.');
  expect(logged).toHaveLength(1);
+});
+
+test('Paper visual acceptance captures R1–R12 at the approved 420px width',async({page})=>{
+ test.setTimeout(90000);await start(page,420);
+ await page.evaluate(()=>{
+  const titles=['Unicode width wrong in shell prompt','Stale diff after rebase','Persist theme choice','Merge verification passed','Clean up crashed sandboxes','Cap agent retries per ticket','Retain worker handoffs','Recorded release completion'];
+  const states=['blocked','review','active','verified','unknown','active','verified','verified'];
+  const rows=titles.map((title,i)=>({id:'DEMO-'+(i+1),title,state:states[i],owner:['cinder','boreal','atlas','verifier-1'][i%4],release:'v1.31.0',next_action:i===0?'Retry budget used; owner decision required.':i===1?'Review the recorded pull request.':'Inspect the recorded evidence.'}));
+  window.data.continuity.tickets=rows;window.data.lifecycle.tickets=rows;
+  const midnight=new Date();midnight.setHours(0,0,0,0);const start=+midnight;
+  window.data.lifecycle.events=rows.flatMap((t,i)=>[{id:t.id+'start',project:'DEMO',ticket:t.id,run_id:i===0?'old-run':'run-'+i,at:new Date(start+(i+1)*600000).toISOString(),kind:'ticket.updated',state:'active',actor:t.owner,detail:'Implementation started'},{id:t.id+'end',project:'DEMO',ticket:t.id,run_id:i===0?'new-run':'run-'+i,at:new Date(start+(i+8)*600000).toISOString(),kind:'ticket.updated',state:t.state,actor:t.owner,detail:i===0?'Verification failed: expected column 18, observed 20.':'Recorded ticket transition'}]);
+  window.data.continuity.assignments.push(...rows.slice(1).map((t,i)=>({ticket:t.id,owner:t.owner,run_id:'run-'+(i+1),state:t.state,run_state:t.state,branch:'fix/'+t.id,evidence:[]})));
+  window.data.project.name='xNaut';document.querySelector('.jd').style.setProperty('--pj-accent','#8f8c00');
+  return window.instance.refresh();
+ });
+ await page.getByLabel('Journal scope').selectOption('release:v1.31.0');
+ const capture=async(n,h=980)=>{await page.locator('#journal').evaluate((e,h)=>e.style.height=h+'px',h);await page.locator('.pj-scroll').evaluate(e=>e.scrollTop=0);await page.locator('.jd').screenshot({path:test.info().outputPath('R'+n+'.png')});};
+ await capture(1);
+ await page.locator('.jd-ticket-row[data-open-ticket="DEMO-1"]').click();await expect(page.locator('[data-ticket-body]')).toContainText('Unicode');await expect(page.locator('.pj-header')).toBeHidden();await capture(2,1090);
+ await page.locator('[data-open-trace]').click();await expect(page.locator('.jd-attempt[open]')).toContainText('routed-model');await page.locator('[data-load-log]').click();await expect(page.locator('.jd-output')).toContainText('got 20');await capture(3,1020);
+ await page.locator('[data-compare]').click();await expect(page.locator('.jd-compare-field')).toHaveCount(8);for(const value of ['claude','routed-model','exe-dev','failed','true','fix/one','aaa','CJK'])await expect(page.locator('.jd-tickets')).toContainText(value);await page.locator('[data-compare-output]').click();await expect(page.locator('.jd-compare-logs')).toContainText('got 22');await capture(7,980);
+ await page.locator('[data-back-trace]').click();await page.locator('[data-back-ticket]').click();await page.locator('[data-back-list]').click();
+ for(const [tab,n] of [['Agents',4],['Insights',5],['Notes',8],['Handoffs',9]]){await page.getByRole('tab',{name:tab,exact:true}).click();await capture(n,1040);}
+ await page.getByRole('tab',{name:'Timeline',exact:true}).click();
+ for(const [view,n] of [['Timeline',6],['Activity Map',10],['Event log',11],['Waterfall',12]]){await page.getByRole('tab',{name:view,exact:true}).last().click();if(n===10){await page.locator('[data-inspect-event]').first().click();await expect(page.locator('.jd-map-inspector')).toContainText('routed-model');}else if(n===11||n===12){await page.locator('.jl-content [data-event]').first().click();}await capture(n,1040);}
+ await page.getByLabel('Journal scope').selectOption('project');await expect(page.locator('.jd-hero')).toBeHidden();
+});
+
+
+test('monthly notes read across days, filter scope and reject wrong-project responses',async({page})=>{
+ await start(page);
+ await page.evaluate(()=>{
+  window.data.documents.push({path:'Development/journal/2026-09-02.md'});
+  const base=window.__TAURI__.core.invoke;
+  window.__TAURI__.core.invoke=async(name,args)=>{
+   if(name!=='project_journal_notes_month')return base(name,args);
+   window.calls.push({name,args});
+   if(window.badMonth)return {project:'FOREIGN',month:args.month,entries:[]};
+   return {project:'DEMO',month:args.month,entries:args.month==='2026-09'?[{id:'september',actor:'You',kind:'note',ticket:'DEMO-1',at:'2026-09-02T12:00:00Z',content:'September decision',document_path:'Development/journal/2026-09-02.md'}]:[{id:'october',actor:'NautBot',kind:'note',ticket:'DEMO-1',at:'2026-10-01T12:00:00Z',content:'Earlier October decision',document_path:'Development/journal/2026-10-01.md'}]};
+  };return window.instance.refresh();
+ });
+ await page.getByRole('tab',{name:'Notes',exact:true}).click();await expect(page.locator('[data-entries]')).toContainText('Earlier October decision');
+ await page.getByLabel('Notes month').selectOption('2026-09');await expect(page.locator('[data-entries]')).toContainText('September decision');await expect(page.locator('[data-entries]')).not.toContainText('Earlier October');
+ await page.evaluate(()=>window.badMonth=true);await page.getByLabel('Notes month').selectOption('2026-10');await expect(page.locator('[data-history-date]')).toContainText('could not be loaded');await expect(page.locator('[data-entries]')).not.toContainText('September decision');
+});
+
+
+test('compact event log filters and expands without leaving the release',async({page})=>{
+ await start(page);await page.getByLabel('Journal scope').selectOption('release:2.0');await page.getByRole('tab',{name:'Timeline',exact:true}).click();await page.getByRole('tab',{name:'Event log',exact:true}).click();
+ await page.getByLabel('Filter events').fill('Current test failed');await expect(page.locator('.jd-event-row')).toHaveCount(1);await page.locator('.jd-event-row').click();await expect(page.locator('.jl-detail')).toContainText('Current test failed');
+ await page.getByLabel('Filter events').fill('');await page.getByLabel('Lifecycle ticket').selectOption('DEMO-2');await expect(page.locator('.jd-event-row')).toHaveCount(0);await expect(page.getByLabel('Journal scope')).toHaveValue('release:2.0');
+});
+test('handoff links open the exact ticket and return from its trace',async({page})=>{
+ await start(page);await page.getByRole('tab',{name:'Handoffs',exact:true}).click();await page.getByLabel('Handoff ticket').selectOption('DEMO-1');await expect(page.locator('.jd-handoff')).toHaveCount(1);
+ await page.locator('[data-handoff-trace]').click();await expect(page.locator('.jd-attempt[open]')).toContainText('routed-model');await page.locator('[data-back-ticket]').click();await expect(page.locator('[data-panel="handoffs"]')).toBeVisible();await expect(page.getByLabel('Handoff ticket')).toHaveValue('DEMO-1');
 });

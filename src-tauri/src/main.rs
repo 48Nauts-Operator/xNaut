@@ -687,6 +687,7 @@ async fn main() {
             workspace::workspace_agentic_items,
             workspace::workspace_sessions,
             project_wiki::journal::project_journal_read,
+            project_wiki::journal::project_journal_notes_month,
             project_wiki::journal::project_journal_add,
             project_wiki::project_wiki_projects,
             project_wiki::project_wiki_overview,
