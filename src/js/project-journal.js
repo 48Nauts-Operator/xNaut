@@ -202,12 +202,17 @@
       try {
         const record=await invoke('project_wiki_source',{project:data.project.key,kind:'run',id});
         if(stopped)return;
-        const dialog=document.createElement('dialog');dialog.className='pj-dialog';dialog.innerHTML=`<h2>${esc(record.title)}</h2><div><button data-record>Execution record</button> <button data-output>Saved output</button> <button data-close>Close</button></div><p role="status"></p><pre>${esc(record.text)}</pre>`;
-        host.append(dialog);dialog.querySelector('[data-close]').onclick=()=>dialog.remove();dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
-        dialog.querySelector('[data-record]').onclick=()=>{dialog.querySelector('pre').textContent=record.text;dialog.querySelector('[role="status"]').textContent='';};
+        let manifest=null;try{const parsed=JSON.parse(record.text);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))manifest=parsed;}catch(_){}
+        const fields=manifest?Object.entries({Ticket:manifest.ticket,Agent:manifest.agent_handle||manifest.runtime_id,Model:manifest.model,Destination:manifest.remote_env,State:manifest.state,Branch:manifest.branch,Worktree:manifest.worktree_path,Commit:manifest.last_commit,Run:manifest.run_id}).filter(([,value])=>value!=null&&value!==''):[];
+        const summary=fields.length?`<dl>${fields.map(([key,value])=>`<dt>${esc(key)}</dt><dd ${key==='State'?`data-run-state="${esc(value)}"`:''}>${esc(value)}</dd>`).join('')}</dl>`:'';
+        const recordMarkup=()=>summary+(manifest?`<details><summary>Raw execution record</summary><pre>${esc(record.text)}</pre></details>`:`<pre>${esc(record.text)}</pre>`);
+        const dialog=document.createElement('dialog');dialog.className='pj pj-dialog pj-run-dialog';dialog.setAttribute('aria-label',record.title||'Execution details');dialog.innerHTML=`<h2>${esc(record.title)}</h2><nav><button data-record>Execution record</button><button data-output>Saved output</button><button data-close autofocus>Close</button></nav><p role="status"></p><div data-run-body>${recordMarkup()}</div>`;
+        const accent=getComputedStyle(host.querySelector('.pj')).getPropertyValue('--pj-accent');if(accent)dialog.style.setProperty('--pj-accent',accent);
+        host.append(dialog);dialog.querySelector('[data-close]').onclick=()=>dialog.close();dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
+        dialog.querySelector('[data-record]').onclick=()=>{dialog.querySelector('[data-run-body]').innerHTML=recordMarkup();dialog.querySelector('[role="status"]').textContent='';};
         dialog.querySelector('[data-output]').onclick=async()=>{
           const button=dialog.querySelector('[data-output]');button.disabled=true;
-          try{const log=await invoke('project_wiki_source',{project:data.project.key,kind:'log',id});if(dialog.isConnected){dialog.querySelector('pre').textContent=log.text;dialog.querySelector('[role="status"]').textContent=log.truncated?'Showing the last 128 KiB of saved output.':'';}}
+          try{const log=await invoke('project_wiki_source',{project:data.project.key,kind:'log',id});if(dialog.isConnected){dialog.querySelector('[data-run-body]').innerHTML='<pre></pre>';dialog.querySelector('[data-run-body] pre').textContent=log.text;dialog.querySelector('[role="status"]').textContent=log.truncated?'Showing the last 128 KiB of saved output.':'';}}
           catch(error){if(dialog.isConnected)dialog.querySelector('[role="status"]').textContent=String(error);}
           finally{button.disabled=false;}
         };

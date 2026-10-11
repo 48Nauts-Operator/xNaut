@@ -95,9 +95,15 @@
 .jl-calendar-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0 12px}
 .jl-calendar-controls label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--pj-muted)}
 .jl-calendar-controls select,.jl-calendar-controls button{padding:5px 8px;font-size:12px}
-.jl-month-grid{display:grid;grid-template-columns:repeat(7,minmax(28px,44px));gap:5px;max-width:338px;margin-bottom:10px}
-.jl-month-weekday{font-size:11px;color:var(--pj-muted);text-align:center;padding:3px}
-.jl-month-grid button{height:32px;padding:3px;font-size:12px;border-color:var(--pj-border);background:color-mix(in srgb,var(--pj-accent) calc(var(--activity) * 100%),var(--pj-bg));color:var(--pj-text)}
-.jl-month-grid button:disabled{opacity:1;color:var(--pj-muted);cursor:default}
-.jl-month-grid button[aria-pressed=true]{outline:1px solid var(--pj-accent);outline-offset:1px}
+.jl-year-graph{display:grid;grid-template-columns:26px repeat(var(--graph-columns),minmax(0,1fr));grid-template-rows:18px repeat(7,auto);gap:3px;width:100%;margin:8px 0 10px}
+.jl-graph-month{font-size:10px;color:var(--pj-muted);overflow:visible;white-space:nowrap;align-self:start}
+.jl-graph-weekday{font-size:9px;color:var(--pj-muted);align-self:center;line-height:1}
+.jl-year-graph button{aspect-ratio:1;min-height:0;min-width:0;padding:0!important;border:1px solid var(--pj-border);border-radius:2px;background:color-mix(in srgb,var(--pj-accent) calc(var(--activity)*100%),var(--pj-bg));opacity:1!important}
+.jl-year-graph button[data-in-month=false]{opacity:.38!important}.jl-year-graph button:disabled{cursor:default}
+.jl-year-graph button[aria-pressed=true]{outline:1px solid var(--pj-accent);outline-offset:1px}
+.jl-period{font-size:11px;color:var(--pj-muted)}
 .jl-calendar-empty{font-size:11px;color:var(--pj-muted);margin-top:6px!important}.jl-calendar-empty button{font-size:11px;padding:4px 6px;margin-left:5px}.jl-calendar-limit{display:block;margin-top:5px}
+
+/* Run evidence is a bounded, opaque dialog, including when mounted outside .pj. */
+.pj-run-dialog{position:fixed;inset:0;margin:auto;width:min(720px,90vw);height:fit-content;max-height:85vh;display:block;padding:20px;overflow:auto;box-sizing:border-box;background:var(--pj-bg,var(--card,#171717));color:var(--pj-text,var(--foreground,#e7e5e0));border:1px solid var(--pj-border,var(--border,#30322e))}
+.pj-run-dialog:not([open]){display:none}.pj-run-dialog h2{font-size:18px;overflow-wrap:anywhere;margin:0 0 14px}.pj-run-dialog nav{display:flex;gap:8px;flex-wrap:wrap}.pj-run-dialog nav [data-close]{margin-left:auto}.pj-run-dialog dl{display:grid;grid-template-columns:100px minmax(0,1fr);gap:9px 14px;font-size:12px}.pj-run-dialog dt{color:var(--pj-muted)}.pj-run-dialog dd{margin:0;overflow-wrap:anywhere}.pj-run-dialog pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:45vh;overflow:auto;padding:12px;font-size:11px}.pj-run-dialog [data-run-state=failed],.pj-run-dialog [data-run-state=blocked]{color:var(--destructive,#e87878)}
