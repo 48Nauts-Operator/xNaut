@@ -4,7 +4,7 @@
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const millis=s=>{const n=typeof s==='number'?s:Date.parse(s);return Number.isFinite(n)&&n>0?n:null;};
   const when=s=>millis(s)?new Date(millis(s)).toLocaleString([], {dateStyle:'short',timeStyle:'short'}):'Time unknown';
-  const axisTime=(s,span)=>span>=86400000?new Date(s).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):time(s);
+  const axisTime=s=>new Date(s).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
   const time=s=>millis(s)?new Date(millis(s)).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'—';
   const tone=s=>s==='verified'?'success':['failed','blocked','stalled','refused','interrupted'].includes(s)?'failure':'neutral';
   const label=s=>({active:'Active · recorded',verified:'Verified',unknown:'Needs inspection',review:'Review',done:'Done · reported',complete:'Complete · reported'}[s]||String(s||'Unknown').replace(/_/g,' '));
@@ -44,7 +44,7 @@
     const storageKey='xnaut-journal-scope:'+root;
     try{const saved=JSON.parse(localStorage.getItem(storageKey)||'{}');if(saved.pinned){scope=saved.scope||'project';pinned=true;}view=saved.view||view;}catch(_){}
     const toolbar=document.createElement('div');toolbar.className='jl-scope-bar';options.toolbar.append(toolbar);
-    const calendar=document.createElement('details');calendar.className='jl-calendar';calendar.innerHTML='<summary>Activity calendar</summary><div data-calendar></div>';options.calendar.append(calendar);
+    const calendar=document.createElement('section');calendar.className='jl-calendar';calendar.setAttribute('aria-label','Activity calendar');calendar.innerHTML='<div class="jl-calendar-heading"><strong>Activity</strong><span data-calendar-range></span></div><div data-calendar></div>';options.calendar.append(calendar);
     function persist(){try{localStorage.setItem(storageKey,JSON.stringify({scope,pinned,view}));}catch(_){}window.xnautJournalPin=pinned?{root,scope}:null;}
     function selectScope(next,notify=true){scope=next;selected=next.startsWith('ticket:')?next.slice(7):'';eventId='';limit=40;persist();render();if(notify)options.onScope?.(scope);}
     function ticketClick(id){if(!scope.startsWith('ticket:'))remembered=scope;selectScope('ticket:'+id);}
@@ -61,11 +61,21 @@
       window.__xnautJournalLastThread=c.thread;
     }
     function renderCalendar() {
-      const counts=new Map();for(const e of m.events){if(millis(e.at)){const d=new Date(millis(e.at)).toISOString().slice(0,10);counts.set(d,(counts.get(d)||0)+1);}}
+      // Scope changes apply to the heatmap too; the selected day does not erase
+      // the other days, so users can navigate within this scope's history.
+      const ids=new Set(scoped(m,scope).map(t=>t.id)), counts=new Map();
+      for(const e of m.events){if(ids.has(e.ticket)&&millis(e.at)){const d=new Date(millis(e.at)).toISOString().slice(0,10);counts.set(d,(counts.get(d)||0)+1);}}
       const today=new Date();today.setUTCHours(0,0,0,0);
-      calendar.querySelector('[data-calendar]').innerHTML=`<small>Recorded activity · UTC · latest 12 weeks</small><div class="jl-days">${Array.from({length:84},(_,i)=>{const d=new Date(today.getTime()-(83-i)*86400000).toISOString().slice(0,10),count=counts.get(d)||0;return `<button data-day="${d}" ${count?'':'disabled'} aria-label="${d}: ${count} recorded events" title="${d} · ${count} recorded events" style="--activity:${count?Math.min(.85,.2+Math.log2(count+1)*.12):.06}"></button>`;}).join('')}</div>`;
+      const monday=new Date(today);monday.setUTCDate(today.getUTCDate()-(today.getUTCDay()+6)%7-77);
+      const dayName=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      const fmt=d=>d.toLocaleDateString([], {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
+      const week=d=>{const thursday=new Date(d);thursday.setUTCDate(d.getUTCDate()+3);const first=new Date(Date.UTC(thursday.getUTCFullYear(),0,1));return Math.ceil(((thursday-first)/86400000+1)/7);};
+      const selectedDay=options.day?.()||today.toISOString().slice(0,10);
+      calendar.querySelector('[data-calendar-range]').textContent=fmt(monday)+' – '+fmt(today)+' · UTC';
+      calendar.querySelector('[data-calendar]').innerHTML=`<div class="jl-calendar-grid"><div class="jl-weekdays"><span>Week</span>${dayName.map(d=>`<span>${d}</span>`).join('')}</div>${Array.from({length:12},(_,col)=>{const start=new Date(monday.getTime()+col*7*86400000);return `<div class="jl-week"><span class="jl-week-number" title="Week ${week(start)} · ${fmt(start)}">W${week(start)}</span>${Array.from({length:7},(_,row)=>{const d=new Date(start.getTime()+row*86400000),key=d.toISOString().slice(0,10),count=counts.get(key)||0;return `<button data-day="${key}" ${count?'':'disabled'} aria-pressed="${key===selectedDay}" aria-label="${dayName[row]} ${fmt(d)}: ${count} recorded events" title="${dayName[row]} ${fmt(d)} · ${count} recorded events" style="--activity:${count?Math.min(.85,.2+Math.log2(count+1)*.12):.06}"></button>`;}).join('')}</div>`;}).join('')}</div><small>${esc(selectedDay)} · ${counts.get(selectedDay)||0} recorded events in this scope · Select a day to filter</small>`;
       calendar.querySelectorAll('[data-day]').forEach(b=>{b.onclick=()=>options.onDate?.(b.dataset.day);});
     }
+
     function renderToolbar() {
       const releases=[...new Set(m.tickets.map(t=>t.release).filter(Boolean))].sort().reverse();
       const html=`<select data-scope aria-label="Journal scope"><option value="project">Project · ${esc(data.project.name)}</option>${releases.map(r=>`<option value="release:${esc(r)}">Release · ${esc(r)}</option>`).join('')}${m.groups.map(g=>`<option value="group:${esc(g.id)}">Task group · ${esc(g.title||when(g.approved_at)+' · '+(g.members||[]).length+' tickets')}</option>`).join('')}${m.tickets.map(t=>`<option value="ticket:${esc(t.id)}">Ticket · ${esc(t.id)}</option>`).join('')}</select><button data-pin aria-pressed="${pinned}">${pinned?'Unpin':'Pin view'}</button><small>${pinned?'Pinned':'Following conversation'}</small>`;
@@ -112,7 +122,7 @@
       const tickets=scoped(m,scope),events=visibleEvents(tickets),e=events.find(e=>e.id===eventId);
       const selectedTicket=m.tickets.find(t=>t.id===selected);
       const coverage=!m.native?'Lifecycle history unavailable. Current ticket evidence remains accessible.':m.native.limited?'Recent history only · older events fall outside the loaded window.':m.native.coverage;
-      return `<div class="jl-viewbar"><div role="tablist" aria-label="Lifecycle views">${['timeline','waterfall','map','event log'].map(v=>`<button role="tab" aria-selected="${view===v}" tabindex="${view===v?0:-1}" data-view="${v}">${v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div><button data-expand>${expanded?'Close expanded view':'Expand ↗'}</button></div>${selected?`<button data-back>‹ Back to ${remembered==='project'?'project':remembered.split(':')[0]}</button>`:''}<p class="jl-coverage">${esc(coverage)}${m.native?.unreadable?' '+m.native.unreadable+' source files unreadable.':''}</p>${e?`<section class="jl-detail jl-detail-${tone(e.state)}"><strong class="jl-${tone(e.state)}">${esc(e.ticket)} · ${esc(label(e.state||e.kind))}</strong><small>${esc(when(e.at))} · ${esc(e.authority||'Recorded report')}</small><p>${esc(e.detail||e.title||'No further details recorded.')}</p><small>Source: ${esc(e.source||'Journal')}</small>${e.run_id?`<button data-inspect-event="${esc(e.run_id)}">Execution record ↗</button>`:''}<button data-ticket="${esc(e.ticket)}">Ticket details ↗</button><button data-close-detail>Close details</button></section>`:''}<div class="jl-content">${view==='map'?mapView(tickets):view==='event log'?eventLog(events):ticketRows(tickets,events)}</div>${view==='waterfall'?'<small class="jl-muted">Points: observations · bars: time between recorded status changes · hatched: waiting/review. Open ends have no invented duration.</small>':''}${selectedTicket?`<section class="jl-ticket-detail"><h3>${esc(selectedTicket.id)} · ${esc(selectedTicket.title)}</h3><p>${esc(selectedTicket.next_action||'Inspect the recorded evidence.')}</p><div data-ticket-evidence></div></section>`:''}`;
+      return `<div class="jl-viewbar"><div role="tablist" aria-label="Lifecycle views">${['timeline','waterfall','map','event log'].map(v=>`<button role="tab" aria-selected="${view===v}" tabindex="${view===v?0:-1}" data-view="${v}">${v==='map'?'Activity Map':v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div><button data-expand>${expanded?'Close expanded view':'Expand ↗'}</button></div>${selected?`<button data-back>‹ Back to ${remembered==='project'?'project':remembered.split(':')[0]}</button>`:''}<p class="jl-coverage">${esc(coverage)}${m.native?.unreadable?' '+m.native.unreadable+' source files unreadable.':''}</p>${e?`<section class="jl-detail jl-detail-${tone(e.state)}"><strong class="jl-${tone(e.state)}">${esc(e.ticket)} · ${esc(label(e.state||e.kind))}</strong><small>${esc(when(e.at))} · ${esc(e.authority||'Recorded report')}</small><p>${esc(e.detail||e.title||'No further details recorded.')}</p><small>Source: ${esc(e.source||'Journal')}</small>${e.run_id?`<button data-inspect-event="${esc(e.run_id)}">Execution record ↗</button>`:''}<button data-ticket="${esc(e.ticket)}">Ticket details ↗</button><button data-close-detail>Close details</button></section>`:''}<div class="jl-content">${view==='map'?mapView(tickets):view==='event log'?eventLog(events):ticketRows(tickets,events)}</div>${view==='waterfall'?'<small class="jl-muted">Points: observations · bars: time between recorded status changes · hatched: waiting/review. Open ends have no invented duration.</small>':''}${selectedTicket?`<section class="jl-ticket-detail"><h3>${esc(selectedTicket.id)} · ${esc(selectedTicket.title)}</h3><p>${esc(selectedTicket.next_action||'Inspect the recorded evidence.')}</p><div data-ticket-evidence></div></section>`:''}`;
     }
     function wire(target){
       target.querySelectorAll('[data-view]').forEach((b,i,bs)=>{b.onclick=()=>{view=b.dataset.view;limit=40;persist();render();(expanded||host).querySelector('[data-view="'+view+'"]')?.focus();};b.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();bs[(i+(e.key==='ArrowRight'?1:bs.length-1))%bs.length].click();};});
@@ -128,9 +138,9 @@
         expanded=document.createElement('dialog');expanded.className='pj jl-expanded';document.body.append(expanded);expanded.addEventListener('close',()=>{expanded.remove();expanded=null;lastRender='';render();});render();expanded.showModal();
       });
     }
-    function render(){if(!m)return;renderToolbar();const html=markup();if(html===lastRender)return;lastRender=html;const target=expanded||host;target.innerHTML=html;wire(target);}
+    function render(){if(!m)return;renderToolbar();renderCalendar();const html=markup();if(html===lastRender)return;lastRender=html;const target=expanded||host;target.innerHTML=html;wire(target);}
     const listener=()=>{context();render();};window.addEventListener('xnaut:journal-context',listener);persist();
-    return {update(next){data=next;m=model(data);context();renderCalendar();render();},selectScope,ticketIds(){return m?new Set(scoped(m,scope).map(t=>t.id)):null;},scope(){return scope;},dispose(){window.removeEventListener('xnaut:journal-context',listener);expanded?.close();toolbar.remove();calendar.remove();if(window.xnautJournalPin?.root===root)window.xnautJournalPin=null;}};
+    return {update(next){data=next;m=model(data);context();render();},selectScope,ticketIds(){return m?new Set(scoped(m,scope).map(t=>t.id)):null;},scope(){return scope;},dispose(){window.removeEventListener('xnaut:journal-context',listener);expanded?.close();toolbar.remove();calendar.remove();if(window.xnautJournalPin?.root===root)window.xnautJournalPin=null;}};
   }
   window.xnautLifecycle={mount,model,scoped,intervals};
 })();

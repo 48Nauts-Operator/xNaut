@@ -58,7 +58,7 @@ test('pin holds release while conversation changes, survives remount, unpin foll
 });
 test('all four views, expansion, map evidence and refresh preserve chosen scope',async({page})=>{
  await start(page);await page.getByLabel('Journal scope').selectOption('release:2.0');
- await page.getByRole('tab',{name:'Map',exact:true}).click();await expect(page.locator('.jl-map-edge')).toHaveCount(1);await expect(page.locator('.jl-content')).toContainText('parent');
+ await page.getByRole('tab',{name:'Activity Map',exact:true}).click();await expect(page.locator('.jl-map-edge')).toHaveCount(1);await expect(page.locator('.jl-content')).toContainText('parent');
  await page.getByRole('button',{name:'Expand ↗',exact:true}).click();await expect(page.locator('.jl-expanded')).toBeVisible();
  await page.locator('.jl-expanded [data-view="timeline"]').click();await expect(page.locator('.jl-expanded .jl-movements')).toHaveCount(3);
  await page.evaluate(()=>window.instance.refresh());await expect(page.locator('.jl-expanded [data-view="timeline"]')).toHaveAttribute('aria-selected','true');
@@ -92,4 +92,45 @@ test('polling keeps the scope control intact while it is being used',async({page
  await page.evaluate(()=>{window.scopeElement=document.querySelector('[data-scope]');return window.instance.refresh();});
  expect(await page.evaluate(()=>window.scopeElement===document.querySelector('[data-scope]'))).toBe(true);
  await expect(page.getByLabel('Journal scope')).toBeFocused();
+});
+
+
+test('visible activity calendar follows scope and keeps labelled weeks and days',async({page})=>{
+ await start(page);
+ await page.evaluate(()=>{const day=new Date().toISOString().slice(0,10);window.data.lifecycle.events=[{id:'one',project:'DEMO',ticket:'DEMO-1',at:day+'T08:00:00Z'},{id:'two',project:'DEMO',ticket:'DEMO-4',at:day+'T09:00:00Z'}];return window.instance.refresh();});
+ const calendar=page.getByRole('region',{name:'Activity calendar'});
+ await expect(calendar).toBeVisible();
+ await expect(calendar.locator('.jl-week-number')).toHaveCount(12);
+ await expect(calendar.locator('.jl-weekdays')).toContainText('MonTueWedThuFriSatSun');
+ await expect(calendar.getByRole('button',{name:/2 recorded events/})).toHaveCount(1);
+ await page.getByLabel('Journal scope').selectOption('release:2.0');
+ await expect(calendar.getByRole('button',{name:/1 recorded events/})).toHaveCount(1);
+ await page.getByLabel('Journal scope').selectOption('ticket:DEMO-2');
+ await expect(calendar.locator('button:not(:disabled)')).toHaveCount(0);
+ await page.getByLabel('Journal scope').selectOption('project');
+ await expect(calendar.getByRole('button',{name:/2 recorded events/})).toHaveCount(1);
+});
+
+test('one Journal scroll area moves header and content together',async({page})=>{
+ await start(page);
+ await page.evaluate(()=>{document.querySelector('#journal').style.height='700px';});
+ const before=await page.locator('.pj-header').boundingBox();
+ await page.locator('.pj-scroll').evaluate(el=>{el.scrollTop=250;});
+ const after=await page.locator('.pj-header').boundingBox();
+ expect(after.y).toBeLessThan(before.y-200);
+ expect(await page.locator('.pj-live-context').evaluate(el=>getComputedStyle(el).overflowY)).toBe('visible');
+ expect(await page.locator('.jl-content').evaluate(el=>getComputedStyle(el).overflowY)).toBe('visible');
+});
+
+
+test('relationship map adapts to release and ticket dropdowns',async({page})=>{
+ await start(page);await page.getByRole('tab',{name:'Activity Map',exact:true}).click();
+ await expect(page.locator('.jl-map-edge')).toHaveCount(1);
+ await page.getByLabel('Journal scope').selectOption('release:3.0');
+ await expect(page.locator('.jl-map-edge')).toHaveCount(0);
+ await expect(page.locator('.jl-content')).toContainText('No explicit relationships');
+ await page.getByLabel('Journal scope').selectOption('ticket:DEMO-1');
+ await expect(page.locator('.jl-map-edge')).toHaveCount(1);
+ await page.getByLabel('Journal scope').selectOption('ticket:DEMO-3');
+ await expect(page.locator('.jl-map-edge')).toHaveCount(0);
 });

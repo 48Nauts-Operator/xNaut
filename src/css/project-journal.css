@@ -56,3 +56,38 @@
 .jl-detail-failure{border-left-color:var(--jl-red)}.jl-detail-success{border-left-color:var(--jl-green)}
 
 .jl-map-node{text-align:left!important}.jl-map-node strong,.jl-map-node small{display:block;font-size:10px}
+
+/* Approved V4 spacing, with the owner's yellow/olive palette revision. */
+.pj{--pj-text:#ccce9d;--pj-muted:#9b9f7a;--pj-border:#30392e;--pj-bg:#101612;--jl-neutral:#b9be86}
+.pj h1,.pj h2,.pj h3,.pj h4,.pj strong{color:var(--pj-text)}
+.pj h1{font-size:23px}.pj-header{padding:18px 20px 12px}.pj-header .pj-eyebrow{display:none}
+.pj-live-context{padding:12px 20px 16px;max-height:48%}.pj-summary h2{font-size:18px}.pj-document{padding:14px 20px 28px}
+.pj-dialog{color:var(--pj-text)}.pj-note,.pj-question{border-color:#919961}.pj-note .pj-entry-meta>span,.pj-question .pj-entry-meta>span{color:#b7be83}
+.pj-agent-grid{gap:8px}.pj-agent{padding:7px 9px}.pj-agent strong{font-size:12px}.pj-agent-links button{font-size:10px;padding:3px 5px}
+.pj-group-row>summary{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;padding:12px 4px}
+.pj-group-row>summary:before{content:'›';grid-row:1/3;grid-column:1;font-size:17px;color:#c9bc68}
+.pj-group-row[open]>summary:before{content:'⌄'}
+.pj-group-row>summary strong{grid-column:2;font-size:13px}.pj-group-row>summary p,.pj-group-row>summary small{grid-column:2;font-size:12px}
+.pj-group-members{margin:0 0 10px!important;border:0!important}.pj-group-members>summary{padding:8px 14px}
+.pj-group-member{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;border-top:1px solid var(--pj-border);padding:12px 14px}
+.pj-member-heading{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:13px}
+.pj-member-state{font-size:11px;border:1px solid currentColor;border-radius:4px;padding:1px 6px;text-transform:capitalize}
+.pj-member-reason{grid-column:1;font-size:12px;line-height:1.5;color:var(--pj-muted);margin:0!important}
+.pj-member-details{grid-column:2;grid-row:1/3;margin:0!important;border:0!important;align-self:start;max-width:100%}
+.pj-member-details>summary{padding:2px;font-size:11px}.pj-member-details[open]{grid-column:1/-1;grid-row:auto}.pj-member-details p{font-size:12px;overflow-wrap:anywhere;padding-top:8px}
+.pj-group-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 14px}.pj-group-controls small{max-width:380px}
+.jl-calendar{margin:16px 0!important}.jl-calendar-heading{display:flex;gap:8px;align-items:baseline;justify-content:space-between;margin-bottom:8px}.jl-calendar-heading strong{text-transform:uppercase;font-size:11px;letter-spacing:.08em}.jl-calendar-heading span{font-size:11px;color:var(--pj-muted)}
+.jl-calendar-grid{display:grid;grid-template-columns:36px repeat(12,minmax(14px,24px));gap:6px;max-width:396px;margin-bottom:7px}
+.jl-weekdays,.jl-week{display:grid;grid-template-rows:20px repeat(7,20px);gap:4px}.jl-weekdays span,.jl-week-number{font-size:10px;color:var(--pj-muted);line-height:15px}.jl-week-number{text-align:center}
+.jl-week button{background:rgba(182,191,81,var(--activity));border:1px solid #b6bf5115!important;border-radius:2px!important;min-width:0!important;padding:0!important;cursor:pointer;opacity:1!important}.jl-week button[aria-pressed=true]{outline:1px solid #d9cd81;outline-offset:1px}.jl-week button:disabled{cursor:default}.jl-calendar small{font-size:11px}
+.jl-viewbar{flex-wrap:wrap;padding:4px 0 12px;gap:8px}.jl-viewbar [role=tablist]{flex-wrap:wrap;overflow:visible;gap:6px}.jl-viewbar [role=tab]{font-size:13px;padding:9px 10px}.jl-viewbar>[data-expand]{font-size:11px}
+.jl-row{min-height:56px;font-size:12px;grid-template-columns:minmax(110px,1fr) minmax(150px,1.6fr) 85px}.jl-axis{min-height:42px;font-size:10px}.jl-axis-labels{gap:6px}.jl-axis-labels span{max-width:90px}
+.jl-ticket-link{font-size:12px!important}.jl-ticket-link strong{font-size:12px}.jl-track{height:38px}.jl-bar{height:12px;top:13px;background:#929d50!important}.jl-point{height:14px;top:12px;background:#c9c868!important}.jl-wait{background:repeating-linear-gradient(135deg,#7b8251,#7b8251 3px,#333c29 3px,#333c29 5px)!important}
+.jl-log-row{font-size:12px!important;min-height:44px}.jl-log-row time,.jl-log-row small{font-size:11px}.jl-coverage,.jl-muted{font-size:11px}.jl-map-node,.jl-map-node strong,.jl-map-node small{font-size:12px}.jl-map-edge{padding:14px 0}.jl-connector{font-size:11px;color:#adb970;border-color:#77844d}
+
+/* One vertical reading surface: the entire Journal scrolls together. */
+.pj>.pj-scroll{height:100%;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
+.pj-header,.pj-live-context,.pj-tabs{flex:none}.pj-live-context{max-height:none;overflow:visible;scrollbar-gutter:auto}
+.jl-content,.jl-expanded .jl-content{max-height:none;overflow:visible;scrollbar-gutter:auto}.jl-viewbar{position:static}
+.jl-detail>p{max-height:none;overflow:visible}.jl-movements{flex-wrap:wrap;overflow:visible}
+@media(max-width:650px){.jl-row{grid-template-columns:minmax(90px,1fr) minmax(115px,1.5fr) 74px;gap:6px;min-width:0}.jl-calendar-heading{flex-wrap:wrap}.jl-calendar-grid{gap:4px}}

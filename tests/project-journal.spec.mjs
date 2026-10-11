@@ -328,3 +328,27 @@ test('group source failure is visible and offers no guessed stop controls',async
  await expect(page.locator('[data-stop-group]')).toHaveCount(0);
  await expect(page.locator('[data-opening]')).toContainText('Inventory completed');
 });
+
+
+test('superseded plans are compact history and preserve expanded details on refresh',async({page})=>{
+ await start(page);await approvedGroups(page);
+ await page.evaluate(()=>{const g=window.journalData.groups[0];g.counts={queued:0,running:0,blocked:3};g.members.forEach(m=>{m.state='blocked';m.reason='superseded by approved plan swarm-long-opaque-plan-id; existing runs and evidence retained';});return window.journalInstance.refresh();});
+ await page.getByRole('tab',{name:'Actions',exact:true}).click();
+ const group=page.locator('[data-group="DEMO-approved"]');
+ await expect(group.locator(':scope > summary')).toContainText('Superseded plan');
+ await expect(group.locator(':scope > summary')).not.toContainText('blocked');
+ await group.locator(':scope > summary').click();
+ await group.locator('.pj-group-members > summary').click();
+ await expect(group.locator('.pj-member-state').first()).toHaveText('Superseded');
+ await expect(group.locator('.jl-failure')).toHaveCount(0);
+ await expect(group.locator('[data-stop-group]')).toHaveCount(0);
+ await expect(group.locator('.pj-member-details p').first()).not.toBeVisible();
+ await group.locator('.pj-member-details > summary').first().click();
+ await expect(group.locator('.pj-member-details p').first()).toContainText('swarm-long-opaque-plan-id');
+ await page.evaluate(()=>{window.journalData.groups[0].approved_at+=1;return window.journalInstance.refresh();});
+ await expect(group.locator('.pj-member-details p').first()).toBeVisible();
+ await group.locator('.pj-member-details > summary').first().click();
+ await page.locator('#journal').evaluate(el=>{el.style.width='600px';});
+ await group.scrollIntoViewIfNeeded();
+ await page.screenshot({path:test.info().outputPath('approved-group-format.png')});
+});
