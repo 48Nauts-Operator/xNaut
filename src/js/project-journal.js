@@ -104,6 +104,7 @@
       onInspect:showSource,
       onTicket:(ticket,previous)=>design?.openTicket(ticket,previous),
       onView:()=>design?.syncView(),
+      designMode:()=>Boolean(design),
       evidence:(el,ticket)=>{const snapshot=data?.continuity;if(!snapshot)return;el.innerHTML=continuityMarkup(snapshot,ticket);el.querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});}
     });
     const inScope=ticket=>{const ids=lifecycle?.ticketIds();return (!filter||ticket===filter)&&(!ids||ids.has(ticket));};

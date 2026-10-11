@@ -653,7 +653,13 @@ fn overview(project: String) -> Result<Value, String> {
     )
 }
 #[tauri::command]
-pub fn project_wiki_source(project: String, kind: String, id: String) -> Result<Value, String> {
+pub async fn project_wiki_source(project: String, kind: String, id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || read_project_source(project, kind, id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn read_project_source(project: String, kind: String, id: String) -> Result<Value, String> {
     let p = self::project(&project)?;
     if kind == "ticket" {
         return Ok(
