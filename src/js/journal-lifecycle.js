@@ -41,10 +41,11 @@
   function mount(host,options) {
     let data=null,m=null,scope='project',view='waterfall',selected='',eventId='',limit=40,pinned=false,expanded=null,lastContext='',lastRender='';
     let remembered='project';const root=options.root;
+    let calendarYear=new Date().getUTCFullYear(),calendarMonth=new Date().getUTCMonth(),calendarDay='';
     const storageKey='xnaut-journal-scope:'+root;
     try{const saved=JSON.parse(localStorage.getItem(storageKey)||'{}');if(saved.pinned){scope=saved.scope||'project';pinned=true;}view=saved.view||view;}catch(_){}
     const toolbar=document.createElement('div');toolbar.className='jl-scope-bar';options.toolbar.append(toolbar);
-    const calendar=document.createElement('section');calendar.className='jl-calendar';calendar.setAttribute('aria-label','Activity calendar');calendar.innerHTML='<div class="jl-calendar-heading"><strong>Activity</strong><span data-calendar-range></span></div><div data-calendar></div>';options.calendar.append(calendar);
+    const calendar=document.createElement('section');calendar.className='jl-calendar';calendar.setAttribute('aria-label','Activity calendar');calendar.innerHTML='<div class="jl-calendar-heading"><strong>Activity</strong><span data-calendar-range></span></div><div class="jl-calendar-controls" data-calendar-controls></div><div data-calendar></div>';options.calendar.append(calendar);
     function persist(){try{localStorage.setItem(storageKey,JSON.stringify({scope,pinned,view}));}catch(_){}window.xnautJournalPin=pinned?{root,scope}:null;}
     function selectScope(next,notify=true){scope=next;selected=next.startsWith('ticket:')?next.slice(7):'';eventId='';limit=40;persist();render();if(notify)options.onScope?.(scope);}
     function ticketClick(id){if(!scope.startsWith('ticket:'))remembered=scope;selectScope('ticket:'+id);}
@@ -71,14 +72,36 @@
       const ids=new Set(scoped(m,scope).map(t=>t.id)), counts=new Map();
       for(const e of m.events){if(ids.has(e.ticket)&&millis(e.at)){const d=new Date(millis(e.at)).toISOString().slice(0,10);counts.set(d,(counts.get(d)||0)+1);}}
       const today=new Date();today.setUTCHours(0,0,0,0);
-      const monday=new Date(today);monday.setUTCDate(today.getUTCDate()-(today.getUTCDay()+6)%7-77);
+      const requestedDay=options.day?.()||'';
+      if(requestedDay!==calendarDay){
+        calendarDay=requestedDay;const date=requestedDay?new Date(requestedDay+'T00:00:00Z'):today;
+        if(Number.isFinite(date.getTime())){calendarYear=date.getUTCFullYear();calendarMonth=date.getUTCMonth();}
+      }
       const dayName=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
       const fmt=d=>d.toLocaleDateString([], {day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
-      const week=d=>{const thursday=new Date(d);thursday.setUTCDate(d.getUTCDate()+3);const first=new Date(Date.UTC(thursday.getUTCFullYear(),0,1));return Math.ceil(((thursday-first)/86400000+1)/7);};
-      const selectedDay=options.day?.()||today.toISOString().slice(0,10);
-      calendar.querySelector('[data-calendar-range]').textContent=fmt(monday)+' – '+fmt(today)+' · UTC';
-      calendar.querySelector('[data-calendar]').innerHTML=`<div class="jl-calendar-grid"><div class="jl-weekdays"><span>Week</span>${dayName.map(d=>`<span>${d}</span>`).join('')}</div>${Array.from({length:12},(_,col)=>{const start=new Date(monday.getTime()+col*7*86400000);return `<div class="jl-week"><span class="jl-week-number" title="Week ${week(start)} · ${fmt(start)}">W${week(start)}</span>${Array.from({length:7},(_,row)=>{const d=new Date(start.getTime()+row*86400000),key=d.toISOString().slice(0,10),count=counts.get(key)||0;return `<button data-day="${key}" ${count?'':'disabled'} aria-pressed="${key===selectedDay}" aria-label="${dayName[row]} ${fmt(d)}: ${count} recorded events" title="${dayName[row]} ${fmt(d)} · ${count} recorded events" style="--activity:${count?Math.min(.85,.2+Math.log2(count+1)*.12):.06}"></button>`;}).join('')}</div>`;}).join('')}</div><small>${esc(selectedDay)} · ${counts.get(selectedDay)||0} recorded events in this scope · Select a day to filter</small>`;
-      calendar.querySelectorAll('[data-day]').forEach(b=>{b.onclick=()=>options.onDate?.(b.dataset.day);});
+      const months=Array.from({length:12},(_,i)=>new Date(Date.UTC(2000,i,1)).toLocaleDateString([], {month:'long',timeZone:'UTC'}));
+      const years=new Set(Array.from({length:11},(_,i)=>today.getUTCFullYear()-i));years.add(calendarYear);
+      for(const day of counts.keys())years.add(Number(day.slice(0,4)));
+      for(const doc of data.documents||[]){const year=/([0-9]{4})-[0-9]{2}-[0-9]{2}/.exec(doc.path||'');if(year)years.add(Number(year[1]));}
+      const controls=calendar.querySelector('[data-calendar-controls]');
+      const controlsHtml=`<label>Year <select data-calendar-year aria-label="Activity year">${[...years].sort((a,b)=>b-a).map(y=>`<option value="${y}">${y}</option>`).join('')}</select></label><label>Month <select data-calendar-month aria-label="Activity month">${months.map((name,i)=>`<option value="${i}">${esc(name)}</option>`).join('')}</select></label><button data-calendar-today>This month</button>`;
+      if(controls.dataset.markup!==controlsHtml){controls.innerHTML=controlsHtml;controls.dataset.markup=controlsHtml;}
+      controls.querySelector('[data-calendar-year]').value=calendarYear;
+      controls.querySelector('[data-calendar-month]').value=calendarMonth;
+      controls.querySelector('[data-calendar-year]').onchange=e=>{calendarYear=Number(e.target.value);renderCalendar();};
+      controls.querySelector('[data-calendar-month]').onchange=e=>{calendarMonth=Number(e.target.value);renderCalendar();};
+      controls.querySelector('[data-calendar-today]').onclick=()=>{calendarYear=today.getUTCFullYear();calendarMonth=today.getUTCMonth();renderCalendar();};
+      const first=new Date(Date.UTC(calendarYear,calendarMonth,1)),days=new Date(Date.UTC(calendarYear,calendarMonth+1,0)).getUTCDate(),offset=(first.getUTCDay()+6)%7;
+      const prefix=calendarYear+'-'+String(calendarMonth+1).padStart(2,'0')+'-';
+      const total=[...counts].filter(([day])=>day.startsWith(prefix)).reduce((n,[,count])=>n+count,0);
+      const latest=[...counts.keys()].sort().at(-1), selectedDay=requestedDay||today.toISOString().slice(0,10);
+      calendar.querySelector('[data-calendar-range]').textContent=months[calendarMonth]+' '+calendarYear+' · UTC';
+      const grid=`<div class="jl-month-grid">${dayName.map(d=>`<span class="jl-month-weekday">${d}</span>`).join('')}${Array.from({length:offset},()=>'<span aria-hidden="true"></span>').join('')}${Array.from({length:days},(_,i)=>{const key=prefix+String(i+1).padStart(2,'0'),count=counts.get(key)||0,d=new Date(key+'T00:00:00Z');return `<button data-day="${key}" ${count?'':'disabled'} aria-pressed="${key===selectedDay}" aria-label="${fmt(d)}: ${count} recorded events" title="${fmt(d)} · ${count} recorded events" style="--activity:${count?Math.min(.85,.2+Math.log2(count+1)*.12):0}">${i+1}</button>`;}).join('')}</div>`;
+      const message=total?`${total} recorded events in this month · Select a day to filter`:'No recorded activity in this month.';
+      const html=grid+`<small>${esc(message)}</small>${!total&&latest?`<p class="jl-calendar-empty">Latest available activity: ${esc(fmt(new Date(latest+'T00:00:00Z')))} <button data-calendar-latest>View ${esc(months[Number(latest.slice(5,7))-1])} ${esc(latest.slice(0,4))} ↗</button></p>`:''}${m.native?.limited?'<small class="jl-calendar-limit">Loaded history only; older activity may not be available.</small>':''}`;
+      const body=calendar.querySelector('[data-calendar]');if(body.dataset.markup!==html){body.innerHTML=html;body.dataset.markup=html;}
+      body.querySelectorAll('[data-day]').forEach(b=>{b.onclick=()=>options.onDate?.(b.dataset.day);});
+      const jump=body.querySelector('[data-calendar-latest]');if(jump)jump.onclick=()=>{calendarYear=Number(latest.slice(0,4));calendarMonth=Number(latest.slice(5,7))-1;renderCalendar();};
     }
 
     function renderToolbar() {

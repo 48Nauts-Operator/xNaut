@@ -95,18 +95,20 @@ test('polling keeps the scope control intact while it is being used',async({page
 });
 
 
-test('visible activity calendar follows scope and keeps labelled weeks and days',async({page})=>{
+test('visible activity calendar follows scope with year and month selectors',async({page})=>{
  await start(page);
  await page.evaluate(()=>{const day=new Date().toISOString().slice(0,10);window.data.lifecycle.events=[{id:'one',project:'DEMO',ticket:'DEMO-1',at:day+'T08:00:00Z'},{id:'two',project:'DEMO',ticket:'DEMO-4',at:day+'T09:00:00Z'}];return window.instance.refresh();});
  const calendar=page.getByRole('region',{name:'Activity calendar'});
  await expect(calendar).toBeVisible();
- await expect(calendar.locator('.jl-week-number')).toHaveCount(12);
- await expect(calendar.locator('.jl-weekdays')).toContainText('MonTueWedThuFriSatSun');
+ await expect(calendar.getByLabel('Activity year')).toHaveValue(String(new Date().getUTCFullYear()));
+ await expect(calendar.getByLabel('Activity month')).toHaveValue(String(new Date().getUTCMonth()));
+ await expect(calendar.locator('.jl-week-number')).toHaveCount(0);
+ await expect(calendar.locator('.jl-month-weekday')).toHaveText(['Mon','Tue','Wed','Thu','Fri','Sat','Sun']);
  await expect(calendar.getByRole('button',{name:/2 recorded events/})).toHaveCount(1);
  await page.getByLabel('Journal scope').selectOption('release:2.0');
  await expect(calendar.getByRole('button',{name:/1 recorded events/})).toHaveCount(1);
  await page.getByLabel('Journal scope').selectOption('ticket:DEMO-2');
- await expect(calendar.locator('button:not(:disabled)')).toHaveCount(0);
+ await expect(calendar.locator('[data-day]:not(:disabled)')).toHaveCount(0);
  await page.getByLabel('Journal scope').selectOption('project');
  await expect(calendar.getByRole('button',{name:/2 recorded events/})).toHaveCount(1);
 });
@@ -133,4 +135,29 @@ test('relationship map adapts to release and ticket dropdowns',async({page})=>{
  await expect(page.locator('.jl-map-edge')).toHaveCount(1);
  await page.getByLabel('Journal scope').selectOption('ticket:DEMO-3');
  await expect(page.locator('.jl-map-edge')).toHaveCount(0);
+});
+
+
+test('month calendar reaches January history, handles leap years and preserves navigation on refresh',async({page})=>{
+ await page.clock.install({time:new Date('2026-10-11T10:00:00Z')});await start(page);
+ await page.evaluate(()=>{window.data.lifecycle.events=[{id:'jan',project:'DEMO',ticket:'DEMO-1',at:'2026-01-18T08:00:00Z'}];return window.instance.refresh();});
+ const calendar=page.getByRole('region',{name:'Activity calendar'});
+ await expect(calendar).toContainText('No recorded activity in this month');
+ await calendar.getByRole('button',{name:'View January 2026 ↗'}).click();
+ await expect(calendar.getByLabel('Activity month')).toHaveValue('0');
+ await expect(calendar.locator('[data-day="2026-01-18"]')).toBeEnabled();
+ await calendar.getByLabel('Activity year').selectOption('2024');
+ await calendar.getByLabel('Activity month').selectOption('1');
+ await expect(calendar.locator('[data-day]')).toHaveCount(29);
+ await calendar.getByLabel('Activity month').focus();
+ await page.evaluate(()=>{window.monthControl=document.querySelector('[data-calendar-month]');return window.instance.refresh();});
+ expect(await page.evaluate(()=>window.monthControl===document.querySelector('[data-calendar-month]'))).toBe(true);
+ await expect(calendar.getByLabel('Activity month')).toBeFocused();
+ await expect(calendar.getByLabel('Activity year')).toHaveValue('2024');
+ await calendar.getByRole('button',{name:'This month'}).click();
+ await expect(calendar.getByLabel('Activity year')).toHaveValue('2026');
+ await expect(calendar.getByLabel('Activity month')).toHaveValue('9');
+ await calendar.getByRole('button',{name:'View January 2026 ↗'}).click();
+ await calendar.locator('[data-day="2026-01-18"]').click();
+ await expect(page.getByLabel('Journal date')).toHaveValue('Development/journal/2026-01-18.md');
 });

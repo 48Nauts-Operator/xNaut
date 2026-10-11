@@ -252,9 +252,9 @@
     function paint() {
       $('[data-title]').textContent = `${data.project.name} · Live Journal`;
       $('[data-purpose]').textContent = data.project.purpose || 'The working document, from first question to handoff.';
-      const dates=$('[data-date]');const previous=dates.value;
-      const availableDates=[...new Set([...data.documents.map(d=>d.path),...(data.console?.project===data.project.key?(data.console.activity?.dates || []).map(d=>'Development/journal/'+d+'.md'):[])])].sort().reverse().map(path=>({path}));
-      dates.innerHTML='<option value="">Today</option>'+availableDates.map(d=>`<option value="${esc(d.path)}">${esc(d.path.split('/').pop().replace('.md',''))}</option>`).join('');dates.value=selected || previous;
+      const dates=$('[data-date]');
+      const availableDates=[...new Set([...data.documents.map(d=>d.path),...(selected?[selected]:[]),...(data.console?.project===data.project.key?(data.console.activity?.dates || []).map(d=>'Development/journal/'+d+'.md'):[])])].sort().reverse().map(path=>({path}));
+      dates.innerHTML='<option value="">Today</option>'+availableDates.map(d=>`<option value="${esc(d.path)}">${esc(d.path.split('/').pop().replace('.md',''))}</option>`).join('');dates.value=selected || '';
       const snapshot=data.continuity?.project===data.project.key ? data.continuity : null;
       const tickets=[...new Set([...data.entries.map(e=>e.ticket),...data.runs.map(r=>r.ticket),...(data.console?.project===data.project.key?(data.console.activity?.entries || []).map(e=>e.ticket):[]),...(snapshot?.tickets || []).map(t=>t.id),...(snapshot?.assignments || []).map(a=>a.ticket),...(data.groups || []).filter(g=>g.project===data.project.key).flatMap(g=>(g.members || []).map(m=>m.ticket))].filter(Boolean))];
       $('[data-filter]').innerHTML='<option value="">All workstreams</option>'+tickets.map(t=>`<option>${esc(t)}</option>`).join('');$('[data-filter]').value=filter;

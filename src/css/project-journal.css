@@ -90,3 +90,14 @@
 .jl-content,.jl-expanded .jl-content{max-height:none;overflow:visible;scrollbar-gutter:auto}.jl-viewbar{position:static}
 .jl-detail>p{max-height:none;overflow:visible}.jl-movements{flex-wrap:wrap;overflow:visible}
 @media(max-width:650px){.jl-row{grid-template-columns:minmax(90px,1fr) minmax(115px,1.5fr) 74px;gap:6px;min-width:0}.jl-calendar-heading{flex-wrap:wrap}.jl-calendar-grid{gap:4px}}
+
+/* Calendar navigation is by year and month, never a strip of week numbers. */
+.jl-calendar-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0 12px}
+.jl-calendar-controls label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--pj-muted)}
+.jl-calendar-controls select,.jl-calendar-controls button{padding:5px 8px;font-size:12px}
+.jl-month-grid{display:grid;grid-template-columns:repeat(7,minmax(28px,44px));gap:5px;max-width:338px;margin-bottom:10px}
+.jl-month-weekday{font-size:11px;color:var(--pj-muted);text-align:center;padding:3px}
+.jl-month-grid button{height:32px;padding:3px;font-size:12px;border-color:var(--pj-border);background:color-mix(in srgb,var(--pj-accent) calc(var(--activity) * 100%),var(--pj-bg));color:var(--pj-text)}
+.jl-month-grid button:disabled{opacity:1;color:var(--pj-muted);cursor:default}
+.jl-month-grid button[aria-pressed=true]{outline:1px solid var(--pj-accent);outline-offset:1px}
+.jl-calendar-empty{font-size:11px;color:var(--pj-muted);margin-top:6px!important}.jl-calendar-empty button{font-size:11px;padding:4px 6px;margin-left:5px}.jl-calendar-limit{display:block;margin-top:5px}
