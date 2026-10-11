@@ -28,7 +28,7 @@ pub(crate) fn root() -> Result<PathBuf, String> {
     if crate::loop_acceptance::ENABLED { return Ok(crate::loop_acceptance::config()); }
     Ok(crate::loop_acceptance::platform_config_dir()
         .ok_or("Configuration directory unavailable")?
-        .join(if crate::JOURNAL_V4_PREVIEW { "xnaut/journal-v4-preview" } else if crate::CONTINUITY_PREVIEW { "xnaut/continuity-preview" } else if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
+        .join(if crate::JOURNAL_FINAL_PREVIEW { "xnaut/journal-final-preview" } else if crate::JOURNAL_V4_PREVIEW { "xnaut/journal-v4-preview" } else if crate::CONTINUITY_PREVIEW { "xnaut/continuity-preview" } else if crate::JOURNAL_PREVIEW { "xnaut/journal-preview-3" } else if crate::FULL_WIKI_PREVIEW { "xnaut/full-wiki-preview" } else { "xnaut" }))
 }
 pub(crate) fn connect(root: &Path) -> Result<Connection, String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;

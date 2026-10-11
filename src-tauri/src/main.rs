@@ -147,6 +147,7 @@ use state::AppState;
 
 // Separate full-application acceptance build; never a runtime production switch.
 pub(crate) const CONTINUITY_PREVIEW: bool = option_env!("XNAUT_CONTINUITY_PREVIEW").is_some();
+pub(crate) const JOURNAL_FINAL_PREVIEW: bool = option_env!("XNAUT_JOURNAL_FINAL_PREVIEW").is_some();
 pub(crate) const JOURNAL_V4_PREVIEW: bool = option_env!("XNAUT_JOURNAL_V4_PREVIEW").is_some();
 pub(crate) const JOURNAL_PREVIEW: bool = option_env!("XNAUT_JOURNAL_PREVIEW").is_some();
 pub(crate) const FULL_WIKI_PREVIEW: bool = option_env!("XNAUT_FULL_WIKI_PREVIEW").is_some();

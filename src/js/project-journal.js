@@ -80,6 +80,7 @@
   function mount(host, root, openWiki) {
     instances.get(host)?.dispose();
     let stopped=false, busy=false, queued=false, data=null, selected=null, filter='', fingerprint='', openingFingerprint=null, groupsFingerprint='', timer, sessions=[], sessionsError='', tab='tickets', actionKind='', actionBefore=null;
+    let design=null;
     const id=++mountId;
     host.innerHTML = `<section class="pj"><div class="pj-scroll"><header class="pj-header"><div class="pj-eyebrow">PROJECT WORKING DOCUMENT <span class="pj-live">● Live</span></div><h1 data-title>Live Journal</h1><p data-purpose>Loading saved project context…</p><div data-scope-host></div><div class="pj-toolbar"><select aria-label="Journal date" data-date><option value="">Today</option></select><select aria-label="Journal workstream" data-filter><option value="">All workstreams</option></select><button data-refresh>Refresh</button><button data-wiki>Open in Wiki ↗</button></div><small data-sync></small><p role="status" data-status></p></header>
       <div class="pj-live-context"><section class="pj-summary"><h2>Where we stand</h2><p class="pj-muted" data-continuity-time></p><div data-summary></div><div data-calendar-host></div></section><section aria-label="Deployed agents" class="pj-deployed"><div class="pj-section-heading"><h3>Deployed agents <small>· current project</small></h3><button data-approvals>Approvals ↗</button></div><div data-agents class="pj-agent-grid"></div></section></div>
@@ -101,6 +102,8 @@
       onDate:day=>{selected='Development/journal/'+day+'.md';actionBefore=null;fingerprint='';void refresh();},
       onScope:next=>{filter=next.startsWith('ticket:')?next.slice(7):'';fingerprint='';if(data)paint();},
       onInspect:showSource,
+      onTicket:(ticket,previous)=>design?.openTicket(ticket,previous),
+      onView:()=>design?.syncView(),
       evidence:(el,ticket)=>{const snapshot=data?.continuity;if(!snapshot)return;el.innerHTML=continuityMarkup(snapshot,ticket);el.querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});}
     });
     const inScope=ticket=>{const ids=lifecycle?.ticketIds();return (!filter||ticket===filter)&&(!ids||ids.has(ticket));};
@@ -180,7 +183,7 @@
         const latest=actionHost.querySelector('[data-latest-actions]');if(latest)latest.onclick=()=>{actionBefore=null;void refresh();};
         const clear=actionHost.querySelector('[data-act-clear-kind]');if(clear)clear.onclick=()=>{actionKind='';paintConsole(snapshot);actionHost.querySelector('[data-act-kind]')?.focus();};
       }
-      const handoffs=(snapshot?.assignments || []).filter(a=>(!filter||a.ticket===filter)&&(a.pr_url||(a.evidence || []).some(e=>['handback','transfer','review','verification'].includes(e.kind))));
+      const handoffs=(snapshot?.assignments || []).filter(a=>inScope(a.ticket)&&(a.pr_url||(a.evidence || []).some(e=>['handback','transfer','review','verification'].includes(e.kind))));
       const target=$('[data-handoffs]');
       // Keep expanded evidence across polling and tab changes.
       const key=JSON.stringify([handoffs,c?.handoffs]);
@@ -199,6 +202,7 @@
 
     }
     async function showSource(id) {
+      if(design){design.inspectRun(id);return;}
       try {
         const record=await invoke('project_wiki_source',{project:data.project.key,kind:'run',id});
         if(stopped)return;
@@ -270,6 +274,7 @@
       lifecycle?.update(data);
       paintGroups();
       paintConsole(snapshot);
+      design?.update(data,sessions,sessionsError);
       if(next===fingerprint)return;fingerprint=next;
       const expanded=new Set([...$('[data-continuity]').querySelectorAll('details[open]')].map(d=>d.dataset.continuityDetail));
       $('[data-continuity]').innerHTML=lifecycle ? '' : snapshot ? continuityMarkup(snapshot,filter) : `<p class="pj-continuity-warning">${esc(data.continuity_error || 'Could not reconcile current project records. Refresh to retry.')} Saved context remains available below.</p>`;
@@ -277,15 +282,15 @@
       $('[data-continuity]').querySelectorAll('[data-continuity-run]').forEach(b=>{b.onclick=()=>showSource(b.dataset.continuityRun);});
       if(openingFingerprint!==data.opening){markdown($('[data-opening]'),data.opening,openWiki);openingFingerprint=data.opening;}
       $('[data-current]').innerHTML = !snapshot && data.runs.length ? `<h2>Saved run records</h2>${data.runs.filter(r=>!filter||r.ticket===filter).map(r=>`<div class="pj-run"><strong>${esc(r.ticket || r.run_id)} · @${esc(r.agent_handle)}</strong><span>${esc(r.state)} · observed ${esc(date(r.last_seen_at))}</span><p>${esc(r.last_signal)}</p></div>`).join('')}` : '';
-      const shown=data.entries.filter(e=>!isWorkerActivity(e)&&(!filter||e.ticket===filter));
+      const shown=data.entries.filter(e=>!isWorkerActivity(e)&&inScope(e.ticket));
       $('[data-empty]').textContent=shown.length ? '' : 'No notes recorded for this selection yet. Project-bound chat turns and agent-authored notes appear here as they are saved. Worker transitions are in Actions.';
-      const container=$('[data-entries]');const existing=new Map([...container.children].map(n=>[n.dataset.id,n]));
+      const container=$('[data-entries]');const existing=new Map([...container.querySelectorAll('.pj-entry')].map(n=>[n.dataset.id,n]));
       // Reuse unchanged blocks: incoming work must not collapse code or move the reader.
       for(const entry of shown){
         let node=existing.get(entry.id);existing.delete(entry.id);
         if(node && node.dataset.content!==entry.content){node.remove();node=null;}
         if(!node){
-          node=document.createElement('section');node.className='pj-entry pj-'+entry.kind;node.dataset.id=entry.id;node.dataset.content=entry.content;
+          node=document.createElement('section');node.className='pj-entry pj-'+entry.kind;node.dataset.id=entry.id;node.dataset.content=entry.content;node.dataset.actor=entry.actor||'Unknown author';node.dataset.at=entry.at||'';
           node.innerHTML=`<div class="pj-entry-meta"><span>${esc(labels[entry.kind] || entry.kind)}</span><time>${esc(date(entry.at))}</time></div><div class="pj-author">${esc(entry.actor)}${entry.ticket?' · '+esc(entry.ticket):''}</div><div class="pj-body"></div><div class="pj-links"></div>`;
           const contentHost=node.querySelector('.pj-body');
           if(entry.run_id && entry.preview){
@@ -303,6 +308,7 @@
         }
       }
       for(const node of existing.values())node.remove();
+      design?.decorateNotes();
     }
     async function refresh() {
       if(stopped)return;if(busy){queued=true;return;}busy=true;
@@ -325,8 +331,9 @@
       try{await invoke('project_journal_add',{request:{project:data.project.key,ticket,kind,title:kind==='question'?'Your question':kind==='decision'?'Your decision':'Your note',content:text}});if(stopped)return;$('[data-note]').value='';remember();selected=null;actionBefore=null;fingerprint='';await refresh();}
       catch(err){if(!stopped)status('Note not saved: '+String(err));}finally{if(button.isConnected)button.disabled=false;}
     };
+    design=window.xnautJournalDesign?.mount(host,{lifecycle,switchTab,openWiki,markdown,refresh,root,evidence:(el,ticket)=>{el.innerHTML=data?.continuity?continuityMarkup(data.continuity,ticket):'<p>No evidence available.</p>';el.querySelectorAll('[data-continuity-run]').forEach(b=>b.onclick=()=>showSource(b.dataset.continuityRun));}}) || null;
     void refresh();timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);stopped=true;return;}if(!document.hidden&&host.getClientRects().length)void refresh();},5000);
-    const instance={switchTab,dispose(){remember();stopped=true;clearInterval(timer);lifecycle?.dispose();},refresh};instances.set(host,instance);return instance;
+    const instance={switchTab,dispose(){remember();stopped=true;clearInterval(timer);design?.dispose();lifecycle?.dispose();},refresh};instances.set(host,instance);return instance;
   }
   window.xnautJournal={mount};
 })();
