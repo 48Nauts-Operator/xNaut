@@ -149,7 +149,7 @@
       const checks=[...(raw?.body||'').matchAll(/^\s*[-*] \[([ xX])\]\s+(.+)$/gm)];
       const evidence=(latest?.evidence||[]).filter(e=>['verification','review','handback','transfer'].includes(e.kind)).slice(-3);
       const events=m.events.filter(e=>e.ticket===selected).sort((a,b)=>(stamp(a.at)||0)-(stamp(b.at)||0)).slice(-5);
-      return `${button('‹ Back to '+(returnScope.startsWith('release:')?'release':'tickets'),'data-back-list')}<div class="jd-detail-heading"><small>${esc(t.id)}</small><span class="jl-${tone(t.state)}">● ${esc(label(t.state))}</span></div><h2>${esc(t.title)}</h2>${rows([['Agent',t.owner||'Unassigned'],['Branch',latest?.branch],['Pull request',latest?.pr_url||'None recorded'],['Recorded runs',as.length]])}${sourceStatus('ticket',selected)}<h3>Description ${button('Refresh source',`data-refresh-source="${esc(selected)}"`)}</h3><div data-ticket-body></div>${checks.length?`<h3>Acceptance · ${checks.filter(c=>c[1]!==' ').length} of ${checks.length} checked</h3><small class="jd-check-authority">Author-reported · not independent verification</small><ul class="jd-checks">${checks.map(c=>`<li><span>${c[1]!==' '?'✓':'○'}</span>${esc(c[2])}</li>`).join('')}</ul>`:''}<h3>Latest evidence</h3><div class="jd-latest-evidence">${evidence.length?evidence.map(e=>`<p><span>${esc(label(e.kind))}</span> ${esc(e.detail||e.source||'Saved record')}</p>`).join(''):'<p class="pj-muted">No independent verification result is linked to the latest run.</p>'}</div><h3>What happened</h3><div class="jd-history">${events.length?events.map(e=>`<div><i class="jd-state-dot jl-${tone(e.state)}"></i><time title="${esc(when(e.at))}">${esc(stamp(e.at)?new Date(stamp(e.at)).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'}):'Time unknown')}</time><span>${esc(e.detail||label(e.state||e.kind))}</span></div>`).join(''):'<p class="pj-muted">No dated history recorded.</p>'}</div><div class="jd-trace-link">${button('Open trace','data-open-trace')}<small>${as.length} recorded runs</small><span>›</span></div><div class="jd-next-action"><p>${esc(t.next_action||'Inspect recorded work and evidence.')}</p>${button('Open ticket workspace ↗','data-delivery','jd-primary')}</div><details class="jd-full-description"><summary>Complete ticket description</summary><div data-full-ticket-body></div></details><details class="jd-ticket-evidence"><summary>Assignments and source evidence</summary><div data-detail-evidence></div></details>${footer()}`;
+      return `${button('‹ Back to '+(returnScope.startsWith('release:')?'release':'tickets'),'data-back-list')}<div class="jd-detail-heading"><small>${esc(t.id)}</small><span class="jl-${tone(t.state)}">● ${esc(label(t.state))}</span></div><h2>${esc(t.title)}</h2>${rows([['Agent',t.owner||'Unassigned'],['Branch',latest?.branch],['Pull request',latest?.pr_url||'None recorded'],['Recorded runs',as.length]])}${sourceStatus('ticket',selected)}<h3>Description ${button('Refresh source',`data-refresh-source="${esc(selected)}"`)}</h3><div data-ticket-body></div>${checks.length?`<h3>Acceptance · ${checks.filter(c=>c[1]!==' ').length} of ${checks.length} checked</h3><small class="jd-check-authority">Author-reported · not independent verification</small><ul class="jd-checks">${checks.map(c=>`<li><span class="${c[1]!==' '?'jd-check-done':'jd-check-pending'}" role="img" aria-label="${c[1]!==' '?'Checked by author':'Not checked'}">${c[1]!==' '?'✓':'–'}</span>${esc(c[2])}</li>`).join('')}</ul>`:''}<h3>Latest evidence</h3><div class="jd-latest-evidence">${evidence.length?evidence.map(e=>`<p><span>${esc(label(e.kind))}</span> ${esc(e.detail||e.source||'Saved record')}</p>`).join(''):'<p class="pj-muted">No independent verification result is linked to the latest run.</p>'}</div><h3>What happened</h3><div class="jd-history">${events.length?events.map(e=>`<div><i class="jd-state-dot jl-${tone(e.state)}"></i><time title="${esc(when(e.at))}">${esc(stamp(e.at)?new Date(stamp(e.at)).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'}):'Time unknown')}</time><span>${esc(e.detail||label(e.state||e.kind))}</span></div>`).join(''):'<p class="pj-muted">No dated history recorded.</p>'}</div><div class="jd-trace-link">${button('Open trace','data-open-trace')}<small>${as.length} recorded runs</small><span>›</span></div><div class="jd-next-action"><p>${esc(t.next_action||'Inspect recorded work and evidence.')}</p>${button('Open ticket workspace ↗','data-delivery','jd-primary')}</div><details class="jd-full-description"><summary>Complete ticket description</summary><div data-full-ticket-body></div></details><details class="jd-ticket-evidence"><summary>Assignments and source evidence</summary><div data-detail-evidence></div></details>${footer()}`;
     }
     function footer(){return `<nav class="jd-detail-links">${button('Notes ›','data-related="notes"')}${button('Handoffs ›','data-related="handoffs"')}${button('Activity Map ›','data-related="map"')}</nav>`;}
     function trace(){
@@ -267,10 +267,34 @@
     }
     function paintInsights(){
       const ts=scopeTickets(),ids=new Set(ts.map(t=>t.id)),es=m.events.filter(e=>ids.has(e.ticket)),verified=ts.filter(t=>t.state==='verified').length;
-      const dates=new Map();for(const e of es){if(!stamp(e.at))continue;const d=new Date(stamp(e.at)).toISOString().slice(0,10);dates.set(d,(dates.get(d)||0)+1);}
-      const latest=[...dates].sort(([a],[b])=>a.localeCompare(b)).slice(-14),max=Math.max(1,...latest.map(([,n])=>n));
-      const points=latest.map(([,n],i)=>`${i/Math.max(1,latest.length-1)*360},${100-n/max*80}`).join(' ');
-      const chart=latest.length?`<svg class="jd-activity-line" viewBox="0 0 360 112" role="img" aria-label="Recorded event volume by date, not a completion forecast"><path d="M0 100H360" class="jd-chart-axis"/><polyline points="${points}" fill="none"/><text x="0" y="111">${esc(latest[0][0].slice(5))}</text><text x="320" y="111">${esc(latest.at(-1)[0].slice(5))}</text></svg><small class="jd-chart-label">Recorded event volume · not a forecast</small>`:'<div class="jd-no-forecast">No recorded activity available.</div>';
+      // PM completion transitions only: run completion and repeated observations do
+      // not prove a ticket finished. Reopened tickets leave the observed total.
+      const changes=es.filter(e=>e.kind==='ticket.updated'&&e.state&&stamp(e.at)).sort((a,b)=>stamp(a.at)-stamp(b.at));
+      const states=new Map(),samples=[];
+      for(const e of changes){
+        states.set(e.ticket,e.state);
+        const count=[...states.values()].filter(s=>s==='complete').length;
+        if(samples.at(-1)?.at===stamp(e.at))samples[samples.length-1].count=count;
+        else samples.push({at:stamp(e.at),count});
+      }
+      let chart='<div class="jd-no-forecast">No ticket completion history recorded.</div>';
+      if(samples.length){
+        const first=samples[0].at,last=samples.at(-1).at,span=Math.max(1,last-first),total=Math.max(1,ts.length);
+        const x=at=>4+(at-first)/span*352,y=count=>112-count/total*96;
+        let path=`M${x(first)} ${y(samples[0].count)}`;
+        for(const sample of samples.slice(1))path+=`H${x(sample.at)}V${y(sample.count)}`;
+        const ticks=Array.from({length:5},(_,i)=>first+span*i/4);
+        const format=at=>new Date(at).toLocaleString([],span<2*86400000?{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'UTC'}:{day:'numeric',month:'short',timeZone:'UTC'});
+        chart=`<div class="jd-progress-chart" role="img" aria-label="Recorded ticket completion history: ${samples.at(-1).count} marked complete in loaded history; ${ts.length} tickets in the current scope. No forecast recorded.">
+          <div class="jd-chart-summary"><span>Recorded completion</span><span>Current scope · ${ts.length} tickets</span></div>
+          <svg viewBox="0 0 360 128" preserveAspectRatio="none" aria-hidden="true">
+            <path class="jd-chart-grid" d="M4 64H356 M4 112H356"/>
+            <path class="jd-chart-scope" d="M4 16H356"/>
+            <path class="jd-chart-completion" d="${path}"/>
+          </svg><div class="jd-chart-dates">${ticks.map(at=>`<span>${esc(format(at))}</span>`).join('')}</div>
+          <small class="jd-chart-label">${esc(new Date(first).toLocaleDateString([],{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}))} · UTC · Loaded completion records; earlier history may be missing.</small>
+        </div>`;
+      }
       const calendar=$('[data-calendar-host]');
       $('[data-insights-summary]').innerHTML=`<section class="jd-forecast"><h3>Release forecast</h3><p class="pj-muted">No evidence-backed completion forecast is recorded. ${ts.filter(t=>['blocked','stalled'].includes(t.state)).length} blocked or stalled tickets in this scope.</p>${chart}</section><div class="jd-metrics"><div><span>Verified tickets</span><strong>${verified} of ${ts.length}</strong></div><div><span>Recorded runs</span><strong>${new Set(es.map(e=>e.run_id).filter(Boolean)).size}</strong></div><div><span>Recorded events</span><strong>${es.length}</strong></div><div><span>Spend / token allowance</span><span>Not recorded for this scope</span></div></div>`;
       $('[data-insights-summary] .jd-metrics').before(calendar);

@@ -39,6 +39,8 @@ test('ticket details load authoritative description and checklist with reported-
  await expect(page.locator('[data-ticket-body]')).toContainText('Unicode display width');
  await expect(page.locator('.jd-tickets')).toContainText('Acceptance · 1 of 2 checked');
  await expect(page.locator('.jd-tickets')).toContainText('not independent verification');
+ await expect(page.getByRole('img',{name:'Checked by author',exact:true})).toHaveText('✓');
+ await expect(page.getByRole('img',{name:'Not checked',exact:true})).toHaveText('–');
  await page.locator('[data-delivery]').click();expect(await page.evaluate(()=>window.openedTicket.ticket)).toBe('DEMO-1');
  await page.locator('[data-back-list]').click();await expect(page.locator('.jd-ticket-row')).toHaveCount(5);
 });
@@ -66,6 +68,37 @@ test('insights retain full-year graph, selected-month filtering and honest missi
  await expect(page.locator('[data-insights-summary]')).toContainText('No evidence-backed completion forecast');await expect(page.locator('[data-insights-summary]')).toContainText('Not recorded for this scope');
  await page.getByLabel('Activity month').selectOption('0');await expect(page.locator('.jl-year-graph [data-in-month="true"]')).toHaveCount(31);
  await page.locator('.jd').screenshot({path:test.info().outputPath('R5-insights.png')});
+});
+test('heatmap fills partial weeks while keeping UTC dates on their real weekdays',async({page})=>{
+ await start(page);await page.getByRole('tab',{name:'Insights',exact:true}).click();
+ await page.getByLabel('Activity year').selectOption('2026');
+ const january=page.locator('[data-day="2026-01-01"]');
+ expect(await january.evaluate(e=>e.style.gridRow)).toBe('5');
+ const cells=await page.locator('.jl-year-graph').evaluate(e=>[...e.querySelectorAll('[data-day],.jl-graph-padding')].map(c=>[c.style.gridColumn,c.style.gridRow]));
+ expect(cells).toHaveLength(371);expect(new Set(cells.map(c=>c.join(':'))).size).toBe(371);
+ expect(cells.filter(c=>c[0]==='2').map(c=>Number(c[1])).sort()).toEqual([2,3,4,5,6,7,8]);
+ await page.getByLabel('Activity year').selectOption('2024');
+ await expect(page.locator('.jl-year-graph [data-day]')).toHaveCount(366);
+ expect(await page.locator('[data-day="2024-02-29"]').evaluate(e=>e.style.gridRow)).toBe('5');
+});
+test('progress uses ticket completion transitions, handles reopening and respects release scope',async({page})=>{
+ await start(page);
+ await page.evaluate(()=>{
+  const event=(id,ticket,state,hour,kind='ticket.updated')=>({id,project:'DEMO',ticket,state,kind,at:`2026-10-10T${hour}:00:00Z`});
+  window.data.lifecycle.events=[event('a','DEMO-1','in_progress','08'),event('b','DEMO-1','complete','09'),event('c','DEMO-1','complete','10'),event('d','DEMO-1','review','11'),event('e','DEMO-2','done','12'),event('f','DEMO-2','complete','13','run.observed'),event('g','DEMO-5','complete','14')];
+  return window.instance.refresh();
+ });
+ await page.getByRole('tab',{name:'Insights',exact:true}).click();
+ await expect(page.locator('.jd-progress-chart')).toHaveAttribute('aria-label',/1 marked complete/);
+ await page.getByLabel('Journal scope').selectOption('release:2.0');
+ await expect(page.locator('.jd-progress-chart')).toHaveAttribute('aria-label',/0 marked complete.*3 tickets/);
+ const path=await page.locator('.jd-chart-completion').getAttribute('d');
+ expect(path).toContain('V80');expect(path).toContain('V112');
+ await expect(page.locator('.jd-activity-line')).toHaveCount(0);
+ await page.locator('#journal').evaluate(e=>e.style.width='900px');
+ const chart=await page.locator('.jd-progress-chart svg').boundingBox(),parent=await page.locator('.jd-progress-chart').boundingBox();
+ expect(chart.width).toBeCloseTo(parent.width,0);
+ await page.locator('.jd').screenshot({path:test.info().outputPath('R5-wide-progress.png')});
 });
 test('notes group by date, filter author and copy original markdown after refresh',async({page})=>{
  await start(page);await page.evaluate(()=>{navigator.clipboard.writeText=async text=>window.copied=text;});await page.getByRole('tab',{name:'Notes',exact:true}).click();
@@ -132,7 +165,7 @@ test('Paper visual acceptance captures R1–R12 at the approved 420px width',asy
   const rows=titles.map((title,i)=>({id:'DEMO-'+(i+1),title,state:states[i],owner:['cinder','boreal','atlas','verifier-1'][i%4],release:'v1.31.0',next_action:i===0?'Retry budget used; owner decision required.':i===1?'Review the recorded pull request.':'Inspect the recorded evidence.'}));
   window.data.continuity.tickets=rows;window.data.lifecycle.tickets=rows;
   const midnight=new Date();midnight.setHours(0,0,0,0);const start=+midnight;
-  window.data.lifecycle.events=rows.flatMap((t,i)=>[{id:t.id+'start',project:'DEMO',ticket:t.id,run_id:i===0?'old-run':'run-'+i,at:new Date(start+(i+1)*600000).toISOString(),kind:'ticket.updated',state:'active',actor:t.owner,detail:'Implementation started'},{id:t.id+'end',project:'DEMO',ticket:t.id,run_id:i===0?'new-run':'run-'+i,at:new Date(start+(i+8)*600000).toISOString(),kind:'ticket.updated',state:t.state,actor:t.owner,detail:i===0?'Verification failed: expected column 18, observed 20.':'Recorded ticket transition'}]);
+  window.data.lifecycle.events=rows.flatMap((t,i)=>[{id:t.id+'start',project:'DEMO',ticket:t.id,run_id:i===0?'old-run':'run-'+i,at:new Date(start+(i+1)*600000).toISOString(),kind:'ticket.updated',state:'active',actor:t.owner,detail:'Implementation started'},{id:t.id+'end',project:'DEMO',ticket:t.id,run_id:i===0?'new-run':'run-'+i,at:new Date(start+(i+8)*600000).toISOString(),kind:'ticket.updated',state:t.state==='verified'?'complete':t.state,actor:t.owner,detail:i===0?'Verification failed: expected column 18, observed 20.':'Recorded ticket transition'}]);
   window.data.continuity.assignments.push(...rows.slice(1).map((t,i)=>({ticket:t.id,owner:t.owner,run_id:'run-'+(i+1),state:t.state,run_state:t.state,branch:'fix/'+t.id,evidence:[]})));
   window.data.project.name='xNaut';document.querySelector('.jd').style.setProperty('--pj-accent','#8f8c00');
   return window.instance.refresh();
@@ -146,7 +179,7 @@ test('Paper visual acceptance captures R1–R12 at the approved 420px width',asy
  await page.locator('[data-back-trace]').click();await page.locator('[data-back-ticket]').click();await page.locator('[data-back-list]').click();
  for(const [tab,n] of [['Agents',4],['Insights',5],['Notes',8],['Handoffs',9]]){await page.getByRole('tab',{name:tab,exact:true}).click();await capture(n,1040);}
  await page.getByRole('tab',{name:'Timeline',exact:true}).click();
- for(const [view,n] of [['Timeline',6],['Activity Map',10],['Event log',11],['Waterfall',12]]){await page.getByRole('tab',{name:view,exact:true}).last().click();if(n===10){await page.locator('[data-inspect-event]').first().click();await expect(page.locator('.jd-map-inspector')).toContainText('routed-model');}else if(n===11||n===12){await page.locator('.jl-content [data-event]').first().click();}await capture(n,1040);}
+ for(const [view,n] of [['Timeline',6],['Activity Map',10],['Event log',11],['Waterfall',12]]){await page.getByRole('tab',{name:view,exact:true}).last().click();if(n===10){await page.locator('[data-inspect-event]').first().click();await expect(page.locator('.jd-map-inspector')).toContainText('routed-model');}else if(n===6){await expect(page.locator('.jl-complete-point')).toHaveCount(3);expect(await page.locator('.jl-complete-point').first().evaluate(e=>getComputedStyle(e).backgroundColor)).toBe('rgb(115, 201, 161)');expect(await page.locator('.jl-complete-point').first().evaluate(e=>getComputedStyle(e).borderRadius)).toBe('50%');}else if(n===11||n===12){await page.locator('.jl-content [data-event]').first().click();}await capture(n,1040);}
  await page.getByLabel('Journal scope').selectOption('project');await expect(page.locator('.jd-hero')).toBeHidden();
 });
 

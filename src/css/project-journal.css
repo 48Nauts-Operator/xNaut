@@ -244,3 +244,25 @@
 .jd .jd-verified-group>summary{padding:0}.jd .jd-verified-group>summary>h3{display:flex;gap:6px;align-items:center;font-size:12px;letter-spacing:0;text-transform:none;font-weight:400;color:var(--jl-green);margin:15px 0}
 .jd .jd-event-row time{overflow:visible;text-overflow:clip}.jd .pj-entry-meta>span{font-weight:400}
 .jd [data-lifecycle-view=waterfall] .jl-row{grid-template-columns:130px minmax(0,1fr);padding:5px 0}.jd [data-lifecycle-view=waterfall] .jl-row>span:last-child{max-width:130px}.jd [data-lifecycle-view=timeline] .jl-row{grid-template-columns:50px minmax(0,1fr)}
+
+/* Paper R5: full-width stepped progress and complete heatmap week columns. */
+.jl-graph-padding{aspect-ratio:1;min-width:0;border:1px solid var(--pj-border);border-radius:1px;background:var(--graph-empty);opacity:.45}
+.jd-progress-chart{margin:16px 0 0}.jd-chart-summary{display:flex;justify-content:space-between;gap:12px;font-size:10px;color:var(--pj-muted)}
+.jd-progress-chart svg{display:block;width:100%;height:132px;overflow:visible}
+.jd-progress-chart path{fill:none;vector-effect:non-scaling-stroke}
+.jd-chart-grid{stroke:var(--pj-border);stroke-width:1}.jd-chart-scope{stroke:var(--pj-muted);stroke-width:1;stroke-dasharray:4 4}
+.jd-chart-completion{stroke:var(--jl-green);stroke-width:2;stroke-linejoin:round}
+.jd-chart-dates{display:flex;justify-content:space-between;gap:6px;margin:3px 0 12px;font:10px/1.4 ui-monospace,monospace;color:var(--pj-muted)}
+.jd .jd-chart-label{display:block;line-height:16px}
+/* Paper R6: compact ticket lanes, outlined review stages and clear completion points. */
+.jd [data-lifecycle-view=timeline] .jl-row{grid-template-columns:72px minmax(0,1fr);padding:4px 0}
+.jd [data-lifecycle-view=timeline] .jl-axis>span:first-child{visibility:hidden}
+.jd [data-lifecycle-view=timeline] .jl-axis-labels{font:10px/1.5 ui-monospace,monospace;white-space:normal}
+.jd [data-lifecycle-view=timeline] .jl-axis-labels span{max-width:58px;text-align:center}
+.jd [data-lifecycle-view=timeline] .jl-track{height:26px;background:repeating-linear-gradient(90deg,transparent,transparent calc(25% - 1px),color-mix(in srgb,var(--pj-border) 45%,transparent) calc(25% - 1px),color-mix(in srgb,var(--pj-border) 45%,transparent) 25%)}
+.jd [data-lifecycle-view=timeline] .jl-bar{top:9px;height:8px;border-radius:2px}
+.jd [data-lifecycle-view=timeline] .jl-bar.jl-review-bar{background:var(--pj-bg)!important;border:1px solid var(--pj-accent)!important}
+.jd [data-lifecycle-view=timeline] .jl-point{top:8px;height:10px}
+.jd [data-lifecycle-view=timeline] .jl-complete-point{width:12px;height:12px;top:7px;border-radius:50%!important;background:var(--jl-green)!important}
+
+.jd .jd-checks li>.jd-check-done{color:var(--jl-green)}.jd .jd-checks li>.jd-check-pending{color:var(--pj-muted)}
