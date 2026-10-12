@@ -2,7 +2,7 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.31.1] - 2026-10-12
+## [1.31.2] - 2026-10-12
 
 ### Added
 - Agent Space message sorting: choose Oldest first or Newest first. The choice persists across conversations and restarts, while stored history and model context remain chronological (XNAUT-507).
@@ -14,6 +14,7 @@ All notable changes to xNAUT are documented in this file.
 - Preserve streaming message text and reading position when changing message order.
 
 ### Release checks
+- Run the publication reassignment regression on Windows as well as macOS. The v1.31.1 candidate was not published because Windows correctly refused a missing required test.
 - Require regressions for reassigned published PRs, reviewer reservation identity, bounded queue recovery, and Agent Space sorting alongside the existing release behavior suites.
 
 ## [1.31.0] - 2026-10-12

@@ -1116,7 +1116,6 @@ pub async fn tick(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     #[test]
     fn published_pr_remains_reviewable_when_ticket_owner_changes() {
         let root = std::env::temp_dir().join(format!("xnaut-published-owner-{}", uuid::Uuid::new_v4()));
@@ -1134,6 +1133,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn repository_publisher_protocol_suite() {
         use std::io::Write;
