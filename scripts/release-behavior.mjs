@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'repository_transfer::tests::published_pr_remains_reviewable_when_ticket_owner_changes',
   'project_wiki::tests::enumerated_document_paths_round_trip_without_weakening_path_guards',
   'project_wiki::journal::',
   'cloud_model::tests::',
