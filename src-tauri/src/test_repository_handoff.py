@@ -127,7 +127,9 @@ class HandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source preservation"):
             h.stopped_failure(self.expected, self.home)
         self.result["uncommitted_source"] = False
-        self.write("xnaut-upload.json", dict(state="pending", head=self.expected["head"]))
+        self.write(
+            "xnaut-upload.json", dict(state="pending", head=self.expected["head"])
+        )
         with self.assertRaisesRegex(ValueError, "not confirmed"):
             h.stopped_failure(self.expected, self.home)
 
