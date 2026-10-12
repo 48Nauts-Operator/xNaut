@@ -56,7 +56,9 @@ test('Vault keeps navigation visible and the right Journal follows the open docu
   await page.locator('.vp-body').getByText('PM Space', { exact: true }).first().click();
   await expect(page.locator('.rpane-title')).toHaveAttribute('title', '/tmp/smoke');
   await page.locator('.rpws-nav [data-sub="journal"]').click();
-  await expect(page.locator('.pj [data-title]')).toHaveText('Smoke Test · Live Journal');
+  await expect(page.locator('.pj .jd-project-name')).toBeVisible();
+  await expect(page.locator('.pj .jd-project-name')).toHaveText('Smoke Test');
+  await expect(page.locator('.pj-tabs [role=tab]')).toHaveText(['Tickets','Timeline','Agents','Insights','Notes','Handoffs']);
   const calls = await page.evaluate(() => window.__xnautInvokes.filter(i => i.cmd === 'project_journal_read'));
   expect(calls.at(-1).args.project).toBe('/tmp/smoke');
   // Opening a document in Chat must not start any ticket history scan.

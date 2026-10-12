@@ -10,12 +10,17 @@ async function start(page){
   return window.instance.refresh();
  });
 }
+async function revealAction(page,selector){
+ const row=page.locator('.pj-action').filter({has:page.locator(selector)}).first();
+ await row.locator(':scope > summary').press('Enter');
+ await expect(row).toHaveAttribute('open');
+}
 test('action ticket links navigate with exact project and ticket',async({page})=>{
  await start(page);await page.locator('[data-act-ticket]').first().click();
  expect(await page.evaluate(()=>window.openedTicket)).toEqual({project:'DEMO',ticket:'DEMO-3',tab:'tests'});
 });
 test('action run inspection uses project-scoped native evidence',async({page})=>{
- await start(page);await page.locator('[data-action-run]').first().click();
+ await start(page);await revealAction(page,'[data-action-run]');await page.locator('[data-action-run]').first().click();
  await expect(page.locator('dialog')).toContainText('Exact run run-2');
  expect(await page.evaluate(()=>window.calls.find(c=>c.name==='project_wiki_source').args)).toEqual({project:'DEMO',kind:'run',id:'run-2'});
  await page.getByRole('button',{name:'Close',exact:true}).click();
@@ -23,18 +28,18 @@ test('action run inspection uses project-scoped native evidence',async({page})=>
 });
 test('missing run evidence reports failure without removing the action trail',async({page})=>{
  await start(page);await page.evaluate(()=>{window.failSource=true;});
- await page.locator('[data-action-run]').first().click();
+ await revealAction(page,'[data-action-run]');await page.locator('[data-action-run]').first().click();
  await expect(page.locator('[data-status]')).toContainText('Run record is unavailable');
  await expect(page.locator('[data-act-kind="registry_failed"]')).toBeVisible();
 });
 test('only session IDs known by the native tracker are attachable',async({page})=>{
  await start(page);await expect(page.locator('[data-act-session]')).toHaveCount(1);
- await page.locator('[data-act-session]').click();expect(await page.evaluate(()=>window.openedSession[0])).toBe('session-0');
+ await revealAction(page,'[data-act-session]');await page.locator('[data-act-session]').click();expect(await page.evaluate(()=>window.openedSession[0])).toBe('session-0');
 });
 test('replayed events are compact but every occurrence remains inspectable',async({page})=>{
  await start(page);await expect(page.locator('[data-act-kind="launch_not_durable"]')).toHaveCount(1);
  const repeats=page.locator('[data-action-repeat]');await expect(repeats.locator('summary')).toHaveText('30 occurrences');
- await repeats.locator('summary').click();await expect(repeats.locator('p')).toHaveCount(30);
+ await revealAction(page,'[data-action-repeat]');await repeats.locator('summary').click();await expect(repeats.locator('p')).toHaveCount(30);
  const node=await repeats.elementHandle();await page.evaluate(()=>window.instance.refresh());
  expect(await node.evaluate(n=>n.isConnected)).toBe(true);await expect(repeats).toHaveAttribute('open');
 });
