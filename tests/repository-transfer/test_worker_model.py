@@ -82,31 +82,62 @@ class WorkerModelTests(unittest.TestCase):
 
     def max_cloud(self):
         import time
-        return {**self.cloud, "provider": "nautgate", "max_subscription": {
-            "access_token": "sk-ant-oat01-private-fixture", "base_url": "https://models.example/v1/max/launches/fixture",
-            "expires_at_ms": int(time.time() * 1000) + 120000}}
 
-    def test_max_launch_uses_oauth_without_inherited_paid_keys_and_cleans_credentials(self):
+        return {
+            **self.cloud,
+            "provider": "nautgate",
+            "max_subscription": {
+                "access_token": "sk-ant-oat01-private-fixture",
+                "base_url": "https://models.example/v1/max/launches/fixture",
+                "expires_at_ms": int(time.time() * 1000) + 120000,
+            },
+        }
+
+    def test_max_launch_uses_oauth_without_inherited_paid_keys_and_cleans_credentials(
+        self,
+    ):
         cloud = self.max_cloud()
         with patch.object(worker.Path, "home", return_value=self.root):
             injected = worker.cloud_environment(cloud, "max-run", "claude")
             self.assertNotIn("ANTHROPIC_API_KEY", injected)
             self.assertNotIn("ANTHROPIC_AUTH_TOKEN", injected)
             self.assertNotIn("XNAUT_CLOUD_API_KEY", injected)
-            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "paid", "ANTHROPIC_AUTH_TOKEN": "paid", "CLAUDE_CODE_USE_BEDROCK": "1"}):
+            with patch.dict(
+                os.environ,
+                {
+                    "ANTHROPIC_API_KEY": "paid",
+                    "ANTHROPIC_AUTH_TOKEN": "paid",
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                },
+            ):
                 with patch.object(worker.subprocess, "call", return_value=0) as child:
                     with self.assertRaises(SystemExit):
                         worker.launch("max-run", ["claude"])
                     env = child.call_args.kwargs["env"]
-                    self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], cloud["max_subscription"]["access_token"])
-                    for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "XNAUT_CLOUD_API_KEY"):
+                    self.assertEqual(
+                        env["CLAUDE_CODE_OAUTH_TOKEN"],
+                        cloud["max_subscription"]["access_token"],
+                    )
+                    for key in (
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "CLAUDE_CODE_USE_BEDROCK",
+                        "XNAUT_CLOUD_API_KEY",
+                    ):
                         self.assertNotIn(key, env)
             self.assertFalse(worker.cloud_directory("max-run").exists())
 
-    def test_max_missing_expired_or_wrong_origin_refuses_without_staging_or_api_fallback(self):
-        for mutation, expected in [({}, "subscription_missing"),
-                ({"expires_at_ms": 0}, "subscription_expired"),
-                ({"base_url": "https://attacker.example/v1/max/launches/fixture"}, "subscription_missing")]:
+    def test_max_missing_expired_or_wrong_origin_refuses_without_staging_or_api_fallback(
+        self,
+    ):
+        for mutation, expected in [
+            ({}, "subscription_missing"),
+            ({"expires_at_ms": 0}, "subscription_expired"),
+            (
+                {"base_url": "https://attacker.example/v1/max/launches/fixture"},
+                "subscription_missing",
+            ),
+        ]:
             cloud = self.max_cloud()
             if not mutation:
                 cloud.pop("max_subscription")
@@ -119,20 +150,29 @@ class WorkerModelTests(unittest.TestCase):
                 self.assertFalse(worker.cloud_directory("refused").exists())
 
     def test_mcp_files_are_validated_on_worker_including_repeated_flags(self):
-        spec = importlib.util.spec_from_file_location("worker_runtime", SOURCE / "worker_runtime.py")
+        spec = importlib.util.spec_from_file_location(
+            "worker_runtime", SOURCE / "worker_runtime.py"
+        )
         runtime = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(runtime)
         valid = self.root / "mcp.json"
         valid.write_text('{"mcpServers": {}}')
         missing = str(self.root / "absent.json")
         for args, expected in [
-                (["--mcp-config", str(valid)], "ready"),
-                (["--mcp-config", str(valid), "--mcp-config", missing], "mcp_config_missing"),
-                (["--mcp-config=" + missing], "mcp_config_missing"),
-                (["--mcp-config", "--verbose"], "mcp_config_invalid"),
-                (["--mcp-config", '{"mcpServers":{}}'], "ready"),
-                (["--mcp-config", '{}'], "mcp_config_invalid")]:
-            self.assertEqual(runtime.check_launch_files({"standard_claude": True, "args": args}), expected)
+            (["--mcp-config", str(valid)], "ready"),
+            (
+                ["--mcp-config", str(valid), "--mcp-config", missing],
+                "mcp_config_missing",
+            ),
+            (["--mcp-config=" + missing], "mcp_config_missing"),
+            (["--mcp-config", "--verbose"], "mcp_config_invalid"),
+            (["--mcp-config", '{"mcpServers":{}}'], "ready"),
+            (["--mcp-config", "{}"], "mcp_config_invalid"),
+        ]:
+            self.assertEqual(
+                runtime.check_launch_files({"standard_claude": True, "args": args}),
+                expected,
+            )
 
     def test_configuration_cannot_escape_private_directory(self):
         for identity in ("../outside", "/tmp/outside", "", "a/b", "a;echo"):

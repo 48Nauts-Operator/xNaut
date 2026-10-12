@@ -90,12 +90,20 @@ class PublisherTests(unittest.TestCase):
         publisher.publish(0)
         result = json.loads((self.artifacts / "result.json").read_text())
         self.assertIsNone(result["handback_error"])
-        self.assertEqual(self.git("show", "HEAD:source.txt"), "authorized implementation")
+        self.assertEqual(
+            self.git("show", "HEAD:source.txt"), "authorized implementation"
+        )
         self.assertEqual(self.git("diff", "--cached", "--name-only"), "unrelated.txt")
 
     def test_missing_or_wrongly_typed_handbacks_publish_no_success_claim(self):
-        for value in [None, [], {"summary": 2}, {"commits": [1]},
-                      {"confidence": 0.9}, {"how_verified": [{"command": "test", "result": 0}]}]:
+        for value in [
+            None,
+            [],
+            {"summary": 2},
+            {"commits": [1]},
+            {"confidence": 0.9},
+            {"how_verified": [{"command": "test", "result": 0}]},
+        ]:
             with self.subTest(value=value):
                 (self.artifacts / "result.json").unlink(missing_ok=True)
                 if value is None:
@@ -104,8 +112,12 @@ class PublisherTests(unittest.TestCase):
                     self.handback.write_text(json.dumps(value))
                 publisher.publish(0)
                 result = json.loads((self.artifacts / "result.json").read_text())
-                self.assertEqual(result["handback_error"], "missing_or_invalid_handback")
-                self.assertEqual(self.git("show", "HEAD:source.txt"), "authorized implementation")
+                self.assertEqual(
+                    result["handback_error"], "missing_or_invalid_handback"
+                )
+                self.assertEqual(
+                    self.git("show", "HEAD:source.txt"), "authorized implementation"
+                )
 
     def test_crash_without_handback_still_publishes_failure_evidence(self):
         publisher.publish(1)
@@ -118,8 +130,10 @@ class PublisherTests(unittest.TestCase):
     def test_oversized_handback_is_preserved_but_marked_invalid(self):
         self.handback.write_text(json.dumps({"summary": "x" * (256 * 1024)}))
         publisher.publish(0)
-        self.assertEqual(json.loads((self.artifacts / "result.json").read_text())["handback_error"],
-                         "missing_or_invalid_handback")
+        self.assertEqual(
+            json.loads((self.artifacts / "result.json").read_text())["handback_error"],
+            "missing_or_invalid_handback",
+        )
 
 
 if __name__ == "__main__":

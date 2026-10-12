@@ -33,7 +33,9 @@ def check_launch_files(request):
                 else:
                     with open(value) as source:
                         config = json.load(source)
-                if not isinstance(config, dict) or not isinstance(config.get("mcpServers"), dict):
+                if not isinstance(config, dict) or not isinstance(
+                    config.get("mcpServers"), dict
+                ):
                     return "mcp_config_invalid"
             except FileNotFoundError:
                 return "mcp_config_missing"
@@ -80,7 +82,9 @@ def check(request):
 
 
 def check_runtime(request):
-    env = globals().get("runtime_environment", lambda injected: dict(os.environ, **injected))(request["env"])
+    env = globals().get(
+        "runtime_environment", lambda injected: dict(os.environ, **injected)
+    )(request["env"])
     binary = request["binary"]
     if not shutil.which(binary, path=env.get("PATH")):
         return "binary_missing"

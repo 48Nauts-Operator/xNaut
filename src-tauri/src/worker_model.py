@@ -72,10 +72,13 @@ def subscription_status(cloud, runtime):
     token = subscription.get("access_token", "")
     endpoint = urlsplit(cloud["endpoint"])
     bound = urlsplit(subscription.get("base_url", ""))
-    if (not token.startswith("sk-ant-oat01-")
-            or (endpoint.scheme, endpoint.netloc) != (bound.scheme, bound.netloc)
-            or not re.fullmatch(r"/v1/max/launches/[A-Za-z0-9_-]+", bound.path)
-            or bound.query or bound.fragment):
+    if (
+        not token.startswith("sk-ant-oat01-")
+        or (endpoint.scheme, endpoint.netloc) != (bound.scheme, bound.netloc)
+        or not re.fullmatch(r"/v1/max/launches/[A-Za-z0-9_-]+", bound.path)
+        or bound.query
+        or bound.fragment
+    ):
         return "subscription_missing"
     expiry = subscription.get("expires_at_ms")
     if not isinstance(expiry, (int, float)) or expiry <= time.time() * 1000 + 60000:
@@ -87,8 +90,12 @@ def runtime_environment(injected):
     env = dict(os.environ)
     if "CLAUDE_CODE_OAUTH_TOKEN" in injected:
         # Worker-global paid keys must not override the per-run subscription.
-        env = {k: v for k, v in env.items() if not k.startswith(("ANTHROPIC_", "CLAUDE_CODE_USE_"))
-               and k not in ("CLAUDE_CODE_OAUTH_TOKEN", "XNAUT_CLOUD_API_KEY")}
+        env = {
+            k: v
+            for k, v in env.items()
+            if not k.startswith(("ANTHROPIC_", "CLAUDE_CODE_USE_"))
+            and k not in ("CLAUDE_CODE_OAUTH_TOKEN", "XNAUT_CLOUD_API_KEY")
+        }
     env.update(injected)
     return env
 
@@ -135,9 +142,14 @@ def cloud_environment(cloud, run_id, runtime):
         )
     elif runtime == "claude" and cloud.get("provider") == "nautgate":
         subscription = cloud["max_subscription"]
-        env = {"ANTHROPIC_BASE_URL": subscription["base_url"],
-               "CLAUDE_CODE_OAUTH_TOKEN": subscription["access_token"]}
-        private_json(directory / "subscription.json", {"expires_at_ms": subscription["expires_at_ms"]})
+        env = {
+            "ANTHROPIC_BASE_URL": subscription["base_url"],
+            "CLAUDE_CODE_OAUTH_TOKEN": subscription["access_token"],
+        }
+        private_json(
+            directory / "subscription.json",
+            {"expires_at_ms": subscription["expires_at_ms"]},
+        )
     elif runtime == "claude":
         env.update(
             ANTHROPIC_BASE_URL=cloud["endpoint"].removesuffix("/v1"),
@@ -154,8 +166,14 @@ def launch(run_id, argv):
         with (directory / "environment.json").open() as source:
             env = runtime_environment(json.load(source))
         expiry = directory / "subscription.json"
-        if expiry.exists() and json.loads(expiry.read_text())["expires_at_ms"] <= time.time() * 1000:
-            print("xNAUT: Claude Max credential expired before launch; refresh the owner login. No paid API fallback.", file=sys.stderr)
+        if (
+            expiry.exists()
+            and json.loads(expiry.read_text())["expires_at_ms"] <= time.time() * 1000
+        ):
+            print(
+                "xNAUT: Claude Max credential expired before launch; refresh the owner login. No paid API fallback.",
+                file=sys.stderr,
+            )
             sys.exit(78)
         result = subprocess.call(argv, env=env)
     finally:
