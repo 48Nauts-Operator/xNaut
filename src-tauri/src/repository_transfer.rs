@@ -955,6 +955,10 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
             Err(error) => pr_error = Some(error),
         }
     }
+    // Publication is independent of filing the author's handback into the
+    // mutable ticket. A reassigned ticket must not hide an existing task PR.
+    // fetch_result has already verified this run's immutable publication.
+    recognize_published_task_pr(t);
     if result.exit_code != 0 || result.uncommitted_source {
         // Published implementation remains reviewable after a failed author.
         // Uncommitted source is explicitly retained and prevents any pass.
@@ -969,31 +973,9 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
         h.from = t.handle.clone();
         h.submitted_at = chrono::Utc::now().to_rfc3339();
         let h_copy = h.clone();
+        let project = t.project.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let repo = crate::project_management::repo_now()?;
-            let existing = crate::project_management::ticket_list_in(&repo, None)?.into_iter().find(|r| r.id == h_copy.ticket).ok_or("Run ticket no longer exists")?;
-            if existing.owner.as_deref().map(|s| s.trim_start_matches('@')) != Some(h_copy.from.as_str())
-                && !existing.handback.as_ref().is_some_and(|h| h.run_id == h_copy.run_id)
-            { return Err("Ticket ownership changed; repository results preserved without overwriting its handback.".into()); }
-            // A crash after filing must not append the same event twice.
-            if !existing.handback.as_ref().is_some_and(|h| h.run_id == h_copy.run_id) {
-                match crate::project_management::file_handback_in(&repo, &h_copy)? {
-                    crate::project_management::Filing::Refused(_) => return Err("Handback is incomplete; evidence is saved in the PR, ticket remains unchanged.".into()),
-                    crate::project_management::Filing::Filed { .. } => (),
-                }
-            }
-            let current = crate::project_management::ticket_list_in(&repo, None)?.into_iter().find(|r| r.id == h_copy.ticket).ok_or("Run ticket no longer exists")?;
-            if current.status != "review" && current.status != "complete" {
-                if current.owner.as_deref().map(|s| s.trim_start_matches('@')) != Some(h_copy.from.as_str()) {
-                    return Err("Results preserved; ticket ownership changed, so it was not reassigned.".into());
-                }
-                let request = serde_json::from_value(serde_json::json!({
-                    "id": current.id, "expected_revision": current.revision,
-                    "caller": null, "owner": crate::agent_profiles::RESERVED_NAUTBOT_HANDLE, "status": "review"
-                })).map_err(|e| e.to_string())?;
-                crate::project_management::ticket_update_in(&repo, request)?;
-            }
-            Ok(())
+            file_published_handback_in(&crate::project_management::repo_now()?, &project, &h_copy)
         }).await.map_err(|e| e.to_string())??;
         t.filed = true;
     }
@@ -1002,6 +984,63 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
     }
     t.state = "review".into();
     if t.review_parent.is_some() { finish_reviewer_task(t, &result, reviewer_handback.as_ref())?; }
+    Ok(())
+}
+
+fn recognize_published_task_pr(t: &mut Transfer) {
+    if t.pr_url.is_some() && t.review_parent.is_none() && t.repair_parent.is_none() {
+        t.state = "review".into();
+    }
+}
+
+fn file_published_handback_in(
+    repo: &Path,
+    project: &str,
+    h_copy: &crate::handback::Handback,
+) -> Result<(), String> {
+    let existing = crate::project_management::ticket_list_in(repo, Some(project.into()))?
+        .into_iter()
+        .find(|r| r.id == h_copy.ticket)
+        .ok_or("Run ticket no longer exists")?;
+    if existing.owner.as_deref().map(|s| s.trim_start_matches('@')) != Some(h_copy.from.as_str())
+        && !existing
+            .handback
+            .as_ref()
+            .is_some_and(|h| h.run_id == h_copy.run_id)
+    {
+        return Err("Ticket ownership changed; repository results preserved without overwriting its handback.".into());
+    }
+    // A crash after filing must not append the same event twice.
+    if !existing
+        .handback
+        .as_ref()
+        .is_some_and(|h| h.run_id == h_copy.run_id)
+    {
+        match crate::project_management::file_handback_in(repo, h_copy)? {
+            crate::project_management::Filing::Refused(_) => return Err(
+                "Handback is incomplete; evidence is saved in the PR, ticket remains unchanged."
+                    .into(),
+            ),
+            crate::project_management::Filing::Filed { .. } => (),
+        }
+    }
+    let current = crate::project_management::ticket_list_in(repo, Some(project.into()))?
+        .into_iter()
+        .find(|r| r.id == h_copy.ticket)
+        .ok_or("Run ticket no longer exists")?;
+    if current.status != "review" && current.status != "complete" {
+        if current.owner.as_deref().map(|s| s.trim_start_matches('@')) != Some(h_copy.from.as_str())
+        {
+            return Err(
+                "Results preserved; ticket ownership changed, so it was not reassigned.".into(),
+            );
+        }
+        let request = serde_json::from_value(serde_json::json!({
+                    "id": current.id, "expected_revision": current.revision,
+                    "caller": null, "owner": crate::agent_profiles::RESERVED_NAUTBOT_HANDLE, "status": "review"
+                })).map_err(|e| e.to_string())?;
+        crate::project_management::ticket_update_in(repo, request)?;
+    }
     Ok(())
 }
 
@@ -1078,6 +1117,23 @@ pub async fn tick(app: &tauri::AppHandle) {
 mod tests {
     use super::*;
     #[cfg(unix)]
+    #[test]
+    fn published_pr_remains_reviewable_when_ticket_owner_changes() {
+        let root = std::env::temp_dir().join(format!("xnaut-published-owner-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("projects/TEST/tickets"); std::fs::create_dir_all(&dir).unwrap();
+        let ticket = serde_json::json!({"id":"TEST-1","project":"TEST","title":"Reassigned task","type":"feature","status":"ready","priority":"high","owner":"new-owner","revision":7,"created_at":"2026-10-06T12:00:00Z","updated_at":"2026-10-06T12:00:00Z"});
+        let path = dir.join("TEST-1.json"); std::fs::write(&path, ticket.to_string()).unwrap();
+        let mut t: Transfer = serde_json::from_value(serde_json::json!({"run_id":"parent","project":"TEST","ticket":"TEST-1","handle":"author","local_path":"/fixture","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/parent","state":"pushed","pr_url":"https://forge.test/team/app/pulls/1","error":null})).unwrap();
+        let h = crate::handback::Handback { ticket:"TEST-1".into(), from:"author".into(), run_id:Some("parent".into()), ..Default::default() };
+        recognize_published_task_pr(&mut t);
+        let err = file_published_handback_in(&root, "TEST", &h).unwrap_err();
+        assert!(err.contains("Ticket ownership changed"), "{err}");
+        assert_eq!(t.state, "review"); assert!(!t.filed);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ticket.to_string());
+        t.state = "pushed".into(); t.pr_url = None; recognize_published_task_pr(&mut t); assert_eq!(t.state, "pushed");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn repository_publisher_protocol_suite() {
         use std::io::Write;

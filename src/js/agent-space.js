@@ -7,6 +7,8 @@
   const invoke = (...args) => window.__TAURI__.core.invoke(...args);
   const listen = (...args) => window.__TAURI__.event.listen(...args);
   const THREADS_KEY = 'xnaut-agent-threads:v1';
+  const MESSAGE_ORDER_KEY = 'xnaut-agent-message-order:v1';
+  const newestFirst = () => { try { return localStorage.getItem(MESSAGE_ORDER_KEY) === 'newest'; } catch (_) { return false; } };
 
   // The Librarian used to live in the right pane with its own conversation
   // store. It is an agent now, so its history comes with it — a feature that
@@ -952,6 +954,7 @@
         <button class="as-button" data-archive-thread>${thread.archived_at ? 'Restore' : 'Archive'}</button><button class="as-button" data-settings>Settings</button>
       </header>
       <div class="as-context-bar"><span>Journal &amp; Wiki</span><select class="as-harness as-project-context" data-journal-project aria-label="Conversation project" title="Journal and Wiki follow this conversation. Select a project to pin it."><option value="">Auto · follow chat</option>${(Array.isArray(journalProjects) ? journalProjects : []).map(p => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('')}</select></div>
+      <label class="as-message-sort" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:6px 22px;color:var(--text-secondary,#aaa);font-size:12px">Sort <select class="as-harness" data-message-order aria-label="Message order"><option value="oldest">Oldest first</option><option value="newest">Newest first</option></select></label>
       <div class="as-body as-thread">
         <div class="as-messages" data-messages></div>
       </div>
@@ -970,6 +973,8 @@
     // sat behind the composer. Stay pinned to the bottom unless he has
     // scrolled up to read something.
     const scroller = () => messages.closest('.as-body') || messages.parentElement;
+    const liveReplies = new Map();
+    let reverseMessages = newestFirst();
     let stick = true;
     let programmatic = false;
     const scrollToEnd = () => {
@@ -979,7 +984,7 @@
       // out, the second catches a height that grew again while we were
       // scrolling (a streamed reply does exactly that).
       programmatic = true;
-      const settle = () => { box.scrollTop = box.scrollHeight; };
+      const settle = () => { if (stick) box.scrollTop = reverseMessages ? 0 : box.scrollHeight; };
       requestAnimationFrame(() => {
         settle();
         requestAnimationFrame(() => {
@@ -1094,7 +1099,7 @@
         // the view stopped following: one mid-flight event set stick=false
         // and every later paint skipped the scroll.
         if (programmatic) return;
-        stick = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+        stick = reverseMessages ? box.scrollTop < 120 : box.scrollHeight - box.scrollTop - box.clientHeight < 120;
       });
     };
 
@@ -1114,7 +1119,13 @@
 
     const paintMessages = () => {
       watchScroll();
-      const items = Array.isArray(thread.messages) ? thread.messages : [];
+      const box = scroller();
+      const anchor = !stick ? [...messages.children].find(node => node.getBoundingClientRect().bottom > box.getBoundingClientRect().top) : null;
+      const anchorId = anchor?.dataset.messageKey;
+      const anchorTop = anchor?.getBoundingClientRect().top;
+      const chronological = Array.isArray(thread.messages) ? thread.messages : [];
+      const display = chronological.map(message => liveReplies.has(message.id) ? {...message, text:liveReplies.get(message.id)} : message);
+      const items = reverseMessages ? display.reverse() : display;
       if (!items.length) {
         messages.innerHTML = `<div class="as-empty"><h2>Talk to ${esc(profile.display_name)}.</h2><p>${esc(profile.tagline || profile.purpose)}</p></div>`;
         return;
@@ -1146,10 +1157,11 @@
         ? `<div class="as-action"><strong>${esc(message.label || 'Started')}</strong><span>${esc(message.detail || '')}</span><span style="margin-left:auto">${esc(new Date(message.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }))}</span>${message.session_id ? `<button class="as-button" data-open-session="${esc(message.session_id)}">Terminal</button>` : ''}</div>`
         : `<div class="as-message ${message.role === 'user' ? 'user' : 'agent'}" data-message-id="${esc(message.id)}"><button class="as-message-copy" data-copy-message="${esc(message.id)}" aria-label="Copy ${message.role === 'user' ? 'your' : 'agent'} message" title="Copy message"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1" stroke="currentColor"/><path d="M10 3H3v7" stroke="currentColor"/></svg><span class="as-copy-feedback" aria-live="polite"></span></button><div class="as-message-text${message.role === 'user' ? '' : ' as-md'}">${message.role === 'user' ? esc(message.text) : markdown(message.text)}</div>${receiptLine(message)}${buildCard(message)}</div>`
       ).join('');
+      [...messages.children].forEach((node, index) => { node.dataset.messageKey = items[index].id; });
       messages.querySelectorAll('[data-copy-message]').forEach(button=>{button.onclick=async()=>{
         const record=thread.messages.find(m=>m.id===button.dataset.copyMessage);if(!record)return;
         const feedback=button.querySelector('.as-copy-feedback');
-        try{await navigator.clipboard.writeText(record.text || '');feedback.textContent='Copied';}
+        try{await navigator.clipboard.writeText(liveReplies.get(record.id) ?? record.text ?? '');feedback.textContent='Copied';}
         catch(_){feedback.textContent='Copy failed';}
         setTimeout(()=>{if(feedback.isConnected)feedback.textContent='';},2200);
       };});
@@ -1170,7 +1182,19 @@
       messages.querySelectorAll('[data-open-session]').forEach((button) => {
         button.onclick = () => window.xnautOpenAgentSession && window.xnautOpenAgentSession(button.dataset.openSession, profile.display_name);
       });
+      if (anchorId && !stick) {
+        const restored = [...messages.children].find(node => node.dataset.messageKey === anchorId);
+        if (restored) box.scrollTop += restored.getBoundingClientRect().top - anchorTop;
+      }
       scrollToEnd();
+    };
+    const orderControl = pane.querySelector('[data-message-order]');
+    orderControl.value = reverseMessages ? 'newest' : 'oldest';
+    orderControl.onchange = () => {
+      reverseMessages = orderControl.value === 'newest';
+      try { localStorage.setItem(MESSAGE_ORDER_KEY, orderControl.value); } catch (_) {}
+      stick = true;
+      paintMessages();
     };
     paintMessages();
 
@@ -1271,6 +1295,7 @@
     };
     const updateAgentMessage = (messageId, text) => {
       if (!text) return;
+      liveReplies.delete(messageId);
       thread = updateThread(profile.handle, thread.id, (next) => {
         const message = next.messages.find((item) => item.id === messageId);
         if (message) message.text = text;
@@ -1862,7 +1887,13 @@
             );
             // ponytail: textContent, not paintMessages(). A full repaint per
             // token rewires every handler in the thread.
-            if (node) node.textContent = live.replace(/^BUILD-REQUEST\n?/, '');
+            const box = scroller();
+            const anchor = !stick ? [...messages.children].find(item => item.getBoundingClientRect().bottom > box.getBoundingClientRect().top) : null;
+            const top = anchor?.getBoundingClientRect().top;
+            const text = live.replace(/^BUILD-REQUEST\n?/, '');
+            liveReplies.set(replyId, text);
+            if (node) node.textContent = text;
+            if (anchor) box.scrollTop += anchor.getBoundingClientRect().top - top;
             scrollToEnd();
           };
           const stopStream = await listen('chat://chunk', (event) => {

@@ -670,23 +670,40 @@ pub(crate) fn worker_admission_for_ticket_in(
     registry: &Path,
     run: &crate::run_control::RunManifest,
     replacing: Option<&str>,
-    review_ticket: Option<&str>,
+    review_parent_run_id: Option<&str>,
 ) -> Result<(), String> {
-    crate::agent_work::admit_model_reservation_in(registry,run)?;
+    crate::agent_work::admit_model_reservation_in(registry, run)?;
     let groups = groups_in(registry, None)?;
-    let mut ticket = run
+    let transfers = crate::repository_transfer::list()?;
+    let parents: Vec<_> = transfers
+        .iter()
+        .filter(|t| {
+            if let Some(id) = review_parent_run_id {
+                return t.run_id == id;
+            }
+            run.ticket.is_none()
+                && t.quality.as_ref().is_some_and(|q| {
+                    !q.worktree.is_empty()
+                        && q.worktree == run.worktree_path
+                        && q.reviewer == run.agent_handle
+                })
+        })
+        .collect();
+    if parents.len() > 1 || (review_parent_run_id.is_some() && parents.is_empty()) {
+        return Err("Independent review parent is missing or ambiguous".into());
+    }
+    let review_parent = parents.first().copied();
+    if let Some(parent) = review_parent {
+        crate::repository_review::authorize_review_worker(
+            parent,
+            run,
+            review_parent_run_id.is_some(),
+        )?;
+    }
+    let ticket = run
         .ticket
         .clone()
-        .or_else(|| review_ticket.map(str::to_owned));
-    if ticket.is_none() {
-        if let Some(parent) = crate::repository_transfer::list()?.iter().find(|t| {
-            t.quality
-                .as_ref()
-                .is_some_and(|q| q.worktree == run.worktree_path && q.reviewer == run.agent_handle)
-        }) {
-            ticket = parent.ticket.clone();
-        }
-    }
+        .or_else(|| review_parent.and_then(|t| t.ticket.clone()));
     let global_cap = crate::spend::load_ceiling().max_concurrent as usize;
     let mut group_capacity = None;
     if let Some(ticket) = ticket {
@@ -707,8 +724,9 @@ pub(crate) fn worker_admission_for_ticket_in(
                     .into_iter()
                     .find(|t| t.id == ticket)
                     .ok_or("Group ticket unavailable")?;
-            if !authorized_member(registry, planned, member, &current)
-                || !current_pins(planned, &group.plan.project)?
+            if review_parent.is_none()
+                && (!authorized_member(registry, planned, member, &current)
+                    || !current_pins(planned, &group.plan.project)?)
             {
                 return Err(
                     "Approved group owner, scope, repository, runtime or environment changed"

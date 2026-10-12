@@ -13,7 +13,7 @@
 
 **A native terminal for working with a fleet of coding agents.**
 
-[![Version](https://img.shields.io/badge/version-1.31.0-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
+[![Version](https://img.shields.io/badge/version-1.31.1-blue)](https://github.com/48Nauts-Operator/xNaut/releases)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/tauri-v2.0-blue)](https://tauri.app/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -63,7 +63,8 @@ get a branch and a PR back. macOS & Windows.
 - Filter activity by year, month, date, ticket or an assigned release; pin the
   view when it should stop following the conversation.
 - Browse conversations by year/month/day, search and archive finished threads,
-  and copy either side of the conversation.
+  and copy either side of the conversation. Use **Sort → Oldest first / Newest first**
+  to choose where new messages appear; your preference is saved.
 
 See the [Journal guide](JOURNAL.md) for navigation and current limitations.
 

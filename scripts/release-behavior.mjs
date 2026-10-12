@@ -25,6 +25,9 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'repository_transfer::tests::published_pr_remains_reviewable_when_ticket_owner_changes',
+  'repository_review::tests::independent_review_binds_parent_and_exact_reservation_without_author_assignment',
+  'repository_review::tests::obsolete_author_guard_recovers_only_an_untouched_review_queue',
   'project_wiki::tests::enumerated_document_paths_round_trip_without_weakening_path_guards',
   ...(process.platform === 'win32' ? [] : ['repository_transfer::tests::repository_publisher_protocol_suite']),
   'project_wiki::journal::tests::journal_capture_waits_for_an_active_wiki_writer_without_losing_an_entry',
@@ -79,6 +82,7 @@ export const requiredNative = [
   'agent_tools::tests::swarm_tools_expose_destination_and_durable_queue_contract',
 ];
 export const browserFiles = [
+  'agent-message-sort.spec.mjs',
   'journal-console.spec.mjs', 'journal-final.spec.mjs', 'journal-v4.spec.mjs',
   'conversation-v4.spec.mjs', 'agent-journal-context.spec.mjs', 'actions-rows.spec.mjs',
   'cloud-agent-model.spec.mjs',

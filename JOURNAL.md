@@ -56,6 +56,26 @@ and the Archived view to revisit or restore it. Archiving a conversation does
 not stop or delete a worker. Copy controls are available on user and agent
 messages.
 
+The **Sort** control above the conversation offers **Oldest first** (the default,
+latest messages at the bottom) and **Newest first** (latest at the top). The
+preference persists across threads and restarts. It changes presentation only;
+message content, stored history and model context retain their original order.
+Streaming replies stay with their message, and reading older content preserves
+its position as the reply grows.
+
+## Independent review
+
+A published task PR can be reviewed even after its ticket is reassigned or its
+recorded description changes. The current project must still authorize automatic
+review for the same repository. Reviewer launches bind to the exact task and
+base commits; owner-only controls, stopped groups, read-only/quarantine policy
+and worker capacity still apply. Author repair retains its separate scope checks.
+
+A handback filing conflict preserves the current owner's ticket and the published
+PR evidence. Queueing a review does not mean a worker has launched. Inspect its
+attempts, child run and report. Requeueing retains the previous blocker in the
+status; the next attempt must pass the current checks.
+
 ## Current limits
 
 This release does not implement delivery forecasting, cutoff dates, or a release

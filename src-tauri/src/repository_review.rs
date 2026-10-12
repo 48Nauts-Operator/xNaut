@@ -503,18 +503,127 @@ fn read_report_in(
 /// New reviewers require an existing project ticket even though their child
 /// runs are ticketless. Read only; never invent a ticket or relabel receipts.
 fn require_review_ticket_in(t: &Transfer, control: &Path) -> Result<(), String> {
-    let refusal = || format!("Independent review requires this parent delivery to reference an existing ticket in project {}. Register or link the real project ticket first; existing review receipts are preserved.", t.project);
-    let id = t.ticket.as_deref().filter(|id| !id.trim().is_empty()).ok_or_else(refusal)?;
-    let suffix = id.strip_prefix(&format!("{}-", t.project)).ok_or_else(refusal)?;
-    if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) { return Err(refusal()); }
-    let tickets = crate::project_management::ticket_list_in(control, Some(t.project.clone()))?;
-    if tickets.iter().filter(|ticket| ticket.id == id && ticket.project == t.project).count() != 1 {
+    let refusal = || {
+        format!("Independent review requires this parent delivery to reference an existing ticket in project {}. Register or link the real project ticket first; existing review receipts are preserved.", t.project)
+    };
+    let id = t
+        .ticket
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(refusal)?;
+    let suffix = id
+        .strip_prefix(&format!("{}-", t.project))
+        .ok_or_else(refusal)?;
+    if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) {
         return Err(refusal());
+    }
+    let tickets = crate::project_management::ticket_list_in(control, Some(t.project.clone()))?;
+    let matching: Vec<_> = tickets
+        .iter()
+        .filter(|ticket| ticket.id == id && ticket.project == t.project)
+        .collect();
+    if matching.len() != 1 {
+        return Err(refusal());
+    }
+    if matching[0].approval.owner_only
+        || matching[0].tags.iter().any(|tag| tag == "no-auto-dispatch")
+    {
+        return Err("Independent review paused: this ticket requires owner attention or disables automatic dispatch".into());
     }
     Ok(())
 }
+
 fn require_review_ticket(t: &Transfer) -> Result<(), String> {
     require_review_ticket_in(t, &crate::project_management::repo_now()?)
+}
+
+/// Review authority belongs to the current project policy and a published
+/// parent, not to the author's old dispatch assignment. Final launch must match
+/// the durable reservation; a ticketless worker cannot claim review privileges.
+fn validate_review_worker(
+    t: &Transfer,
+    run: &crate::run_control::RunManifest,
+    preflight: bool,
+) -> Result<(), String> {
+    let q = t
+        .quality
+        .as_ref()
+        .ok_or("Independent review reservation missing")?;
+    let reviewer = if t.handle == "ralph" {
+        "reviewer"
+    } else {
+        "ralph"
+    };
+    if t.state != "review"
+        || t.pr_url.is_none()
+        || t.review_parent.is_some()
+        || t.repair_parent.is_some()
+        || run.ticket.is_some()
+        || run.agent_handle != reviewer
+        || q.reviewer != reviewer
+    {
+        return Err(
+            "Independent review requires a published task PR and its reserved reviewer".into(),
+        );
+    }
+    if preflight {
+        if q.state != "pending" || q.child.is_some() || run.worktree_path != t.local_path {
+            return Err("Independent review preflight does not match its queued parent".into());
+        }
+    } else if q.state != "dispatching"
+        || q.worktree.is_empty()
+        || q.child.is_some()
+        || run.worktree_path != q.worktree
+        || ![&q.head, &q.base]
+            .iter()
+            .all(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(
+            "Independent review launch does not match its exact revision reservation".into(),
+        );
+    }
+    Ok(())
+}
+pub(crate) fn authorize_review_worker(
+    t: &Transfer,
+    run: &crate::run_control::RunManifest,
+    preflight: bool,
+) -> Result<(), String> {
+    validate_review_worker(t, run, preflight)?;
+    require_review_ticket(t)?;
+    if project(&t.project)?.owner_only || !policy(&t.project, &t.remote)?.automatic_review {
+        return Err(
+            "Independent review permission was revoked or the project repository changed".into(),
+        );
+    }
+    let switches = crate::switches::load();
+    if switches.read_only || switches.is_quarantined(&run.agent_handle) {
+        return Err("Independent review disabled by read-only/quarantine policy".into());
+    }
+    Ok(())
+}
+
+// Recover only the old author-assignment admission refusal with positive proof
+// that it never reserved or launched a reviewer. Other blocked states stay put.
+fn recover_author_assignment_refusal(q: &mut Review) -> bool {
+    if q.state != "blocked"
+        || q.message != "Approved group owner, scope, repository, runtime or environment changed"
+        || q.attempts != 0
+        || q.child.is_some()
+        || !q.worktree.is_empty()
+        || !q.head.is_empty()
+        || !q.base.is_empty()
+        || q.report.is_some()
+        || q.jev.is_some()
+        || q.repair_child.is_some()
+        || q.repair_attempts != 0
+        || q.author_run.is_some()
+        || !q.extra.is_empty()
+    {
+        return false;
+    }
+    q.state = "pending".into();
+    true
 }
 
 fn current_ticket(t: &Transfer) -> Result<crate::project_management::TicketRecord, String> {
@@ -1677,6 +1786,9 @@ async fn advance_inner(
     hosts: &[crate::settings::ForgeHost],
     permission: &Policy,
 ) -> Result<(), String> {
+    if recover_author_assignment_refusal(q) {
+        persist(t, q, "Rechecking independent review authority after the obsolete author-assignment refusal; prior evidence retained", None)?;
+    }
     let mut recovered_report = None;
     if matches!(q.state.as_str(), "ready" | "merging" | "merged")
         || (q.state == "publishing" && q.report.as_ref().is_some_and(|r| r["verdict"] == "pass")) {
@@ -1737,6 +1849,10 @@ async fn advance_inner(
         }
         .into();
         let reviewer = crate::agent_profiles::agent_profile_get(q.reviewer.clone())?;
+        // Admission (including the final native launch) reads the persisted
+        // reservation, not a stale pre-recovery queue snapshot.
+        t.quality = Some(q.clone());
+        transfer::save(t)?;
         let candidate = crate::run_control::RunManifest::requested(
             &q.reviewer,
             &reviewer.runtime_id,
@@ -1752,7 +1868,7 @@ async fn advance_inner(
                 &registry,
                 &candidate,
                 None,
-                t.ticket.as_deref(),
+                Some(&t.run_id),
             )
         }) {
             if error.starts_with("worker capacity:") {
@@ -2162,6 +2278,7 @@ pub fn repository_review_request(run_id: String) -> Result<Transfer, String> {
                 .into(),
         );
     }
+    let previous_reason = q.message.clone();
     q.state = "pending".into();
     q.child = None;
     q.worktree.clear();
@@ -2171,7 +2288,7 @@ pub fn repository_review_request(run_id: String) -> Result<Transfer, String> {
     persist(
         &mut t,
         &mut q,
-        "Independent review explicitly re-queued; prior evidence retained",
+        &format!("Independent review explicitly re-queued; prior evidence retained{}", if previous_reason.is_empty() { String::new() } else { format!(". Previous status: {previous_reason}") }),
         None,
     )?;
     Ok(t)
@@ -2565,6 +2682,92 @@ mod tests {
     }
 
     #[test]
+    fn independent_review_binds_parent_and_exact_reservation_without_author_assignment() {
+        let mut t: Transfer = serde_json::from_value(json!({"run_id":"parent","project":"TEST","ticket":"TEST-1","handle":"author","local_path":"/fixture","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/parent","state":"review","pr_url":"https://forge.test/team/app/pulls/1","error":null})).unwrap();
+        t.quality = Some(Review::default());
+        let mut run = crate::run_control::RunManifest::requested(
+            "ralph",
+            "claude",
+            "/fixture",
+            None,
+            Some("claude".into()),
+            &[],
+            1,
+        );
+        validate_review_worker(&t, &run, true).unwrap();
+        for field in [
+            "unpublished",
+            "child",
+            "wrong_reviewer",
+            "ticketed",
+            "wrong_path",
+        ] {
+            let mut parent = t.clone();
+            let mut candidate = run.clone();
+            match field {
+                "unpublished" => parent.state = "pushed".into(),
+                "child" => parent.review_parent = Some("other".into()),
+                "wrong_reviewer" => candidate.agent_handle = "author".into(),
+                "ticketed" => candidate.ticket = Some("TEST-1".into()),
+                _ => candidate.worktree_path = "/other".into(),
+            }
+            assert!(
+                validate_review_worker(&parent, &candidate, true).is_err(),
+                "{field}"
+            );
+        }
+        assert!(validate_review_worker(&t, &run, false).is_err());
+        let q = t.quality.as_mut().unwrap();
+        q.state = "dispatching".into();
+        q.head = "b".repeat(40);
+        q.base = "c".repeat(40);
+        q.worktree = "/fixture/.worktrees/review-parent".into();
+        run.worktree_path = q.worktree.clone();
+        validate_review_worker(&t, &run, false).unwrap();
+        t.quality.as_mut().unwrap().child = Some("already-launched".into());
+        assert!(validate_review_worker(&t, &run, false).is_err());
+    }
+
+    #[test]
+    fn obsolete_author_guard_recovers_only_an_untouched_review_queue() {
+        let original = Review {
+            state: "blocked".into(),
+            message: "Approved group owner, scope, repository, runtime or environment changed".into(),
+            ..Default::default()
+        };
+        let mut q = original.clone();
+        assert!(recover_author_assignment_refusal(&mut q));
+        assert_eq!(q.state, "pending");
+        for field in [
+            "attempt",
+            "child",
+            "worktree",
+            "head",
+            "report",
+            "repair",
+            "unknown",
+            "other_refusal",
+        ] {
+            let mut q = original.clone();
+            match field {
+                "attempt" => q.attempts = 1,
+                "child" => q.child = Some("child".into()),
+                "worktree" => q.worktree = "/existing".into(),
+                "head" => q.head = "a".repeat(40),
+                "report" => q.report = Some(json!({})),
+                "repair" => q.repair_child = Some("repair".into()),
+                "unknown" => {
+                    q.extra.insert("unknown".into(), json!(true));
+                }
+                _ => q.message = "Approved group was stopped; worker admission refused".into(),
+            }
+            let before = serde_json::to_value(&q).unwrap();
+            assert!(!recover_author_assignment_refusal(&mut q), "{field}");
+            assert_eq!(serde_json::to_value(&q).unwrap(), before);
+        }
+    }
+
+    #[test]
     fn reviewer_admission_requires_a_real_current_ticket_in_the_parent_project() {
         let root = std::env::temp_dir().join(format!("xnaut-review-ticket-{}", uuid::Uuid::new_v4()));
         let dir = root.join("projects/TEST/tickets");
@@ -2591,6 +2794,18 @@ mod tests {
         assert!(require_review_ticket_in(&t, &root).is_err());
         std::fs::remove_file(dir.join("duplicate.json")).unwrap();
         require_review_ticket_in(&t, &root).unwrap();
+        // Owner, prose and model changes do not revoke independent review;
+        // explicit owner-only/no-auto-dispatch controls still do.
+        let mut changed = ticket.clone(); changed["owner"] = serde_json::Value::Null;
+        changed["body"] = json!("New recorded evidence"); changed["model_requirement"] = json!("Claude");
+        std::fs::write(&path, changed.to_string()).unwrap();
+        require_review_ticket_in(&t, &root).unwrap();
+        changed["owner_only"] = json!(true);
+        std::fs::write(&path, changed.to_string()).unwrap();
+        assert!(require_review_ticket_in(&t, &root).unwrap_err().contains("owner attention"));
+        changed["owner_only"] = json!(false); changed["tags"] = json!(["no-auto-dispatch"]);
+        std::fs::write(&path, changed.to_string()).unwrap();
+        assert!(require_review_ticket_in(&t, &root).is_err());
         // Removal between queue admission and final dispatch invalidates it.
         std::fs::remove_file(&path).unwrap();
         assert!(require_review_ticket_in(&t, &root).is_err());

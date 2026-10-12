@@ -2,6 +2,20 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.31.1] - 2026-10-12
+
+### Added
+- Agent Space message sorting: choose Oldest first or Newest first. The choice persists across conversations and restarts, while stored history and model context remain chronological (XNAUT-507).
+
+### Fixed
+- Keep a verified published task PR eligible for independent review when its ticket owner changes. Handback filing still preserves the current owner's record (XNAUT-508).
+- Authorize independent reviewers using current project/repository review permission and their exact revision reservation, rather than the author's historical assignment. Stopped groups, read-only/quarantine policy and worker capacity still apply.
+- Recover never-started reviews rejected solely by the obsolete author-assignment check, preserving prior events. Requeued reviews retain the previous blocker in their status.
+- Preserve streaming message text and reading position when changing message order.
+
+### Release checks
+- Require regressions for reassigned published PRs, reviewer reservation identity, bounded queue recovery, and Agent Space sorting alongside the existing release behavior suites.
+
 ## [1.31.0] - 2026-10-12
 
 ### Added
