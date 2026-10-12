@@ -736,6 +736,8 @@ pub(crate) struct ResultRecord {
     source_sha: String,
     pub exit_code: i32,
     pub uncommitted_source: bool,
+    #[serde(default)]
+    pub handback_error: Option<String>,
     /// Computed from the fetched Git object, never accepted from worker JSON.
     #[serde(skip)]
     pub published_head: String,
@@ -792,7 +794,7 @@ fn fetch_result_in(
     }
     result.published_head = published_head.clone();
     let handback_path = format!("{published_head}:{}/handback.json", t.artifacts);
-    let handback = if git(&dir, &["cat-file", "-e", &handback_path]).is_ok() {
+    let handback = if result.handback_error.is_none() && git(&dir, &["cat-file", "-e", &handback_path]).is_ok() {
         Some(
             serde_json::from_str(&read(&handback_path)?)
                 .map_err(|e| format!("Invalid handback: {e}"))?,
@@ -879,11 +881,39 @@ fn finish_reviewer_task(t: &Transfer, result: &ResultRecord, handback: Option<&c
 }
 
 fn publication_pending(t: &Transfer) -> bool {
-    ["running", "pushed"].contains(&t.state.as_str()) || (t.state == "review" && t.review_parent.is_some())
+    ["running", "pushed", "incomplete"].contains(&t.state.as_str()) || (t.state == "review" && (t.review_parent.is_some() || t.filed))
+}
+
+fn incomplete_publication(t: &Transfer, result: &ResultRecord, handback: Option<&crate::handback::Handback>) -> Option<String> {
+    if result.exit_code != 0 || result.uncommitted_source || result.handback_error.is_some() {
+        return Some(format!("Published unfinished work: author exit {}; uncommitted source {}; handback {}. Inspect retained evidence before retrying.",
+            result.exit_code, result.uncommitted_source, if result.handback_error.is_some() { "missing or invalid" } else { "retained" }));
+    }
+    if t.review_parent.is_none() && t.ticket.is_some() && !handback.is_some_and(|h|
+        h.not_finished.as_deref().is_some_and(crate::handback::says_nothing_outstanding)
+        && crate::handback::review(h).is_reviewable()) {
+        return Some("Published unfinished work: the author has not reported all work finished. Source and evidence retained; no review dispatched.".into());
+    }
+    None
+}
+
+fn record_failed_publication(registry: &Path, t: &Transfer, result: &ResultRecord, reason: &str) -> Result<(), String> {
+    if crate::run_control::load_manifest_in(registry, &t.run_id)?.state.terminal() { return Ok(()); }
+    // fetch_result already bound immutable publication to run/source. Recheck
+    // assignment inside the native journal lock, and never undo a terminal result.
+    crate::run_control::update_in(registry, &t.run_id, |run| {
+        if run.ticket == t.ticket && run.agent_handle == t.handle && run.worktree_path == t.local_path
+            && !run.admission_refused && !run.state.terminal() {
+            run.state = crate::run_control::RunState::Failed;
+            run.last_commit = result.published_head.clone();
+            run.last_signal = reason.into();
+        }
+    })?;
+    Ok(())
 }
 
 async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Result<(), String> {
-    if t.state == "review" && t.review_parent.is_some() {
+    if t.state == "review" && (t.review_parent.is_some() || t.filed) {
         let run = crate::run_control::load_manifest_in(&crate::agents::registry_dir()?, &t.run_id)?;
         // Historical liveness failures may predate collection of an accepted
         // reviewer handback. Recheck its immutable publication; run_control
@@ -923,6 +953,16 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
         return Ok(());
     };
     record_publication_in(&crate::agents::registry_dir()?, t, &result)?;
+    if let Some(reason) = incomplete_publication(t, &result, handback.as_ref()) {
+        t.state = "incomplete".into();
+        let snapshot = t.clone();
+        let proof = tokio::task::spawn_blocking(move || snapshot.worker.probe(&snapshot.workdir))
+            .await.map_err(|e| e.to_string())??;
+        if proof["phase"] == "finished" && proof["writers_absent"] == true {
+            record_failed_publication(&crate::agents::registry_dir()?, t, &result, &reason)?;
+        }
+        return Err(reason);
+    }
     let reviewer_handback = t.review_parent.as_ref().and(handback.clone());
     t.state = "pushed".into();
     let mut pr_error = None;
@@ -959,14 +999,8 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
     // mutable ticket. A reassigned ticket must not hide an existing task PR.
     // fetch_result has already verified this run's immutable publication.
     recognize_published_task_pr(t);
-    if result.exit_code != 0 || result.uncommitted_source {
-        // Published implementation remains reviewable after a failed author.
-        // Uncommitted source is explicitly retained and prevents any pass.
-        t.state = "review".into();
-        return Err(format!("Published evidence retained: author exit {}; uncommitted source {}. Independent review required; process exit is not completion.", result.exit_code, result.uncommitted_source));
-    }
     if t.ticket.is_some() && !t.filed {
-        let mut h = handback
+        let mut h = handback.clone()
             .ok_or("Results pushed; structured handback is missing. Ticket remains unchanged.")?;
         h.run_id = Some(t.run_id.clone());
         h.ticket = t.ticket.clone().unwrap();
@@ -978,6 +1012,12 @@ async fn reconcile(t: &mut Transfer, hosts: &[crate::settings::ForgeHost]) -> Re
             file_published_handback_in(&crate::project_management::repo_now()?, &project, &h_copy)
         }).await.map_err(|e| e.to_string())??;
         t.filed = true;
+    }
+    if t.ticket.is_some() && t.filed {
+        if let Some(mut h) = handback {
+            h.run_id = Some(t.run_id.clone()); h.ticket = t.ticket.clone().unwrap(); h.from = t.handle.clone();
+            crate::run_control::accept_published_author_in(&crate::agents::registry_dir()?, t, &h, &result.published_head)?;
+        }
     }
     if let Some(error) = pr_error {
         return Err(error);
@@ -1049,6 +1089,9 @@ fn file_published_handback_in(
 pub fn spawn_reconciler(_app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
+            if let Err(error) = crate::nautgate_max::renew_active().await {
+                eprintln!("[nautgate-max] {error}");
+            }
             crate::repository_notes::drain().await;
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
@@ -1116,6 +1159,48 @@ pub async fn tick(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_and_incomplete_publications_never_dispatch_review_or_keep_worker_capacity() {
+        use crate::run_control::{self, RunManifest, RunState};
+        let registry = std::env::temp_dir().join(format!("xnaut-incomplete-{}", uuid::Uuid::new_v4()));
+        let mut t: Transfer = serde_json::from_value(serde_json::json!({"run_id":"author","project":"TEST","ticket":"TEST-1","handle":"claude","local_path":"/fixture","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/author","state":"running","pr_url":null,"error":null})).unwrap();
+        let mut native = RunManifest::requested("claude","claude","/fixture",t.ticket.clone(),None,&[],1);
+        native.run_id=t.run_id.clone(); run_control::request_in(&registry,native,||Ok(())).unwrap();
+        let mut result=ResultRecord {run_id:t.run_id.clone(),source_sha:t.source_sha.clone(),exit_code:0,uncommitted_source:false,handback_error:None,published_head:"b".repeat(40)};
+        let mut handback=crate::handback::Handback {ticket:"TEST-1".into(),from:"claude".into(),run_id:Some(t.run_id.clone()),summary:"Implemented and checked formatting".into(),files_changed:vec!["src/lib/format.ts".into()],commits:vec!["a".repeat(40)],how_verified:"python3 -m unittest -v: 10 tests passed".into(),not_finished:Some("nothing".into()),confidence:crate::handback::Confidence::High,..Default::default()};
+        assert!(incomplete_publication(&t,&result,Some(&handback)).is_none());
+        handback.not_finished=Some("No implementation performed; authentication failed".into());
+        let reason=incomplete_publication(&t,&result,Some(&handback)).unwrap();
+        record_failed_publication(&registry,&t,&result,&reason).unwrap();
+        assert_eq!(run_control::worker_count_in(&registry).unwrap(),0);
+        assert_eq!(run_control::load_manifest_in(&registry,&t.run_id).unwrap().state,RunState::Failed);
+        assert!(!t.filed); assert!(t.pr_url.is_none());
+        result.handback_error=Some("missing_or_invalid_handback".into());
+        assert!(incomplete_publication(&t,&result,None).is_some());
+        result.handback_error=None; result.exit_code=1; t.ticket=None; t.review_parent=Some("parent".into());
+        assert!(incomplete_publication(&t,&result,None).is_some(),"failed reviewers are terminal failures too");
+        result.exit_code=0;
+        assert!(incomplete_publication(&t,&result,Some(&handback)).is_none(),"a review may legitimately request author changes");
+        std::fs::remove_dir_all(registry).unwrap();
+    }
+
+    #[test]
+    fn accepted_author_publication_recovers_liveness_race_but_never_execution_failure() {
+        use crate::run_control::{self, RunManifest, RunState};
+        for reason in ["pid does not answer; zellij session absent; capture has not grown; no recent hook", "process exited with status 1"] {
+            let registry=std::env::temp_dir().join(format!("xnaut-author-race-{}",uuid::Uuid::new_v4()));
+            let t:Transfer=serde_json::from_value(serde_json::json!({"run_id":"author","project":"TEST","ticket":"TEST-1","handle":"claude","local_path":"/fixture","remote":"https://forge.test/team/app.git","source_sha":"a".repeat(40),"base":"main","branch":"task","workdir":"worker","artifacts":".xnaut/runs/author","state":"review","filed":true,"pr_url":null,"error":null})).unwrap();
+            let mut run=RunManifest::requested("claude","claude","/fixture",t.ticket.clone(),None,&[],1);run.run_id=t.run_id.clone();
+            run_control::request_in(&registry,run,||Ok(())).unwrap();
+            run_control::update_in(&registry,&t.run_id,|r|{r.state=RunState::Failed;r.last_signal=reason.into();r.last_commit="b".repeat(40);}).unwrap();
+            let handback=crate::handback::Handback {ticket:"TEST-1".into(),from:"claude".into(),run_id:Some(t.run_id.clone()),summary:"Implemented and checked formatting".into(),files_changed:vec!["src/lib/format.ts".into()],commits:vec!["a".repeat(40)],how_verified:"python3 -m unittest -v: 10 tests passed".into(),not_finished:Some("nothing".into()),confidence:crate::handback::Confidence::High,..Default::default()};
+            let recovered=run_control::accept_published_author_in(&registry,&t,&handback,&"b".repeat(40)).unwrap();
+            assert_eq!(recovered,reason.starts_with("pid does not answer"));
+            assert!(std::fs::read_to_string(registry.join("author.events.jsonl")).unwrap().contains(reason));
+            std::fs::remove_dir_all(registry).unwrap();
+        }
+    }
+
     #[test]
     fn published_pr_remains_reviewable_when_ticket_owner_changes() {
         let root = std::env::temp_dir().join(format!("xnaut-published-owner-{}", uuid::Uuid::new_v4()));
@@ -1653,7 +1738,7 @@ print(json.dumps(accepted))
             run.state = RunState::Running; run.pid = Some(123); run.pty_session = Some("interactive-reviewer".into());
         }).unwrap();
         let result = ResultRecord { run_id:child.run_id.clone(), source_sha:child.source_sha.clone(),
-            exit_code:0, uncommitted_source:false, published_head:"c".repeat(40) };
+            exit_code:0, uncommitted_source:false, handback_error:None, published_head:"c".repeat(40) };
         let handback = crate::handback::Handback {
             summary:"Independent review requires an author repair".into(), files_changed:vec![format!("{}/review.json",child.artifacts)],
             commits:vec!["c".repeat(40)], how_verified:"python3 -m unittest -v: one regression failed".into(),
@@ -1697,14 +1782,14 @@ print(json.dumps(accepted))
         // Replay historical liveness failures only after the exact collected
         // publication and parent-bound handback establish task completion.
         for case in ["stall", "stall_with_cpu", "missing", "exit", "exit_receipt", "unknown", "wrong_head", "changed_identity", "successor",
-            "admission", "retired", "uncollected", "no_journal", "wrong_handback", "wrong_parent", "dirty", "before_publication"] {
+            "admission", "retired", "uncollected", "no_journal", "wrong_handback", "wrong_parent", "dirty", "before_publication", "beacon_after_failure"] {
             let registry = std::env::temp_dir().join(format!("xnaut-review-recovery-{}",uuid::Uuid::new_v4()));
             let mut native = completed.clone(); native.state = RunState::Requested; native.last_commit = child.source_sha.clone();
             native.revision = 0;
             run_control::request_in(&registry, native, || Ok(())).unwrap();
             run_control::update_in(&registry,&child.run_id,|run| {
                 run.state = RunState::Running;
-                run.last_commit = if case == "before_publication" { child.source_sha.clone() } else { result.published_head.clone() };
+                run.last_commit = if ["before_publication", "beacon_after_failure"].contains(&case) { child.source_sha.clone() } else { result.published_head.clone() };
             }).unwrap();
             run_control::update_in(&registry,&child.run_id,|run| {
                 run.state = if case == "retired" { RunState::Retired } else { RunState::Failed };
@@ -1723,7 +1808,10 @@ print(json.dumps(accepted))
             if case == "changed_identity" {
                 run_control::update_in(&registry,&child.run_id,|run| run.project = child.project.clone()).unwrap();
             }
-            // A later fetch cannot retroactively bind a different failure head.
+            if case == "beacon_after_failure" {
+                run_control::update_in(&registry,&child.run_id,|run| {run.last_signal="beacon: agent gone, capture 0 bytes".into();run.last_commit=result.published_head.clone();}).unwrap();
+            }
+            // Only the reserved source or exact published head can recover.
             if ["wrong_head", "before_publication"].contains(&case) { record_publication_in(&registry,&child,&result).unwrap(); }
             let journal = registry.join(format!("{}.events.jsonl",child.run_id));
             if case == "exit_receipt" { std::fs::write(registry.join(format!("{}.exit",child.run_id)),"137").unwrap(); }
@@ -1742,7 +1830,7 @@ print(json.dumps(accepted))
             let recovered = accept_reviewer_handback_in(&registry,&receipt,&bound,&publication,Some(&evidence));
             let after = run_control::load_manifest_in(&registry,&child.run_id).unwrap();
             let sessions = vec![("interactive-reviewer".into(),"reviewer".into(),Some("exe-dev".into()))];
-            if ["stall", "stall_with_cpu", "missing"].contains(&case) {
+            if ["stall", "stall_with_cpu", "missing", "before_publication", "beacon_after_failure"].contains(&case) {
                 assert!(recovered.unwrap(),"{case}");
                 assert_eq!(after.state,RunState::Done,"{case}");
                 assert_eq!(after.pid,Some(123),"completion is not a process-exit assertion");

@@ -1778,6 +1778,15 @@ fn requeue_unlaunched_review(q: &mut Review) {
     q.deadline_at = 0;
 }
 
+fn collected_review_can_resume(t: &Transfer, q: &Review, child: &Transfer, run: &crate::run_control::RunManifest) -> bool {
+    q.state == "blocked" && q.message == "Worker stopped without a usable publication; recover its branch and logs before retrying"
+        && q.report.is_none() && q.child.as_deref() == Some(child.run_id.as_str())
+        && child.review_parent.as_deref() == Some(t.run_id.as_str()) && child.repair_parent.is_none()
+        && child.state == "review" && child.source_sha == q.head && child.local_path == q.worktree
+        && run.run_id == child.run_id && run.state == crate::run_control::RunState::Done
+        && run.last_signal.starts_with("review task published; typed handback accepted")
+}
+
 async fn advance_inner(
     app: &tauri::AppHandle,
     t: &mut Transfer,
@@ -1788,6 +1797,14 @@ async fn advance_inner(
 ) -> Result<(), String> {
     if recover_author_assignment_refusal(q) {
         persist(t, q, "Rechecking independent review authority after the obsolete author-assignment refusal; prior evidence retained", None)?;
+    }
+    if let Some(child) = rows.iter().find(|r| Some(&r.run_id) == q.child.as_ref()) {
+        if let Ok(run) = crate::run_control::load_manifest_in(&crate::agents::registry_dir()?, &child.run_id) {
+            if collected_review_can_resume(t, q, child, &run) {
+                q.state = "running".into();
+                persist(t, q, "Collected the existing reviewer publication after a liveness race; validating its exact revision and test evidence", None)?;
+            }
+        }
     }
     let mut recovered_report = None;
     if matches!(q.state.as_str(), "ready" | "merging" | "merged")
@@ -3714,6 +3731,24 @@ mod repair_loop_tests {
         git(tree, &["commit", "-m", "silent auxiliary check"]).unwrap();
         git(tree, &["push", f.remote.to_str().unwrap(), &child.branch]).unwrap();
         report
+    }
+
+    #[test]
+    fn collected_review_resumes_without_launching_a_duplicate_after_liveness_race() {
+        let mut f = Fixture::new();
+        let child = f.review("review-collected", 1);
+        f.q.report = None;
+        f.q.state = "blocked".into();
+        f.q.message = "Worker stopped without a usable publication; recover its branch and logs before retrying".into();
+        let mut run = crate::run_control::RunManifest::requested("ralph", "claude", &child.local_path, None, None, &[], 1);
+        run.run_id=child.run_id.clone(); run.state=crate::run_control::RunState::Done;
+        run.last_signal="review task published; typed handback accepted after historical liveness failure".into();
+        assert!(collected_review_can_resume(&f.parent,&f.q,&child,&run));
+        run.state=crate::run_control::RunState::Failed;
+        assert!(!collected_review_can_resume(&f.parent,&f.q,&child,&run));
+        run.state=crate::run_control::RunState::Done;
+        f.q.head="d".repeat(40);
+        assert!(!collected_review_can_resume(&f.parent,&f.q,&child,&run));
     }
 
     #[test]

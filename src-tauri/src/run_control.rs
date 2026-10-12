@@ -866,6 +866,8 @@ pub fn verdict(run: &RunManifest, proof: &Proofs, at: i64) -> Verdict {
             Verdict::Failed(format!("process exited with status {code}"))
         };
     }
+    // A missed remote beacon is a connectivity gap, not proof of worker exit.
+    if run.remote_env.is_some() && !proof.session_known { return Verdict::Keep; }
     let grew = proof.capture_bytes > run.capture_bytes;
     let hook_recent = run
         .last_hook_at
@@ -1054,10 +1056,10 @@ pub fn remote_proofs(run: &RunManifest, at: i64) -> Proofs {
         pid_alive: answering && run.pid.is_some(),
         pid_absent: answering && run.pid.is_none(),
         session_alive: answering,
-        session_known: true,
+        session_known: answering,
         capture_known: true,
         capture_bytes: run.capture_bytes,
-        capture_quiet: !answering,
+        capture_quiet: false, // missing telemetry never proves writers have stopped
         worktree_exists: true,
         branch_matches: true,
         commit: run.last_commit.clone(),
@@ -1678,10 +1680,44 @@ pub fn record_handback_in<T>(
     Ok(stored)
 }
 
+/// A successful immutable author publication can arrive after a liveness sweep.
+/// Recover only that failure class after PM accepted this exact typed handback.
+/// This never upgrades nonzero exits, prelaunch refusals or replaced workers.
+pub(crate) fn accept_published_author_in(dir: &Path, transfer: &crate::repository_transfer::Transfer,
+    handback: &crate::handback::Handback, head: &str) -> Result<bool, String> {
+    let _lock = StoreLock::acquire(dir)?;
+    let mut run = load_manifest_in(dir, &transfer.run_id)?;
+    if !transfer.filed || transfer.review_parent.is_some() || transfer.repair_parent.is_some()
+        || run.state != RunState::Failed || run.admission_refused || run.prelaunch_failure.is_some()
+        || run.next_run_id.is_some() || run.retirement.is_some() || run.last_commit != head
+        || run.worktree_path != transfer.local_path || !handback_matches(&run, handback)
+        || !crate::handback::review(handback).is_reviewable()
+        || !handback.not_finished.as_deref().is_some_and(crate::handback::says_nothing_outstanding)
+    { return Ok(false); }
+    for id in list_ids_in(dir)? {
+        let other = load_manifest_in(dir, &id)?;
+        if other.run_id != run.run_id && other.ticket == run.ticket && other.started_at >= run.started_at { return Ok(false); }
+    }
+    let (_, end) = replay_events_in(dir, &run.run_id)?;
+    let bytes = std::fs::read(journal_path(dir, &run.run_id)).map_err(|e| e.to_string())?;
+    let first_failure = bytes[..end].split(|b| *b == b'\n').filter(|l| !l.is_empty())
+        .map(serde_json::from_slice::<RunEvent>).collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        .into_iter().find(|e| e.run.state == RunState::Failed);
+    let Some(failure) = first_failure else { return Ok(false); };
+    if !matches!(failure.run.last_signal.as_str(), STALLED_NO_PROGRESS
+        | "stalled: alive but capture, hooks and commits show no progress beyond the window; waiting_on empty"
+        | "pid does not answer; zellij session absent; capture has not grown; no recent hook") { return Ok(false); }
+    run.state = RunState::Done;
+    run.waiting_on = None;
+    run.last_signal = format!("accepted published author handback after liveness failure {}; independent review remains required", failure.event_id);
+    persist_locked(dir, &mut run)?;
+    Ok(true)
+}
+
 /// Return the original failure event only for a continuous, identity-bound
 /// liveness-only failure after this exact publication was already observed.
 /// The journal remains intact; a recovered task result never asserts PID exit.
-fn reviewer_liveness_failure_in(dir: &Path, run: &RunManifest, head: &str) -> Result<Option<String>, String> {
+fn reviewer_liveness_failure_in(dir: &Path, run: &RunManifest, head: &str, source: &str) -> Result<Option<String>, String> {
     if run.state != RunState::Failed || run.last_commit != head || run.admission_refused
         || run.prelaunch_failure.is_some() || run.previous_run_id.is_some() || run.next_run_id.is_some()
         || run.retirement.is_some() || run.ticket_returned
@@ -1708,13 +1744,18 @@ fn reviewer_liveness_failure_in(dir: &Path, run: &RunManifest, head: &str) -> Re
             || observed.next_run_id.is_some() || observed.retirement.is_some() || observed.ticket_returned
         { return Ok(None); }
         if observed.state == RunState::Failed {
-            if observed.last_commit != head || !matches!(observed.last_signal.as_str(),
+            if ![head, source].contains(&observed.last_commit.as_str()) { return Ok(None); }
+            if failure.is_some() && (observed.last_signal.starts_with("beacon:") || observed.last_signal.starts_with("Repository publication fetched at ")) {
+                previous = Some(event.run);
+                continue;
+            }
+            if !matches!(observed.last_signal.as_str(),
                 "stalled: alive but capture, hooks and commits show no progress beyond the window; waiting_on empty"
                 | STALLED_NO_PROGRESS
                 | "pid does not answer; zellij session absent; capture has not grown; no recent hook")
             { return Ok(None); }
             if failure.is_none() {
-                if !previous.as_ref().is_some_and(|p| p.state == RunState::Running && p.last_commit == head) {
+                if !previous.as_ref().is_some_and(|p| p.state == RunState::Running && [head, source].contains(&p.last_commit.as_str())) {
                     return Ok(None);
                 }
                 failure = Some(event.event_id);
@@ -1746,7 +1787,7 @@ pub(crate) fn record_review_handback_in(
         || !crate::handback::review(handback).is_reviewable()
         || published_head.len() != 40 || !published_head.bytes().all(|b| b.is_ascii_hexdigit())
     { return Err("Reviewer handback does not match its native assignment and publication".into()); }
-    let recovery = if transfer.state == "review" { reviewer_liveness_failure_in(dir, &run, published_head)? } else { None };
+    let recovery = if transfer.state == "review" { reviewer_liveness_failure_in(dir, &run, published_head, &transfer.source_sha)? } else { None };
     if let Some(event) = recovery {
         run.state = RunState::Done;
         run.waiting_on = None;
@@ -2248,18 +2289,18 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Silence past the lapse window, and the same run reads as gone.
+    /// Lost telemetry cannot prove that remote writers stopped.
     #[test]
-    fn a_remote_run_whose_beacon_stopped_reads_as_dead() {
+    fn a_remote_beacon_gap_preserves_the_worker_until_fresh_evidence() {
         let mut run = run();
         run.remote_env = Some("gitvm".into());
         run.last_seen_at = 0;
         let at = BEACON_LAPSE_MS + 60_000;
         let proof = remote_proofs(&run, at);
         assert!(!proof.pid_alive && !proof.session_alive);
-        assert!(proof.capture_quiet);
-        assert!(proof.writers_gone(), "silence must release the ticket");
-        assert!(matches!(verdict(&run, &proof, at), Verdict::Failed(_)));
+        assert!(!proof.session_known);
+        assert!(!proof.writers_gone(), "silence cannot release a potentially live writer");
+        assert_eq!(verdict(&run, &proof, at), Verdict::Keep);
     }
 
     /// The stored run really is updated, under the lock, by run id.

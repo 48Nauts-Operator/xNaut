@@ -109,9 +109,12 @@ pub fn apply(
         // Use the same gateway policy as chat. An explicit profile model is
         // preserved; `auto` delegates selection to NautGate's existing router.
         // Never send a gateway credential to the fallback provider's endpoint.
+        let model = if profile.runtime_id == "claude" && (profile.model.trim().is_empty() || profile.model.trim() == "auto") {
+            crate::nautgate_max::default_model()?
+        } else if profile.model.trim().is_empty() { "auto".into() } else { profile.model.trim().into() };
         let requested = crate::settings::LlmSettings {
             provider: profile.provider.clone(),
-            model: if profile.model.trim().is_empty() { "auto".into() } else { profile.model.trim().into() },
+            model,
             ..Default::default()
         };
         let route = crate::chat::route_llm(settings, &requested)?;

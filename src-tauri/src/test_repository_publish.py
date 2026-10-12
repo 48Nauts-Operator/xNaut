@@ -77,78 +77,35 @@ class PublisherTests(unittest.TestCase):
             ["git", *args], text=True, stderr=subprocess.PIPE
         ).strip()
 
-    def test_invalid_completion_retries_corrected_artifact_without_losing_source_or_staged_work(
-        self,
-    ):
+    def test_invalid_completion_publishes_failure_and_accepts_explicit_repair(self):
         self.handback.write_text('{"summary": broken JSON')
         Path("unrelated.txt").write_text("not part of this publication\n")
         self.git("add", "unrelated.txt")
-        retries = []
-
-        def repair_after_pending(delay):
-            retries.append(delay)
-            self.assertEqual(retries, [60])
-            pending = json.loads(Path(".git/xnaut-upload.json").read_text())
-            self.assertEqual(pending["state"], "pending")
-            self.assertIn("repair its JSON", pending["error"])
-            self.assertNotIn("broken JSON", pending["error"])
-            self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
-            self.assertEqual(
-                self.git("diff", "--cached", "--name-only"), "unrelated.txt"
-            )
-            self.assertFalse((self.artifacts / "result.json").exists())
-            refs = self.git("ls-remote", "origin", "refs/heads/" + self.branch)
-            self.assertEqual(refs, "")
-            self.handback.write_text(json.dumps(self.valid))
-
-        with (
-            patch.object(
-                publisher, "__file__", str(self.worker / ".git/xnaut-publish.py")
-            ),
-            patch.object(
-                publisher.sys, "argv", ["publisher", "--finish", "0", "--retry"]
-            ),
-            patch.object(publisher.time, "sleep", repair_after_pending),
-        ):
-            publisher.main()
-        self.assertEqual(retries, [60])
-        pushed = json.loads(Path(".git/xnaut-upload.json").read_text())
-        self.assertEqual(pushed["state"], "pushed")
-        remote_head = self.git(
-            "ls-remote", "origin", "refs/heads/" + self.branch
-        ).split()[0]
-        self.assertEqual(pushed["head"], remote_head)
-        self.assertEqual(
-            json.loads(self.git("show", f"{remote_head}:{self.handback}")), self.valid
-        )
-        self.assertEqual(
-            self.git("show", f"{remote_head}:source.txt"), "authorized implementation"
-        )
+        publisher.publish(0)
+        result = json.loads((self.artifacts / "result.json").read_text())
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["handback_error"], "missing_or_invalid_handback")
         self.assertEqual(self.git("diff", "--cached", "--name-only"), "unrelated.txt")
-        self.assertNotIn(
-            "unrelated.txt",
-            self.git("ls-tree", "--name-only", remote_head).splitlines(),
-        )
+        self.handback.write_text(json.dumps(self.valid))
+        publisher.publish(0)
+        result = json.loads((self.artifacts / "result.json").read_text())
+        self.assertIsNone(result["handback_error"])
+        self.assertEqual(self.git("show", "HEAD:source.txt"), "authorized implementation")
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "unrelated.txt")
 
-    def test_missing_or_wrongly_typed_handbacks_cannot_claim_success(self):
-        for value in [
-            None,
-            [],
-            {"summary": 2},
-            {"commits": [1]},
-            {"confidence": 0.9},
-            {"how_verified": [{"command": "test", "result": 0}]},
-            {"how_verified": [{"command": "test", "result": ""}]},
-        ]:
+    def test_missing_or_wrongly_typed_handbacks_publish_no_success_claim(self):
+        for value in [None, [], {"summary": 2}, {"commits": [1]},
+                      {"confidence": 0.9}, {"how_verified": [{"command": "test", "result": 0}]}]:
             with self.subTest(value=value):
+                (self.artifacts / "result.json").unlink(missing_ok=True)
                 if value is None:
                     self.handback.unlink(missing_ok=True)
                 else:
                     self.handback.write_text(json.dumps(value))
-                with self.assertRaisesRegex(RuntimeError, "Delivery is pending"):
-                    publisher.publish(0)
-                self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
-                self.assertFalse((self.artifacts / "result.json").exists())
+                publisher.publish(0)
+                result = json.loads((self.artifacts / "result.json").read_text())
+                self.assertEqual(result["handback_error"], "missing_or_invalid_handback")
+                self.assertEqual(self.git("show", "HEAD:source.txt"), "authorized implementation")
 
     def test_crash_without_handback_still_publishes_failure_evidence(self):
         publisher.publish(1)
@@ -158,11 +115,11 @@ class PublisherTests(unittest.TestCase):
             json.loads(Path(".git/xnaut-upload.json").read_text())["state"], "pushed"
         )
 
-    def test_oversized_handback_is_refused_before_publication(self):
+    def test_oversized_handback_is_preserved_but_marked_invalid(self):
         self.handback.write_text(json.dumps({"summary": "x" * (256 * 1024)}))
-        with self.assertRaisesRegex(RuntimeError, "Delivery is pending"):
-            publisher.publish(0)
-        self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
+        publisher.publish(0)
+        self.assertEqual(json.loads((self.artifacts / "result.json").read_text())["handback_error"],
+                         "missing_or_invalid_handback")
 
 
 if __name__ == "__main__":

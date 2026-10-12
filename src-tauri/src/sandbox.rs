@@ -2977,7 +2977,7 @@ pub mod exe {
     }
 
     pub fn repository_probe_command(workdir: &str) -> String {
-        let script = r#"import json, pathlib, subprocess, sys
+        let script = r#"import json, pathlib, subprocess, sys, os
 p = pathlib.Path.home() / sys.argv[1]
 phase = (p / '.git/xnaut-phase').read_text().strip()
 pid = None
@@ -2986,7 +2986,19 @@ if phase == 'running':
     child = subprocess.run(['pgrep', '-o', '-P', str(parent)], capture_output=True, text=True, timeout=5)
     if child.returncode == 0: pid = int(child.stdout.strip())
 head = subprocess.run(['git', '-C', str(p), 'rev-parse', 'HEAD'], capture_output=True, text=True, timeout=5).stdout.strip()
-print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase}))
+writers_absent = phase == 'finished'
+if writers_absent:
+    supervisor = (p / '.git/xnaut-supervisor.pid').read_text().strip()
+    writers_absent = not pathlib.Path('/proc', supervisor).exists()
+    for process in pathlib.Path('/proc').iterdir():
+        if not process.name.isdigit(): continue
+        try:
+            if process.stat().st_uid != os.getuid(): continue
+            cwd = os.readlink(process / 'cwd')
+            if cwd == str(p) or cwd.startswith(str(p) + '/'): writers_absent = False
+        except FileNotFoundError: pass
+        except PermissionError: writers_absent = False
+print(json.dumps({'agent_pid': pid, 'head': head, 'phase': phase, 'writers_absent': writers_absent}))
 "#;
         format!("timeout 20s python3 -c {} {}", shell_single_quote(script), shell_single_quote(workdir))
     }

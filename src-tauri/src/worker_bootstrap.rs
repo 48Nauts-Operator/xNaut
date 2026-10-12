@@ -41,12 +41,13 @@ impl Target {
         }
     }
     pub fn file(&self, workdir: &str, relative: &str, body: &str) -> Result<(), String> {
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        self.command(&format!(
-            "umask 077; printf %s {} | base64 -d > {}",
-            exe::shell_single_quote(&STANDARD.encode(body)),
-            exe::shell_single_quote(&format!("{workdir}/{relative}"))
-        ))
+        let destination = exe::shell_single_quote(&format!("{workdir}/{relative}"));
+        let temporary = exe::shell_single_quote(&format!("{workdir}/{relative}.{}.tmp", uuid::Uuid::new_v4()));
+        let command = format!("set -e; umask 077; cat > {temporary}; mv -f -- {temporary} {destination}");
+        let output = self.exchange(&command, body.as_bytes(), 45)?;
+        if output.status.success() { Ok(()) } else {
+            Err(format!("Worker file staging failed (exit {:?}); existing results retained and no agent started", output.status.code()))
+        }
     }
     pub(crate) fn run_directory(&self, run_id: &str) -> String {
         match self { Self::ExeDev => format!("agents/runs/{run_id}"), Self::GitVm { .. } => format!("/workspace/.xnaut-runs/{run_id}") }

@@ -7,6 +7,12 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'nautgate_max::tests::',
+  'run_control::tests::a_remote_beacon_gap_',
+  'repository_review::repair_loop_tests::collected_review_resumes_',
+  'repository_transfer::tests::collected_reviewer_handback_completes_only_its_bound_task_and_replays',
+  'repository_transfer::tests::failed_and_incomplete_publications_',
+  'repository_transfer::tests::accepted_author_publication_',
   'repository_transfer::tests::published_pr_remains_reviewable_when_ticket_owner_changes',
   'project_wiki::tests::enumerated_document_paths_round_trip_without_weakening_path_guards',
   'project_wiki::journal::',
@@ -26,6 +32,9 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'nautgate_max::tests::subscription_model_never_inherits_auto_or_another_provider_default',
+  'repository_transfer::tests::failed_and_incomplete_publications_never_dispatch_review_or_keep_worker_capacity',
+  'repository_transfer::tests::accepted_author_publication_recovers_liveness_race_but_never_execution_failure',
   'repository_transfer::tests::published_pr_remains_reviewable_when_ticket_owner_changes',
   'repository_review::tests::independent_review_binds_parent_and_exact_reservation_without_author_assignment',
   'repository_review::tests::obsolete_author_guard_recovers_only_an_untouched_review_queue',

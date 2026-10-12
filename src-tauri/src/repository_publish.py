@@ -148,7 +148,16 @@ def publish(exit_code=None):
     for path in artifacts.rglob("*"):
         if path.is_symlink():
             raise RuntimeError("artifact symlinks cannot be published")
-    validate_handback(artifacts / "handback.json", required=exit_code == 0)
+    handback_error = None
+    try:
+        validate_handback(artifacts / "handback.json", required=exit_code == 0)
+    except RuntimeError:
+        if exit_code is None:
+            raise
+        # The author has exited. Preserve the real outcome, including malformed
+        # evidence, instead of keeping a publisher alive waiting for that author.
+        # A corrected artifact can be explicitly republished on this same run.
+        handback_error = "missing_or_invalid_handback"
     # Track unusually large artifacts too, even when their extension is new.
     # Git LFS --filename escapes literal names instead of treating them as globs.
     for path in artifacts.rglob("*"):
@@ -161,7 +170,8 @@ def publish(exit_code=None):
                 timeout=30,
             )
     result_path = artifacts / "result.json"
-    if exit_code is not None and not result_path.exists():
+    previous = json.loads(result_path.read_text()) if result_path.exists() else None
+    if exit_code is not None and (previous is None or previous.get("handback_error")):
         dirty = git(
             "status",
             "--porcelain",
@@ -176,6 +186,7 @@ def publish(exit_code=None):
                 "run_id": metadata["run_id"],
                 "source_sha": metadata["source_sha"],
                 "exit_code": exit_code,
+                "handback_error": handback_error,
                 "uncommitted_source": bool(dirty),
                 "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             },

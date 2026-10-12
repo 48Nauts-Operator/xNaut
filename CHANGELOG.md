@@ -2,12 +2,16 @@
 
 All notable changes to xNAUT are documented in this file.
 
-## [1.31.3] - Unreleased
+## [1.31.3] - 2026-10-13
 
 - Restore the last selected workspace project when entering Workspace (XNAUT-510).
 - Share Claude Max launch registration across local, exe.dev and GitVM paths. Sandbox Claude uses the owner's Max token through NautGate, clears inherited paid API keys, and refuses missing/expired subscription credentials (XNAUT-512).
 - Reject desktop-only or invalid Claude MCP configuration files before remote launch (XNAUT-509).
-- Access-token renewal for long sandbox runs and structured recovery of exited authors awaiting handbacks remain tracked work (XNAUT-511 / XNAUT-512).
+- Renew active Max access credentials through the owner's native Claude login; durable NautGate bindings adopt renewed access without restarting workers. Refresh credentials remain on the owner computer (XNAUT-512).
+- Publish terminal worker failures with retained evidence when a handback is missing or malformed. Unfinished authors do not trigger independent review; proven stopped workers release capacity (XNAUT-511).
+- Recover accepted author and reviewer publications after a liveness race, retaining prior events and exact revision checks. Missing remote telemetry no longer declares a worker dead or authorizes a duplicate.
+- Resolve blank Claude worker models from the configured Claude profile and stage private worker files over SSH stdin.
+- Requires the matching NautGate durable Max update; unavailable renewal fails closed without a paid API fallback.
 
 ## [1.31.2] - 2026-10-12
 

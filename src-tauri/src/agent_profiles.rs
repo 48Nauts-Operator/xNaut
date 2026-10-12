@@ -2950,12 +2950,12 @@ fn remote_runtime_ready(cfg: &crate::agents::AgentConfig, model: &str,
     let mut cloud_input = cloud.map(|c| serde_json::json!({"provider": c.pin.provider, "model": c.pin.model,
         "endpoint": c.pin.endpoint, "api_key": c.api_key}));
     if let Some(selected) = cloud.filter(|c| cfg.id == "claude" && c.pin.provider == "nautgate") {
-        let credential = crate::nautgate_max::credential()?;
         let (project, run_id, native_session) = max_identity.unwrap_or(("runtime-preflight", cloud_id, cloud_id));
         let route = crate::settings::LlmSettings { provider: selected.pin.provider.clone(),
             model: selected.pin.model.clone(), endpoint: selected.pin.endpoint.clone(),
             api_key: Some(selected.api_key.clone()), ..Default::default() };
         let base_url = tauri::async_runtime::block_on(crate::nautgate_max::register(&route, project, native_session, run_id))?;
+        let credential = crate::nautgate_max::credential()?;
         if let Some(input) = cloud_input.as_mut() {
             input["max_subscription"] = serde_json::json!({"base_url": base_url,
                 "access_token": credential.access_token, "expires_at_ms": credential.expires_at_ms});
