@@ -75,5 +75,20 @@
     return select;
   }
 
-  window.xnautProjectSelect = { html, bind };
+  // Workspace history is independent of the transient session/sidebar scope.
+  // Store only identity; resolve it against today's project list on reopening.
+  const LAST_PROJECT_KEY = 'xnaut-workspace-last-project:v1';
+  let lastProject = '';
+  try { lastProject = localStorage.getItem(LAST_PROJECT_KEY) || ''; } catch (_) {}
+  function remember(project) {
+    const key = String(project?.key || '');
+    if (!key) return;
+    lastProject = key;
+    try { localStorage.setItem(LAST_PROJECT_KEY, key); } catch (_) {}
+  }
+  function last(projects) {
+    return (projects || []).find(project => String(project.key || '').toUpperCase() === lastProject.toUpperCase())?.key || '';
+  }
+
+  window.xnautProjectSelect = { html, bind, remember, last };
 })();

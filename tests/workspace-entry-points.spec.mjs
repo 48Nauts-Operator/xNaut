@@ -156,3 +156,36 @@ test('creating a project lands in its workspace on the Work tab', async ({ page 
   await expect(page.locator('.wsp-name')).toHaveText('Fresh');
   await expect(page.locator('.wsp-tabs button[data-wsp-tab="work"]')).toHaveClass(/active/);
 });
+
+const RESUME_PROJECTS = [
+  { key: 'CHESS', name: 'ChessTrainer', source_path: '/projects/ChessTrainer' },
+  { key: 'CODE', name: 'CodeLib', source_path: '/projects/CodeLib' },
+];
+for (const entry of ['top bar', 'Projects rail']) {
+  test(`${entry} remembers the dropdown choice after returning home and after restart`, async ({ page }) => {
+    const data = { pm_project_list: RESUME_PROJECTS, pm_project_import_existing: RESUME_PROJECTS };
+    await boot(page, data);
+    await page.evaluate(() => window.xnautOpenWorkspace({ project: 'CHESS' }));
+    await page.locator('.wsp .xps-select').selectOption('CODE');
+    await expect(page.locator('.wsp-name')).toHaveText('CodeLib');
+    const open = async () => {
+      await page.getByRole('button', { name: entry === 'top bar' ? 'Open project workspace' : 'Projects', exact: true }).click();
+      await expect(page.locator('.wsp-name')).toHaveText('CodeLib');
+      await expect(page.locator('.wsp-root')).toHaveText('/projects/CodeLib');
+    };
+    await page.evaluate(() => { window.xnautHomeContext(); window.xnautAttachMarkdownTab({ filename: 'Elsewhere' }); });
+    await open();
+    // A fresh document drops every in-memory pane/scope but keeps user storage.
+    await boot(page, data);
+    await open();
+  });
+}
+
+test('a removed remembered project falls back to an existing project', async ({ page }) => {
+  await boot(page, { pm_project_list: RESUME_PROJECTS });
+  await page.evaluate(() => window.xnautOpenWorkspace({ project: 'CODE' }));
+  await expect(page.locator('.wsp-name')).toHaveText('CodeLib');
+  await boot(page, { pm_project_list: [RESUME_PROJECTS[0]], pm_project_import_existing: [RESUME_PROJECTS[0]] });
+  await page.getByRole('button', { name: 'Open project workspace', exact: true }).click();
+  await expect(page.locator('.wsp-name')).toHaveText('ChessTrainer');
+});

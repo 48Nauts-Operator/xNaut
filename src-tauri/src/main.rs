@@ -116,6 +116,7 @@ mod secrets;
 mod review_gate;
 mod settings;
 mod cloud_model;
+mod nautgate_max;
 mod shared_notes;
 mod signoff_scope;
 mod skills;

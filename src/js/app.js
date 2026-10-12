@@ -7339,24 +7339,23 @@ function setupEventListeners() {
   // which is gone (XNAUT-342); the workspace carries all nine of its surfaces,
   // so the button points there instead of being deleted with it.
   //
-  // Which project: the one in scope, else the first the control repository
-  // knows. `xnautActiveProjectKey` is a FUNCTION (app.js:3896) and returns null
-  // at Home — calling it as a value is the trap CLAUDE.md names, so it is
-  // called, and every global below is checked before it is used.
+  // Reopen the last workspace project, including after a restart. Session
+  // scope is only a fallback for someone who has not selected a project yet.
   _on('btn-projects', 'onclick', async () => {
     if (typeof window.xnautOpenWorkspace !== 'function') {
       console.error('[app] xnautOpenWorkspace is not loaded, so the workspace cannot open');
       return;
     }
-    let key = typeof window.xnautActiveProjectKey === 'function' ? window.xnautActiveProjectKey() : null;
-    if (!key) {
-      try {
-        const projects = (await invoke('pm_project_list')) || [];
-        key = projects.length ? (projects[0].key || projects[0].name) : '';
-      } catch (e) {
-        console.error('[app] the project list could not be read:', e);
-        key = '';
-      }
+    const scoped = typeof window.xnautActiveProjectKey === 'function' ? window.xnautActiveProjectKey() : null;
+    let key = '';
+    try {
+      const projects = (await invoke('pm_project_list')) || [];
+      key = window.xnautProjectSelect.last(projects)
+        || projects.find(project => project.key === scoped)?.key
+        || projects[0]?.key || projects[0]?.name || '';
+    } catch (e) {
+      console.error('[app] the project list could not be read:', e);
+      return;
     }
     if (!key) {
       // No project to open is a real answer, not a reason to open an empty

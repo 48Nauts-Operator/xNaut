@@ -868,8 +868,8 @@
     // with the Projects section folded, or with a submenu over the tree.
     //
     // So it does three things, in this order: put the tree back on screen, then
-    // open the workspace for the project already in scope, falling back to the
-    // first project in the list. The fallback is the whole point on a fresh
+    // reopen the last workspace project, then the project in scope, falling
+    // back to the first visible project. The fallback matters on a fresh
     // launch, when nothing is in scope: without it the press would reveal a
     // tree and open nothing, and the second click would be the first.
     //
@@ -903,7 +903,9 @@
         first = firstVisible();
         renderProjects();
       }
-      const key = scoped || (first && first.projectKey);
+      const visibleProjects = state.projects.filter(project => !hidden.includes(`pm:${project.key}`));
+      const remembered = window.xnautProjectSelect.last(visibleProjects);
+      const key = remembered || scoped || (first && first.projectKey);
       if (!key) {
         // No project on this machine yet. Say so where the tree says it, rather
         // than opening an empty workspace that blames the project for it.
@@ -912,8 +914,7 @@
       }
       return window.xnautOpenWorkspace({
         project: key,
-        worktree: (scoped && state.scope.worktree) || '',
-        tab: 'code',
+        ...(key === scoped && !remembered ? { worktree: state.scope.worktree || '' } : {}),
       });
     }
 

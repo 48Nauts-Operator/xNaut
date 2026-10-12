@@ -7,13 +7,56 @@ import subprocess
 import sys
 
 
+def check_launch_files(request):
+    if not request.get("standard_claude"):
+        return "ready"
+    args = request.get("args", [])
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--mcp-config":
+            values = []
+            while index < len(args) and not args[index].startswith("-"):
+                values.append(args[index])
+                index += 1
+            if not values:
+                return "mcp_config_invalid"
+        elif arg.startswith("--mcp-config="):
+            values = [arg.split("=", 1)[1]]
+        else:
+            continue
+        for value in values:
+            try:
+                if value.lstrip().startswith("{"):
+                    config = json.loads(value)
+                else:
+                    with open(value) as source:
+                        config = json.load(source)
+                if not isinstance(config, dict) or not isinstance(config.get("mcpServers"), dict):
+                    return "mcp_config_invalid"
+            except FileNotFoundError:
+                return "mcp_config_missing"
+            except (OSError, ValueError):
+                return "mcp_config_invalid"
+    return "ready"
+
+
 def check(request):
+    # Validate files on the destination, before provider probes or credentials
+    # are staged. A desktop absolute path is not a worker configuration.
+    status = check_launch_files(request)
+    if status != "ready":
+        return status
     cloud = request.get("cloud")
     if not cloud:
         return check_runtime(request)
     # Native admission embeds worker_model.py before this script. Legacy
     # read-only probes can still run this file by itself without that helper.
     support = globals()
+    status = support["subscription_status"](cloud, request["binary"])
+    if status != "ready":
+        return status
     status = support["cloud_probe"](cloud)
     if status != "ready":
         return status
@@ -37,7 +80,7 @@ def check(request):
 
 
 def check_runtime(request):
-    env = dict(os.environ, **request["env"])
+    env = globals().get("runtime_environment", lambda injected: dict(os.environ, **injected))(request["env"])
     binary = request["binary"]
     if not shutil.which(binary, path=env.get("PATH")):
         return "binary_missing"

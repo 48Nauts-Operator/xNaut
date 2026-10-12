@@ -2441,7 +2441,7 @@ async fn launch_on_exe_dev(
             exe::ensure()?;
             let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
                 &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
-            remote_runtime_ready(&runtime, &model, &snapshot.worker, cloud.as_ref(), &cloud_id, false)?;
+            remote_runtime_ready(&runtime, &model, &snapshot.worker, cloud.as_ref(), &cloud_id, false, Some((&snapshot.project, &snapshot.run_id, &session)))?;
             snapshot.worker_remote = Some(access.remote.clone());
             crate::repository_transfer::stage(&snapshot, &access)?;
             let relative = format!(".git/{session}.sh");
@@ -2645,7 +2645,7 @@ async fn launch_on_gitvm(
             cli::warm_up(&dir)?;
             let access = tauri::async_runtime::block_on(crate::worker_bootstrap::prepare(
                 &snapshot.worker, &snapshot.remote, &snapshot.branch, &settings.forges, &settings.worker_network))?;
-            remote_runtime_ready(&runtime, &model, &snapshot.worker, cloud.as_ref(), &cloud_id, false)?;
+            remote_runtime_ready(&runtime, &model, &snapshot.worker, cloud.as_ref(), &cloud_id, false, Some((&snapshot.project, &snapshot.run_id, &session)))?;
             snapshot.worker_remote = Some(access.remote.clone());
             crate::repository_transfer::stage(&snapshot, &access)?;
             let guest = cli::guest(&dir)?;
@@ -2934,26 +2934,40 @@ pub(crate) fn preflight_exe_runtime(profile: &AgentProfile, cloud: Option<&crate
     let (cfg, _) = remote_launch_command(profile, cloud, Some("task delivery check".into()), Default::default())?;
     crate::sandbox::exe::ensure()?;
     remote_runtime_ready(&cfg, &profile.model, &crate::worker_bootstrap::Target::ExeDev, cloud,
-        &format!("probe-{}", uuid::Uuid::new_v4()), true)
+        &format!("probe-{}", uuid::Uuid::new_v4()), true, None)
 }
 
 /// Read existing worker readiness without waking/provisioning a VM or staging credentials.
 pub(crate) fn diagnose_remote_runtime(profile: &AgentProfile, cloud: Option<&crate::cloud_model::Resolved>, target: &crate::worker_bootstrap::Target) -> Result<(), String> {
     let (cfg, _) = remote_launch_command(profile, cloud, Some("task delivery check".into()), Default::default())?;
     remote_runtime_ready(&cfg, &profile.model, target, cloud,
-        &format!("diagnose-{}", uuid::Uuid::new_v4()), true)
+        &format!("diagnose-{}", uuid::Uuid::new_v4()), true, None)
 }
 
 fn remote_runtime_ready(cfg: &crate::agents::AgentConfig, model: &str,
     target: &crate::worker_bootstrap::Target, cloud: Option<&crate::cloud_model::Resolved>,
-    cloud_id: &str, probe_only: bool) -> Result<(), String> {
+    cloud_id: &str, probe_only: bool, max_identity: Option<(&str, &str, &str)>) -> Result<(), String> {
+    let mut cloud_input = cloud.map(|c| serde_json::json!({"provider": c.pin.provider, "model": c.pin.model,
+        "endpoint": c.pin.endpoint, "api_key": c.api_key}));
+    if let Some(selected) = cloud.filter(|c| cfg.id == "claude" && c.pin.provider == "nautgate") {
+        let credential = crate::nautgate_max::credential()?;
+        let (project, run_id, native_session) = max_identity.unwrap_or(("runtime-preflight", cloud_id, cloud_id));
+        let route = crate::settings::LlmSettings { provider: selected.pin.provider.clone(),
+            model: selected.pin.model.clone(), endpoint: selected.pin.endpoint.clone(),
+            api_key: Some(selected.api_key.clone()), ..Default::default() };
+        let base_url = tauri::async_runtime::block_on(crate::nautgate_max::register(&route, project, native_session, run_id))?;
+        if let Some(input) = cloud_input.as_mut() {
+            input["max_subscription"] = serde_json::json!({"base_url": base_url,
+                "access_token": credential.access_token, "expires_at_ms": credential.expires_at_ms});
+        }
+    }
     let input = serde_json::to_vec(&serde_json::json!({
         "binary": cfg.launch_cmd, "env": cfg.env, "args": cfg.extra_args, "model": model,
-        "cloud": cloud.map(|c| serde_json::json!({"provider": c.pin.provider, "model": c.pin.model,
-            "endpoint": c.pin.endpoint, "api_key": c.api_key})),
+        "cloud": cloud_input,
         "cloud_id": cloud_id, "probe_only": probe_only,
         "standard_codex": uses_standard_codex_login(cfg),
         "standard_pi": cfg.id == "pi" && cfg.launch_cmd == "pi",
+        "standard_claude": cfg.id == "claude" && cfg.launch_cmd == "claude",
     })).map_err(|e| e.to_string())?;
     let output = target.exchange(&format!("python3 -c {}",
         crate::sandbox::exe::shell_single_quote(&format!("{}\n{}", include_str!("worker_model.py"), include_str!("worker_runtime.py")))), &input, 35)?;
@@ -2962,7 +2976,11 @@ fn remote_runtime_ready(cfg: &crate::agents::AgentConfig, model: &str,
     if output.status.success() && status == "ready" { return Ok(()); }
     let reason = match status {
         "binary_missing" => "its configured command is not installed on the worker",
+        "mcp_config_missing" => "a --mcp-config file does not exist on the worker; desktop file paths cannot be used there",
+        "mcp_config_invalid" => "its --mcp-config is missing, unreadable or invalid on the worker",
         "authentication_missing" => "its selected provider has no usable authentication on the worker",
+        "subscription_expired" => "its Claude Max credential has expired; refresh the owner Claude Code login",
+        "subscription_missing" => "its Claude Max launch binding or credential is missing; paid API fallback is disabled",
         "check_timeout" => "its authentication check timed out",
         "endpoint_unreachable" => "the selected model endpoint is unreachable from this worker",
         "model_unavailable" => "the selected model is not in the provider catalog",

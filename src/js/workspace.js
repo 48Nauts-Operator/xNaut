@@ -1301,6 +1301,7 @@
           || null;
         if (state.project && state.project.key) state.projectKey = state.project.key;
       }
+      if (state.project) window.xnautProjectSelect.remember(state.project);
       paintHead();
       paintProjectSelect();
       syncProjectContext();

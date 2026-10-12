@@ -1033,70 +1033,6 @@ fn configured_nautgate_route(
     Some((endpoint, token))
 }
 
-#[derive(Serialize)]
-struct MaxLaunchRegistration<'a> {
-    app: &'static str,
-    project: &'a str,
-    native_session: &'a str,
-    run_id: &'a str,
-    ttl_seconds: u32,
-}
-
-#[derive(Deserialize)]
-struct MaxLaunchRegistrationResponse {
-    base_url: String,
-}
-
-async fn register_nautgate_max_launch(
-    route: &crate::settings::LlmSettings,
-    project: &str,
-    native_session: &str,
-    run_id: &str,
-) -> Result<String, String> {
-    let token = route
-        .api_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            "NautGate Max launch binding requires the configured NautGate key".to_string()
-        })?;
-    let origin = route
-        .endpoint
-        .trim_end_matches('/')
-        .strip_suffix("/v1")
-        .unwrap_or(route.endpoint.trim_end_matches('/'));
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .map_err(|error| format!("could not create NautGate launch client: {error}"))?
-        .post(format!("{origin}/v1/max/launches"))
-        .bearer_auth(token)
-        .json(&MaxLaunchRegistration {
-            app: "xnaut",
-            project,
-            native_session,
-            run_id,
-            ttl_seconds: 21_600,
-        })
-        .send()
-        .await
-        .map_err(|error| format!("NautGate Max launch registration failed: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "NautGate rejected Max launch registration ({})",
-            response.status()
-        ));
-    }
-    let registered: MaxLaunchRegistrationResponse = response
-        .json()
-        .await
-        .map_err(|error| format!("invalid NautGate Max launch response: {error}"))?;
-    if registered.base_url.trim().is_empty() {
-        return Err("NautGate Max launch response omitted base_url".into());
-    }
-    Ok(registered.base_url)
-}
-
 #[tauri::command]
 pub async fn nautgate_max_launch_register(
     state: State<'_, AppState>,
@@ -1109,7 +1045,7 @@ pub async fn nautgate_max_launch_register(
         crate::chat::provider_llm(&settings, "nautgate")
     }
     .ok_or_else(|| "NautGate is not configured".to_string())?;
-    register_nautgate_max_launch(&route, &project, &native_session, &run_id).await
+    crate::nautgate_max::register(&route, &project, &native_session, &run_id).await
 }
 
 #[derive(Debug, Serialize)]
@@ -2186,7 +2122,7 @@ async fn launch_agent_unregistered(
             .as_deref()
             .or(req.conversation_id.as_deref())
             .unwrap_or(&launch_run_id);
-        let bound_base = register_nautgate_max_launch(
+        let bound_base = crate::nautgate_max::register(
             route,
             &req.worktree_path,
             native_session,
