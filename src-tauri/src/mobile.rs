@@ -916,7 +916,7 @@ async fn observatory(
 
     // Usage APIs are external + rate-limited; failures return null, phone keeps last.
     let max = crate::usage::max_usage(None).await.ok();
-    let codex = tokio::task::spawn_blocking(crate::usage::codex_usage)
+    let codex = tokio::task::spawn_blocking(crate::usage::read_codex_usage)
         .await
         .ok()
         .and_then(Result::ok);

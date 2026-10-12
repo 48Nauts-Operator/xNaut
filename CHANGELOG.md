@@ -4,6 +4,8 @@ All notable changes to xNAUT are documented in this file.
 
 ## [1.31.3] - 2026-10-13
 
+- Keep usage refresh responsive by moving Keychain enumeration and local session history scans off the UI thread.
+
 - Restore the last selected workspace project when entering Workspace (XNAUT-510).
 - Share Claude Max launch registration across local, exe.dev and GitVM paths. Sandbox Claude uses the owner's Max token through NautGate, clears inherited paid API keys, and refuses missing/expired subscription credentials (XNAUT-512).
 - Reject desktop-only or invalid Claude MCP configuration files before remote launch (XNAUT-509).

@@ -118,7 +118,13 @@ pub fn parse_keychain_accounts(dump: &str, service: &str) -> Vec<String> {
 /// list-by-service, so this reads the metadata dump; `-d` is never passed, so no
 /// secret leaves the Keychain here. Empty vec means "just use the default one".
 #[tauri::command]
-pub fn max_accounts() -> Vec<String> {
+pub async fn max_accounts() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(read_max_accounts)
+        .await
+        .unwrap_or_default()
+}
+
+fn read_max_accounts() -> Vec<String> {
     let Ok(out) = std::process::Command::new("security")
         .arg("dump-keychain")
         .output()
@@ -246,9 +252,12 @@ pub fn parse_usage(value: &Value) -> MaxUsage {
 /// Fetch current MAX-plan usage. Never blocks the UI on failure — the caller shows "—".
 #[tauri::command]
 pub async fn max_usage(account: Option<String>) -> Result<MaxUsage, String> {
-    let token = read_oauth_token(account.as_deref())?;
+    let token = tauri::async_runtime::spawn_blocking(move || read_oauth_token(account.as_deref()))
+        .await
+        .map_err(|_| "credential reader stopped".to_string())??;
     let resp = reqwest::Client::new()
         .get(USAGE_URL)
+        .timeout(std::time::Duration::from_secs(15))
         .header("Authorization", format!("Bearer {token}"))
         .header("anthropic-version", "2023-06-01")
         .header("anthropic-beta", "oauth-2025-04-20")
@@ -340,6 +349,9 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<(std::time::SystemTime, PathBuf)>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        if entry.file_type().map(|t| t.is_symlink()).unwrap_or(true) {
+            continue;
+        }
         if path.is_dir() {
             collect_jsonl(&path, out);
         } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
@@ -352,7 +364,13 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<(std::time::SystemTime, PathBuf)>) {
 
 /// Latest Codex usage from its session logs (newest file, last rate_limits entry).
 #[tauri::command]
-pub fn codex_usage() -> Result<CodexUsage, String> {
+pub async fn codex_usage() -> Result<CodexUsage, String> {
+    tauri::async_runtime::spawn_blocking(read_codex_usage)
+        .await
+        .map_err(|_| "usage reader stopped".to_string())?
+}
+
+pub(crate) fn read_codex_usage() -> Result<CodexUsage, String> {
     let dir = dirs::home_dir()
         .ok_or("no home dir")?
         .join(".codex")
