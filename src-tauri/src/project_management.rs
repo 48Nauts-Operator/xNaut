@@ -980,15 +980,18 @@ pub fn configured_repo(settings: &ProjectManagementSettings) -> Result<PathBuf, 
     if !settings.enabled {
         return Err("Project Management module is disabled".into());
     }
-    let status = inspect(settings);
-    if !status.valid {
-        return Err(if status.error.is_empty() {
-            "Project Management repository is not configured".into()
-        } else {
-            status.error
-        });
+    // Validity depends only on these markers. The display inspection also
+    // scans all ticket files and invokes Git status/fsmonitor; doing that for
+    // every policy or ticket lookup stalls collection on large boards.
+    if settings.repo_path.trim().is_empty() {
+        return Err("Project Management repository is not configured".into());
     }
-    resolve_path(&settings.repo_path)
+    let path = resolve_path(&settings.repo_path)
+        .map_err(|_| "configured repository path is invalid".to_string())?;
+    if !path.join(".git").is_dir() || !path.join(MANIFEST_NAME).is_file() {
+        return Err("folder is not an initialized xNaut Project Management repository".into());
+    }
+    Ok(path)
 }
 
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -2042,16 +2045,9 @@ pub fn repo_now() -> Result<PathBuf, String> {
     configured_repo(&crate::settings::load_or_default().project_management)
 }
 
-/// Where the control repo sits, WITHOUT the validity inspection `repo_now`
-/// performs. For readers that only want to open one known file.
-///
-/// `configured_repo` calls `inspect`, which runs several git commands and
-/// counts every ticket file in every project. The run sweep reads one ticket
-/// per live run on every pass; paying `inspect` for each of those would put
-/// the sweep straight back into the git-storm territory of XNAUT-432, where
-/// 116 git processes at 786% CPU came from exactly this kind of per-call work
-/// on this exact repository. A caller that wants validity still calls
-/// `repo_now`; a caller that wants a path gets a path.
+/// The configured path without checking the repository markers. Readers that
+/// need validity use `repo_now`; detailed Git/status inspection belongs to the
+/// module status UI and is not part of either path lookup.
 pub fn repo_path_now() -> Option<PathBuf> {
     let settings = crate::settings::load_or_default().project_management;
     if !settings.enabled || settings.repo_path.trim().is_empty() {
@@ -3141,6 +3137,43 @@ mod abandoned_tmp_tests {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn configured_repo_validates_markers_without_running_status_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("xnaut-repo-lookup-{}", uuid::Uuid::new_v4()));
+        initialize_local_repo_transactional(&root, "lookup").unwrap();
+        let settings = ProjectManagementSettings {
+            enabled: true,
+            repo_path: root.to_string_lossy().into_owned(),
+            remote_url: String::new(),
+        };
+        let marker = root.join(".git/status-hook-ran");
+        let hook = root.join(".git/status-hook");
+        std::fs::write(&hook, "#!/bin/sh\ntouch .git/status-hook-ran\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+        run_git(&root, &["config", "core.fsmonitor", hook.to_str().unwrap()]).unwrap();
+        assert_eq!(configured_repo(&settings).unwrap(), root);
+        assert!(
+            !marker.exists(),
+            "a policy/path lookup must not run Git status or its hooks"
+        );
+        // The detailed UI status still performs the inspection when requested.
+        assert!(inspect(&settings).valid);
+        assert!(
+            marker.exists(),
+            "fixture must actually detect the old expensive lookup"
+        );
+        let mut disabled = settings.clone();
+        disabled.enabled = false;
+        assert!(configured_repo(&disabled).unwrap_err().contains("disabled"));
+        std::fs::remove_file(root.join(MANIFEST_NAME)).unwrap();
+        assert!(configured_repo(&settings)
+            .unwrap_err()
+            .contains("not an initialized"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn local_display_paths_do_not_rewrite_shared_project_records() {
         let record: ProjectRecord = serde_json::from_value(json!({"key":"XT","name":"Fixture","source_path":"/studio/project","source_repo":"https://forge.example/team/app.git","created_at":"fixture"})).unwrap();
