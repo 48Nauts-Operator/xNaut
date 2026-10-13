@@ -8,7 +8,14 @@ import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
   'project_management::tests::single_ticket_lookup_',
-  'sweep::registry_tests::',
+  'sweep::registry_tests::registry_tick_',
+  'sweep::registry_tests::accepted_handback_',
+  'sweep::registry_tests::another_runs_',
+  'sweep::registry_tests::production_tick_',
+  'sweep::registry_tests::swap_',
+  'sweep::registry_tests::a_late_tick_',
+  'sweep::registry_tests::an_admission_',
+  'sweep::registry_tests::model_requirement_',
   'nautgate_max::tests::',
   'run_control::tests::a_remote_beacon_gap_',
   'repository_review::repair_loop_tests::collected_review_resumes_',
