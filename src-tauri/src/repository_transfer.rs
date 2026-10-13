@@ -1086,7 +1086,21 @@ fn file_published_handback_in(
 
 /// Only receipts minted by this installation are fetched. Repository content
 /// is parsed as bounded JSON, never executed, and cannot select a ticket/actor.
-pub fn spawn_reconciler(_app: tauri::AppHandle) {
+pub fn spawn_reconciler(app: tauri::AppHandle) {
+    // Delivery has its own serial clock: a large historical PM sweep must not
+    // postpone a newly published handback or a review. Renewal stays separate
+    // so a slow forge cannot postpone refreshing active Max credentials.
+    tauri::async_runtime::spawn(async move {
+        serial_collection_loop(std::time::Duration::from_secs(60), || async {
+            if crate::instance::role().coordinates_remote_runs()
+                && !crate::switches::load().read_only
+                && tokio::task::spawn_blocking(|| crate::project_management::repo_now().is_ok())
+                    .await.unwrap_or(false)
+            {
+                tick(&app).await;
+            }
+        }).await;
+    });
     tauri::async_runtime::spawn(async move {
         loop {
             if let Err(error) = crate::nautgate_max::renew_active().await {
@@ -1098,7 +1112,20 @@ pub fn spawn_reconciler(_app: tauri::AppHandle) {
     });
 }
 
-/// One pass owned by the durable sweep. No second scheduler or polling task.
+async fn serial_collection_loop<F, Fut>(period: std::time::Duration, mut pass: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    loop {
+        pass().await;
+        // Sleep after completion: slow passes cannot overlap or accumulate a
+        // burst of missed interval ticks.
+        tokio::time::sleep(period).await;
+    }
+}
+
+/// One serialized publication/quality pass, independent of PM maintenance.
 pub async fn tick(app: &tauri::AppHandle) {
     use tauri::Manager;
     static TICK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -1159,6 +1186,41 @@ pub async fn tick(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn collection_schedule_progresses_while_maintenance_waits_and_never_overlaps() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let entered = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let overlap = Arc::new(AtomicUsize::new(0));
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let maintenance = tokio::spawn(async move { release_rx.await.unwrap(); });
+        let (seen, busy, concurrent) = (entered.clone(), active.clone(), overlap.clone());
+        let collector = tokio::spawn(async move {
+            serial_collection_loop(std::time::Duration::from_millis(5), || {
+                let (seen, busy, concurrent) = (seen.clone(), busy.clone(), concurrent.clone());
+                async move {
+                    let now = busy.fetch_add(1, Ordering::SeqCst) + 1;
+                    concurrent.fetch_max(now, Ordering::SeqCst);
+                    // A pass takes longer than its scheduling period.
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    busy.fetch_sub(1, Ordering::SeqCst);
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
+            }).await;
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while entered.load(Ordering::SeqCst) < 3 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }).await.expect("collection must continue before maintenance is released");
+        assert!(!maintenance.is_finished());
+        assert_eq!(overlap.load(Ordering::SeqCst), 1);
+        release_tx.send(()).unwrap();
+        maintenance.await.unwrap();
+        collector.abort();
+        assert!(collector.await.unwrap_err().is_cancelled());
+    }
+
     #[test]
     fn failed_and_incomplete_publications_never_dispatch_review_or_keep_worker_capacity() {
         use crate::run_control::{self, RunManifest, RunState};

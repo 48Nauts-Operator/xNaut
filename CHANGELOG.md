@@ -4,6 +4,8 @@ All notable changes to xNAUT are documented in this file.
 
 ## [1.31.5] - 2026-10-13
 
+- Collect publications on an independent serial schedule, so large PM maintenance passes cannot delay handbacks or reviews. Max credential renewal remains independent of forge collection. Existing read-only, instance-role and configured-board checks still apply.
+
 - Skip process and Git probes for acknowledged failures and historical attempts whose scope is already held by a newer run, using the same guard as ticket return. Preserve their records and journal.
 - Release the shared run-store lock during liveness probes and reject stale observations if a publication, cancellation, or other update arrives meanwhile.
 - Includes the Max sandbox, handback, workspace, and collection fixes from the unpublished 1.31.3 and 1.31.4 candidates below. No tags were rewritten.

@@ -309,12 +309,8 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
             return Ok(());
         }
     };
-    // Finish collection before historical maintenance can take the run-store
-    // lock. Spawning it alongside reconciliation still lets old worktree probes
-    // block an already-published result at that shared lock (XNAUT-514).
-    if crate::instance::role().coordinates_remote_runs() {
-        crate::repository_transfer::tick(app).await;
-    }
+    // Publication collection has its own serial task. Historical PM reads and
+    // probes below cannot delay its next pass or Max credential renewal.
     // Control repo maintenance, one bounded task per twenty minutes, on a
     // blocking thread and under the ticket-write lock (XNAUT-432). Never
     // awaited: a slow repack must not hold the tick, and the interval is
@@ -3737,9 +3733,14 @@ mod registry_tests {
             .next()
             .unwrap();
         assert!(tick.contains("registry_tick_async("));
-        let collection = tick.find("crate::repository_transfer::tick(app).await;").unwrap();
-        let maintenance = tick.find("let tickets = registry_tick_async(").unwrap();
-        assert!(collection < maintenance, "collected publications must precede the historical registry lock");
+        assert!(!tick.contains("repository_transfer::tick("), "collection must not wait for the historical sweep schedule");
+        let source = include_str!("repository_transfer.rs");
+        let task = source.split("pub fn spawn_reconciler(").nth(1).unwrap()
+            .split("async fn serial_collection_loop").next().unwrap();
+        assert!(task.contains("serial_collection_loop("));
+        assert!(task.contains("coordinates_remote_runs()"));
+        assert!(task.contains("!crate::switches::load().read_only"));
+        assert!(task.contains("tick(&app).await"));
     }
     #[test]
     #[ignore = "explicit isolated live process proof; run with --ignored --nocapture"]

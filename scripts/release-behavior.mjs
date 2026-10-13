@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'repository_transfer::tests::collection_schedule_',
   'project_management::tests::single_ticket_lookup_',
   'sweep::registry_tests::registry_tick_',
   'sweep::registry_tests::accepted_handback_',
@@ -41,6 +42,7 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'repository_transfer::tests::collection_schedule_progresses_while_maintenance_waits_and_never_overlaps',
   'run_control::tests::reconciliation_skips_superseded_and_acknowledged_failures_without_hiding_current_work',
   'run_control::tests::reconciliation_releases_the_store_during_probes_and_discards_stale_failure',
   'project_management::tests::single_ticket_lookup_is_fresh_and_does_not_read_other_histories',
