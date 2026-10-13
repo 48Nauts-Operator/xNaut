@@ -1490,17 +1490,37 @@ pub fn reconcile_in(
     at: i64,
     mut observe: impl FnMut(&RunManifest) -> Proofs,
 ) -> Result<Vec<(RunManifest, Proofs)>, String> {
-    let _lock = StoreLock::acquire(dir)?;
+    // Snapshot once, then probe without holding the cross-process store lock.
+    // Historical failed attempts that cannot return their ticket need no git/
+    // process probes. Use the same scope guard as finish_failed_in below.
+    let runs = {
+        let _lock = StoreLock::acquire(dir)?;
+        list_ids_in(dir)?
+            .into_iter()
+            .map(|id| load_manifest_in(dir, &id))
+            .collect::<Result<Vec<_>, _>>()?
+    };
     let mut failed = vec![];
-    for id in list_ids_in(dir)? {
-        let mut run = load_manifest_in(dir, &id)?;
+    for observed in &runs {
         if matches!(
-            run.state,
+            observed.state,
             RunState::Done | RunState::Retired | RunState::Retiring | RunState::Undead
-        ) {
+        ) || (observed.state == RunState::Failed
+            && (observed.ticket_returned
+                || runs
+                    .iter()
+                    .any(|other| newer_run_claims_scope(observed, other))))
+        {
             continue;
         }
-        let proof = observe(&run);
+        let proof = observe(observed);
+        let _lock = StoreLock::acquire(dir)?;
+        let mut run = load_manifest_in(dir, &observed.run_id)?;
+        // A publication, beacon, cancellation or successor may arrive while a
+        // slow probe is running. Never apply that stale observation over it.
+        if run.revision != observed.revision {
+            continue;
+        }
         if run.state != RunState::Failed {
             let decision = verdict(&run, &proof, at);
             if proof.pid_alive || proof.session_alive {
@@ -1886,6 +1906,13 @@ pub fn launch_argv_in(dir: &Path, id: &str, argv: &[String]) -> Result<Vec<Strin
     ])
 }
 
+fn newer_run_claims_scope(run: &RunManifest, other: &RunManifest) -> bool {
+    other.run_id != run.run_id
+        && (other.ticket == run.ticket || other.worktree_path == run.worktree_path)
+        && other.started_at >= run.started_at
+        && (!other.state.terminal() || other.pty_session.is_some())
+}
+
 /// Serialize the external ticket acknowledgement with admissions and signals.
 /// A newer local run for the ticket takes precedence even before its dispatch
 /// note reaches PM. The PM revision check protects concurrent board edits.
@@ -1904,10 +1931,7 @@ pub fn finish_failed_in(
             continue;
         }
         let other = load_manifest_in(dir, &other_id)?;
-        if (other.ticket == run.ticket || other.worktree_path == run.worktree_path)
-            && other.started_at >= run.started_at
-            && (!other.state.terminal() || other.pty_session.is_some())
-        {
+        if newer_run_claims_scope(&run, &other) {
             return Ok(());
         }
     }
@@ -2359,6 +2383,183 @@ pub(crate) mod tests {
             submitted_at: chrono::Utc::now().to_rfc3339(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn reconciliation_skips_superseded_and_acknowledged_failures_without_hiding_current_work() {
+        let dir = directory("superseded-observation");
+        let mut old_ids = Vec::new();
+        for at in 1..=24 {
+            let mut old = RunManifest::requested(
+                "claude",
+                "fixture",
+                "/fixture/shared",
+                Some("TEST-1".into()),
+                None,
+                &[],
+                at,
+            );
+            old.pty_session = Some(format!("old-{at}"));
+            let old = request_in(&dir, old, || Ok(())).unwrap();
+            update_in(&dir, &old.run_id, |r| r.state = RunState::Failed).unwrap();
+            old_ids.push(old.run_id);
+        }
+        let current = request_in(
+            &dir,
+            RunManifest::requested(
+                "claude",
+                "fixture",
+                "/fixture/current",
+                Some("TEST-1".into()),
+                None,
+                &[],
+                25,
+            ),
+            || Ok(()),
+        )
+        .unwrap();
+        let acknowledged = request_in(
+            &dir,
+            RunManifest::requested(
+                "claude",
+                "fixture",
+                "/fixture/ack",
+                Some("TEST-2".into()),
+                None,
+                &[],
+                26,
+            ),
+            || Ok(()),
+        )
+        .unwrap();
+        update_in(&dir, &acknowledged.run_id, |r| {
+            r.state = RunState::Failed;
+            r.ticket_returned = true;
+        })
+        .unwrap();
+        let eligible = request_in(
+            &dir,
+            RunManifest::requested(
+                "claude",
+                "fixture",
+                "/fixture/eligible",
+                Some("TEST-3".into()),
+                None,
+                &[],
+                27,
+            ),
+            || Ok(()),
+        )
+        .unwrap();
+        update_in(&dir, &eligible.run_id, |r| r.state = RunState::Failed).unwrap();
+        let original = old_ids
+            .iter()
+            .map(|id| std::fs::read(journal_path(&dir, id)).unwrap())
+            .collect::<Vec<_>>();
+        let mut observed = Vec::new();
+        let failures = reconcile_in(&dir, 28, |r| {
+            observed.push(r.run_id.clone());
+            let mut evidence = proof();
+            evidence.pid_alive = true;
+            evidence.session_alive = true;
+            evidence.capture_bytes = r.capture_bytes;
+            evidence
+        })
+        .unwrap();
+        observed.sort();
+        let mut expected = vec![current.run_id.clone(), eligible.run_id.clone()];
+        expected.sort();
+        assert_eq!(
+            observed, expected,
+            "probe cost must follow current/actionable work, not superseded history"
+        );
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0.run_id, eligible.run_id);
+        for (id, bytes) in old_ids.iter().zip(original) {
+            assert_eq!(
+                std::fs::read(journal_path(&dir, id)).unwrap(),
+                bytes,
+                "history stays intact"
+            );
+            assert!(!load_manifest_in(&dir, id).unwrap().ticket_returned);
+        }
+        // With no newer claim, the latest failed attempt remains observable.
+        update_in(&dir, &current.run_id, |r| {
+            r.state = RunState::Failed;
+            r.pty_session = None;
+        })
+        .unwrap();
+        let mut observed_current = false;
+        reconcile_in(&dir, 29, |r| {
+            observed_current |= r.run_id == current.run_id;
+            proof()
+        })
+        .unwrap();
+        assert!(observed_current);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reconciliation_releases_the_store_during_probes_and_discards_stale_failure() {
+        let dir = directory("reconcile-probe-race");
+        let run = request_in(
+            &dir,
+            RunManifest::requested(
+                "claude",
+                "fixture",
+                "/fixture/review",
+                Some("TEST-1".into()),
+                None,
+                &[],
+                1,
+            ),
+            || Ok(()),
+        )
+        .unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let probing_dir = dir.clone();
+        let probing = std::thread::spawn(move || {
+            reconcile_in(&probing_dir, 999_999, |_| {
+                entered_tx.send(()).unwrap();
+                resume_rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+                proof()
+            })
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (written_tx, written_rx) = std::sync::mpsc::channel();
+        let writing_dir = dir.clone();
+        let id = run.run_id.clone();
+        let writing = std::thread::spawn(move || {
+            let result = update_in(&writing_dir, &id, |r| {
+                r.state = RunState::Done;
+                r.last_signal = "accepted publication during probe".into();
+                r.last_commit = "e".repeat(40);
+            });
+            written_tx.send(result).unwrap();
+        });
+        let accepted_before_probe = written_rx.recv_timeout(std::time::Duration::from_secs(3));
+        resume_tx.send(()).unwrap();
+        let failures = probing.join().unwrap().unwrap();
+        writing.join().unwrap();
+        assert!(
+            accepted_before_probe.is_ok(),
+            "an external probe must not hold the shared run-store lock"
+        );
+        accepted_before_probe.unwrap().unwrap();
+        assert!(
+            failures.is_empty(),
+            "stale liveness proof must not overwrite a concurrent completion"
+        );
+        let completed = load_manifest_in(&dir, &run.run_id).unwrap();
+        assert_eq!(completed.state, RunState::Done);
+        assert_eq!(completed.last_commit, "e".repeat(40));
+        assert_eq!(completed.last_signal, "accepted publication during probe");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
