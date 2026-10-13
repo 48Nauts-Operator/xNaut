@@ -309,11 +309,11 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
             return Ok(());
         }
     };
-    // Publication collection must not wait behind historical board maintenance.
-    // Its single-flight guard and native journal/quality leases serialize writes.
+    // Finish collection before historical maintenance can take the run-store
+    // lock. Spawning it alongside reconciliation still lets old worktree probes
+    // block an already-published result at that shared lock (XNAUT-514).
     if crate::instance::role().coordinates_remote_runs() {
-        let review_app = app.clone();
-        tauri::async_runtime::spawn(async move { crate::repository_transfer::tick(&review_app).await; });
+        crate::repository_transfer::tick(app).await;
     }
     // Control repo maintenance, one bounded task per twenty minutes, on a
     // blocking thread and under the ticket-write lock (XNAUT-432). Never
@@ -3737,6 +3737,9 @@ mod registry_tests {
             .next()
             .unwrap();
         assert!(tick.contains("registry_tick_async("));
+        let collection = tick.find("crate::repository_transfer::tick(app).await;").unwrap();
+        let maintenance = tick.find("let tickets = registry_tick_async(").unwrap();
+        assert!(collection < maintenance, "collected publications must precede the historical registry lock");
     }
     #[test]
     #[ignore = "explicit isolated live process proof; run with --ignored --nocapture"]
