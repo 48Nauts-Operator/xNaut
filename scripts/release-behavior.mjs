@@ -42,6 +42,7 @@ export const nativeSuites = [
 ];
 export const requiredNative = [
   'project_management::tests::single_ticket_lookup_is_fresh_and_does_not_read_other_histories',
+  'sweep::registry_tests::registry_tick_yields_while_the_store_is_locked',
   'nautgate_max::tests::subscription_model_never_inherits_auto_or_another_provider_default',
   'repository_transfer::tests::failed_and_incomplete_publications_never_dispatch_review_or_keep_worker_capacity',
   'repository_transfer::tests::accepted_author_publication_recovers_liveness_race_but_never_execution_failure',

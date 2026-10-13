@@ -300,8 +300,8 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
         Err(error) => {
             // Sampled once for the whole pass, never per run (XNAUT-439).
             let machine = crate::run_control::Machine::sample();
-            registry_tick_in(&registry,&leases,None,&crate::ledger::path(),crate::run_control::now_ms(),
-                |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_with(&machine,&registry,r,&live) })?;
+            registry_tick_async(registry.clone(), leases.clone(), None, crate::ledger::path(),
+                crate::run_control::now_ms(), machine, live).await?;
             if !announced.no_repo {
                 crate::ledger::record("sweep_idle", "nautbot", "", &error);
                 announced.no_repo = true;
@@ -327,8 +327,8 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     });
     // Sampled once for the whole pass, never per run (XNAUT-439).
     let machine = crate::run_control::Machine::sample();
-    let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
-        |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_with(&machine,&registry,r,&live) })?;
+    let tickets = registry_tick_async(registry.clone(), leases.clone(), Some(repo.clone()),
+        crate::ledger::path(), crate::run_control::now_ms(), machine, live).await?;
     announce_undead(app, &registry)?;
     issue_intake_beat(app, announced, &repo, &registry).await;
     core_team_beat(app, &registry).await;
@@ -3051,6 +3051,30 @@ mod tests {
 
 }
 
+// Registry locks, journal replay and ticket IO may take seconds on a large
+// history. Yield the async worker while they run so publication collection and
+// other native tasks can be polled, including on a single-worker runtime.
+async fn registry_tick_async(
+    registry: std::path::PathBuf,
+    leases: std::path::PathBuf,
+    repo: Option<std::path::PathBuf>,
+    ledger: std::path::PathBuf,
+    at: i64,
+    machine: crate::run_control::Machine,
+    live: Vec<String>,
+) -> Result<Vec<crate::project_management::TicketRecord>, String> {
+    tokio::task::spawn_blocking(move || {
+        registry_tick_in(&registry, &leases, repo.as_deref(), &ledger, at, |run| {
+            if matches!(run.state, crate::run_control::RunState::Retiring
+                | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) {
+                crate::run_control::observe_swap_in(&registry, run)
+            } else {
+                crate::run_control::observe_with(&machine, &registry, run, &live)
+            }
+        })
+    }).await.map_err(|error| format!("registry maintenance worker: {error}"))?
+}
+
 /// The production tick's registry/board boundary, also used by the isolated
 /// live test. Removing reconciliation here must break the behavioural test.
 pub(crate) fn registry_tick_in(
@@ -3661,6 +3685,46 @@ mod registry_tests {
     }
 
     #[test]
+    fn registry_tick_yields_while_the_store_is_locked() {
+        let root = directory("registry-async-lock");
+        let now = run_control::now_ms();
+        let run = seed(&root, now);
+        let registry = root.join("registry");
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let locked_registry = registry.clone();
+        let holder = std::thread::spawn(move || {
+            run_control::update_in(&locked_registry, &run.run_id, |_| {
+                held_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            }).unwrap();
+        });
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (polled_tx, polled_rx) = std::sync::mpsc::channel();
+        // Always release the lock, even if a regression blocks the only async
+        // worker. This makes the test fail instead of hanging indefinitely.
+        let watchdog = std::thread::spawn(move || {
+            let polled_before_unlock = polled_rx.recv_timeout(Duration::from_secs(3)).is_ok();
+            release_tx.send(()).unwrap();
+            polled_before_unlock
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (result, ()) = runtime.block_on(async {
+            tokio::join!(biased;
+                registry_tick_async(registry, root.join("leases"), None,
+                    root.join("ledger.jsonl"), now,
+                    run_control::Machine { rows: vec![], control_repo: Some(root.join("control")) },
+                    vec![]),
+                async { polled_tx.send(()).unwrap(); }
+            )
+        });
+        holder.join().unwrap();
+        assert!(watchdog.join().unwrap(), "registry maintenance starved another async task until the lock was released");
+        result.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn production_tick_calls_the_tested_registry_boundary() {
         // The behavioural test above exercises the actual reconciliation;
         // this small wiring check also catches removing the outer app call.
@@ -3672,7 +3736,7 @@ mod registry_tests {
             .split("///")
             .next()
             .unwrap();
-        assert!(tick.contains("registry_tick_in("));
+        assert!(tick.contains("registry_tick_async("));
     }
     #[test]
     #[ignore = "explicit isolated live process proof; run with --ignored --nocapture"]
