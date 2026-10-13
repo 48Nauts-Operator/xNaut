@@ -2,6 +2,12 @@
 
 All notable changes to xNAUT are documented in this file.
 
+## [1.31.4] - 2026-10-13
+
+- Collect worker publications before historical registry maintenance, retaining the existing single-flight and write leases (XNAUT-514).
+- Read the exact current ticket for failed-worker and retirement checks instead of repeatedly decoding every ticket history; retain fresh revisions, identity validation and newer-assignment protection.
+- Includes the Max sandbox and handback reliability changes from the unpublished 1.31.3 candidate below. No published tag was rewritten.
+
 ## [1.31.3] - 2026-10-13
 
 - Keep usage refresh responsive by moving Keychain enumeration and local session history scans off the UI thread.

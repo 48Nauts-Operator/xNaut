@@ -309,6 +309,12 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
             return Ok(());
         }
     };
+    // Publication collection must not wait behind historical board maintenance.
+    // Its single-flight guard and native journal/quality leases serialize writes.
+    if crate::instance::role().coordinates_remote_runs() {
+        let review_app = app.clone();
+        tauri::async_runtime::spawn(async move { crate::repository_transfer::tick(&review_app).await; });
+    }
     // Control repo maintenance, one bounded task per twenty minutes, on a
     // blocking thread and under the ticket-write lock (XNAUT-432). Never
     // awaited: a slow repack must not hold the tick, and the interval is
@@ -324,11 +330,6 @@ async fn tick(app: &AppHandle, announced: &mut Announced) -> Result<(), String> 
     let tickets = registry_tick_in(&registry,&leases,Some(&repo),&crate::ledger::path(),crate::run_control::now_ms(),
         |r| if matches!(r.state, crate::run_control::RunState::Retiring | crate::run_control::RunState::Degraded | crate::run_control::RunState::Blocked) { crate::run_control::observe_swap_in(&registry,r) } else { crate::run_control::observe_with(&machine,&registry,r,&live) })?;
     announce_undead(app, &registry)?;
-    if crate::instance::role().coordinates_remote_runs() {
-        let review_app = app.clone();
-        // tick owns a single-flight guard; slow provider bootstrap must not hold the sweep.
-        tauri::async_runtime::spawn(async move { crate::repository_transfer::tick(&review_app).await; });
-    }
     issue_intake_beat(app, announced, &repo, &registry).await;
     core_team_beat(app, &registry).await;
     core_team_wall_clock(app, &registry, &leases).await;
@@ -691,8 +692,7 @@ async fn core_team_wall_clock(
         let (Some(repo), Some(id)) = (repo.as_ref(), run.ticket.as_deref()) else {
             continue;
         };
-        let Ok(ticket) = crate::project_management::ticket_list_in(repo, None)
-            .map(|all| all.into_iter().find(|item| item.id == id))
+        let Ok(ticket) = crate::project_management::ticket_find_in(repo, id)
         else {
             continue;
         };
@@ -3074,9 +3074,7 @@ pub(crate) fn registry_tick_in(
             let (Some(repo), Some(ticket_id)) = (repo, run.ticket.as_deref()) else {
                 return Ok(false);
             };
-            let Some(ticket) = crate::project_management::ticket_list_in(repo, None)?
-                .into_iter()
-                .find(|t| t.id == ticket_id)
+            let Some(ticket) = crate::project_management::ticket_find_in(repo, ticket_id)?
             else {
                 return Ok(false);
             };
@@ -3160,8 +3158,8 @@ fn registry_swap_tick_in(
         let mut run = run_control::load_manifest_in(registry, &id)?;
         if !matches!(run.state, RunState::Starting | RunState::Running | RunState::Blocked | RunState::Degraded | RunState::Retiring | RunState::Retired) { continue; }
         if run.state == RunState::Retired && (run.retirement.is_none() || run.ticket_returned) { continue; }
-        let Some(ticket) = crate::project_management::ticket_list_in(repo, None)?.into_iter()
-            .find(|t| Some(t.id.as_str()) == run.ticket.as_deref()) else { continue; };
+        let Some(ticket_id) = run.ticket.clone() else { continue; };
+        let Some(ticket) = crate::project_management::ticket_find_in(repo, &ticket_id)? else { continue; };
         let receipt = format!("Registry swap {}:", run.run_id);
         if !ticket_belongs_to_run(&ticket, &run) && !ticket.body.contains(&receipt) { continue; }
         if !matches!(run.state, RunState::Retiring | RunState::Retired | RunState::Degraded) {
@@ -3182,8 +3180,8 @@ fn registry_swap_tick_in(
         let proof = observe(&run);
         let after = run_control::retirement_step_in(registry, &id, &ticket.model_requirement, at, &proof, |retired| {
             // Fresh board read plus revision CAS: never return a new assignment.
-            let current = crate::project_management::ticket_list_in(repo, None)?.into_iter()
-                .find(|t| Some(t.id.as_str()) == retired.ticket.as_deref()).ok_or("swap ticket vanished")?;
+            let current = crate::project_management::ticket_find_in(repo, &ticket_id)?
+                .ok_or("swap ticket vanished")?;
             if !ticket_belongs_to_run(&current, retired) && !current.body.contains(&receipt) {
                 return Err("swap ticket belongs to a newer assignment".into());
             }

@@ -1580,7 +1580,7 @@ fn list_events(
     Ok(events)
 }
 
-fn find_ticket_path(repo: &Path, id: &str) -> Result<PathBuf, String> {
+fn ticket_path(repo: &Path, id: &str) -> Result<PathBuf, String> {
     let (project, sequence) = id.split_once('-').ok_or("invalid ticket id")?;
     let project = validate_project_key(project)?;
     if sequence.is_empty() || !sequence.chars().all(|ch| ch.is_ascii_digit()) {
@@ -1595,10 +1595,32 @@ fn find_ticket_path(repo: &Path, id: &str) -> Result<PathBuf, String> {
         .join(&project)
         .join("tickets")
         .join(format!("{canonical_id}.json"));
+    Ok(path)
+}
+
+fn find_ticket_path(repo: &Path, id: &str) -> Result<PathBuf, String> {
+    let path = ticket_path(repo, id)?;
     if !path.is_file() {
         return Err(format!("ticket not found: {id}"));
     }
     Ok(path)
+}
+
+/// Fresh assignment lookup for a single run. Never deserialize unrelated
+/// ticket histories while holding the registry admission lock (XNAUT-514).
+pub(crate) fn ticket_find_in(repo: &Path, id: &str) -> Result<Option<TicketRecord>, String> {
+    let path = ticket_path(repo, id)?;
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let record: TicketRecord = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if record.id != id || Some(record.project.as_str()) != id.split_once('-').map(|v| v.0) {
+        return Err("Ticket identity does not match its storage path".into());
+    }
+    Ok(Some(record))
 }
 
 #[tauri::command]
@@ -3147,6 +3169,30 @@ mod tests {
         assert!(ticket_count_in(&dir, "../XT").is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn single_ticket_lookup_is_fresh_and_does_not_read_other_histories() {
+        let root = scratch_repo("single-ticket", "XNAUT-900");
+        let path = root.join("projects/XNAUT/tickets/XNAUT-900.json");
+        // An unreadable unrelated history must not block a targeted run check.
+        std::fs::write(root.join("projects/XNAUT/tickets/XNAUT-901.json"), "not JSON").unwrap();
+        let mut ticket = ticket_find_in(&root, "XNAUT-900").unwrap().unwrap();
+        ticket.owner = Some("new-owner".into());
+        ticket.revision += 1;
+        std::fs::write(&path, serde_json::to_vec(&ticket).unwrap()).unwrap();
+        let fresh = ticket_find_in(&root, "XNAUT-900").unwrap().unwrap();
+        assert_eq!(fresh.owner.as_deref(), Some("new-owner"));
+        assert_eq!(fresh.revision, ticket.revision);
+        assert!(ticket_find_in(&root, "XNAUT-902").unwrap().is_none());
+        for id in ["../XNAUT-900", "XNAUT-../900", "xnaut-900"] {
+            assert!(ticket_find_in(&root, id).is_err());
+        }
+        assert!(ticket_find_in(&root, "XNAUT-901").is_err());
+        ticket.id = "XNAUT-902".into();
+        std::fs::write(&path, serde_json::to_vec(&ticket).unwrap()).unwrap();
+        assert!(ticket_find_in(&root, "XNAUT-900").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A scratch control repo with one ticket in it.
     ///
     /// Keyed by the caller's name as well as the pid and thread, because the

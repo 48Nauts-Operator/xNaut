@@ -7,6 +7,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const nativeSuites = [
+  'project_management::tests::single_ticket_lookup_',
+  'sweep::registry_tests::',
   'nautgate_max::tests::',
   'run_control::tests::a_remote_beacon_gap_',
   'repository_review::repair_loop_tests::collected_review_resumes_',
@@ -32,6 +34,7 @@ export const nativeSuites = [
   'durable_turn::tests::', 'agent_tools::tests::durable_',
 ];
 export const requiredNative = [
+  'project_management::tests::single_ticket_lookup_is_fresh_and_does_not_read_other_histories',
   'nautgate_max::tests::subscription_model_never_inherits_auto_or_another_provider_default',
   'repository_transfer::tests::failed_and_incomplete_publications_never_dispatch_review_or_keep_worker_capacity',
   'repository_transfer::tests::accepted_author_publication_recovers_liveness_race_but_never_execution_failure',
