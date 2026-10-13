@@ -1782,20 +1782,20 @@ print(json.dumps(accepted))
         // Replay historical liveness failures only after the exact collected
         // publication and parent-bound handback establish task completion.
         for case in ["stall", "stall_with_cpu", "missing", "exit", "exit_receipt", "unknown", "wrong_head", "changed_identity", "successor",
-            "admission", "retired", "uncollected", "no_journal", "wrong_handback", "wrong_parent", "dirty", "before_publication", "beacon_after_failure"] {
+            "admission", "retired", "uncollected", "no_journal", "wrong_handback", "wrong_parent", "dirty", "before_publication", "beacon_after_failure", "starting_before_beacon", "requested_only"] {
             let registry = std::env::temp_dir().join(format!("xnaut-review-recovery-{}",uuid::Uuid::new_v4()));
             let mut native = completed.clone(); native.state = RunState::Requested; native.last_commit = child.source_sha.clone();
             native.revision = 0;
             run_control::request_in(&registry, native, || Ok(())).unwrap();
             run_control::update_in(&registry,&child.run_id,|run| {
-                run.state = RunState::Running;
-                run.last_commit = if ["before_publication", "beacon_after_failure"].contains(&case) { child.source_sha.clone() } else { result.published_head.clone() };
+                run.state = match case { "starting_before_beacon" => RunState::Starting, "requested_only" => RunState::Requested, _ => RunState::Running };
+                run.last_commit = if ["before_publication", "beacon_after_failure", "starting_before_beacon", "requested_only"].contains(&case) { child.source_sha.clone() } else { result.published_head.clone() };
             }).unwrap();
             run_control::update_in(&registry,&child.run_id,|run| {
                 run.state = if case == "retired" { RunState::Retired } else { RunState::Failed };
                 run.last_signal = match case {
                     "stall_with_cpu" => run_control::STALLED_NO_PROGRESS,
-                    "missing" => "pid does not answer; zellij session absent; capture has not grown; no recent hook",
+                    "missing" | "starting_before_beacon" | "requested_only" => "pid does not answer; zellij session absent; capture has not grown; no recent hook",
                     "exit" => "process exited with status 137",
                     "unknown" => "cancelled by owner",
                     _ => "stalled: alive but capture, hooks and commits show no progress beyond the window; waiting_on empty",
@@ -1808,7 +1808,7 @@ print(json.dumps(accepted))
             if case == "changed_identity" {
                 run_control::update_in(&registry,&child.run_id,|run| run.project = child.project.clone()).unwrap();
             }
-            if case == "beacon_after_failure" {
+            if ["beacon_after_failure", "starting_before_beacon", "requested_only"].contains(&case) {
                 run_control::update_in(&registry,&child.run_id,|run| {run.last_signal="beacon: agent gone, capture 0 bytes".into();run.last_commit=result.published_head.clone();}).unwrap();
             }
             // Only the reserved source or exact published head can recover.
@@ -1830,7 +1830,7 @@ print(json.dumps(accepted))
             let recovered = accept_reviewer_handback_in(&registry,&receipt,&bound,&publication,Some(&evidence));
             let after = run_control::load_manifest_in(&registry,&child.run_id).unwrap();
             let sessions = vec![("interactive-reviewer".into(),"reviewer".into(),Some("exe-dev".into()))];
-            if ["stall", "stall_with_cpu", "missing", "before_publication", "beacon_after_failure"].contains(&case) {
+            if ["stall", "stall_with_cpu", "missing", "before_publication", "beacon_after_failure", "starting_before_beacon"].contains(&case) {
                 assert!(recovered.unwrap(),"{case}");
                 assert_eq!(after.state,RunState::Done,"{case}");
                 assert_eq!(after.pid,Some(123),"completion is not a process-exit assertion");

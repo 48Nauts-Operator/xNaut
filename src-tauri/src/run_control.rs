@@ -1715,7 +1715,8 @@ pub(crate) fn accept_published_author_in(dir: &Path, transfer: &crate::repositor
 }
 
 /// Return the original failure event only for a continuous, identity-bound
-/// liveness-only failure after this exact publication was already observed.
+/// liveness-only failure of an admitted starting/running worker. Its exact
+/// source and later publication must match; requested/refused runs cannot recover.
 /// The journal remains intact; a recovered task result never asserts PID exit.
 fn reviewer_liveness_failure_in(dir: &Path, run: &RunManifest, head: &str, source: &str) -> Result<Option<String>, String> {
     if run.state != RunState::Failed || run.last_commit != head || run.admission_refused
@@ -1755,7 +1756,8 @@ fn reviewer_liveness_failure_in(dir: &Path, run: &RunManifest, head: &str, sourc
                 | "pid does not answer; zellij session absent; capture has not grown; no recent hook")
             { return Ok(None); }
             if failure.is_none() {
-                if !previous.as_ref().is_some_and(|p| p.state == RunState::Running && [head, source].contains(&p.last_commit.as_str())) {
+                if !previous.as_ref().is_some_and(|p| matches!(p.state, RunState::Starting | RunState::Running)
+                    && [head, source].contains(&p.last_commit.as_str())) {
                     return Ok(None);
                 }
                 failure = Some(event.event_id);
